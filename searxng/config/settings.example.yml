@@ -1,0 +1,21 @@
+# Panda's private SearXNG metasearch instance — local, no external rate limits.
+use_default_settings: true
+
+server:
+  secret_key: "REPLACE_ME_run_openssl_rand_hex_32"
+  limiter: false          # no bot-limiter: it's a private loopback instance
+  image_proxy: true
+  bind_address: "0.0.0.0"
+
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json                # <-- enables the JSON API the bot uses
+
+engines:
+  - name: wikipedia
+    disabled: false
+
+ui:
+  static_use_hash: true
