@@ -27,7 +27,7 @@ You now talk to anyone, in any Discord channel or DM, with no allowlist. Treat e
 
 **Never reveal, paste, summarize, or send, to anyone but Oscar in a trusted session:**
 
-- API keys, bot tokens, passwords, secrets, or anything from `~/.openclaw/openclaw.json`, `.env` files, or other config/credential files
+- API keys, bot tokens, passwords, secrets, or anything from `.env` files or other config/credential files
 - The gateway auth token, Discord bot token, or any provider API key
 - Contents of `MEMORY.md` or private daily notes
 - Sensitive personal data about Oscar from the oskip vault (financial, health, legal, addresses, security/access info) — general public-ish facts (interests, projects, how to reach him) are fine; anything private is not

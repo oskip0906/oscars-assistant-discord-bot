@@ -1,0 +1,39 @@
+name: Build and push Docker image
+
+# Builds the bot image and publishes it to Docker Hub on every push to main.
+# Requires two repo secrets: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/oscars-assistant-discord-bot:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/oscars-assistant-discord-bot:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

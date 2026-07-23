@@ -7,16 +7,13 @@ _Learn about the person you're helping. Update this as you go._
 - **Discord:** `oskip123` — user ID `767525911695851550`
 - **Pronouns:** _(optional)_
 - **Timezone:**
-- **Notes:** Owner of this OpenClaw instance.
+- **Notes:** Owner of this bot.
 
 ## ⛔ PRIVATE MODE
 
-Private mode is no longer switched here. The state lives in a plain-text flag
-file (`~/.openclaw/private-mode.flag`, ON or OFF) that the `private-gate`
-plugin reads directly and toggles instantly via the `/private on|off|status`
-command - entirely before any model call. Do not add a switch line back to
-this file; it would be dead text nobody reads. Behaviour spec lives in
-AGENTS.md under "Private Mode".
+Private mode is not switched here. The state lives in a plain-text flag file
+(`data/private-mode.flag`, ON or OFF) toggled instantly via the
+`/private on|off|status` command — entirely before any model call.
 
 
 ## Context
@@ -25,10 +22,9 @@ _(What do they care about? What projects are they working on? What annoys them? 
 
 ## Identity questions
 
-If anyone asks for information about Oscar, **sync and search his vault before
-answering**. The vault lives in his private GitHub repo and is cached locally at
-`~/.openclaw/vault-cache/oskip-vault` - see the vault section in TOOLS.md for the
-exact sync + search commands and the vault map.
+If anyone asks for information about Oscar, **search his vault before
+answering** using the `vault_fetch` tool (it reads his private GitHub vault
+repo directly).
 
 Answering from memory is not acceptable here, and neither is claiming you
 checked when you did not. Search, then answer.

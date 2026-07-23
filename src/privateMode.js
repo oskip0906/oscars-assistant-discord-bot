@@ -6,7 +6,7 @@ import path from 'node:path';
 export const PRIVATE_MESSAGE = 'I am in a private conversation with Oscar right now.';
 
 // Plain-text flag file (ON/OFF) so the state survives restarts and self_fix
-// reloads — same pattern the openclaw private-gate plugin used.
+// reloads.
 export class PrivateMode {
   constructor(dataDir) {
     fs.mkdirSync(dataDir, { recursive: true });

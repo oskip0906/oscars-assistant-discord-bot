@@ -1,4 +1,4 @@
-// Model-facing inbound envelope. Conventions proven on the openclaw box:
+// Model-facing inbound envelope. Conventions:
 // - sender's numeric id is inline (pingable with <@id>, zero lookups)
 // - inbound <@NNN> mentions keep their id as "@Name (id:NNN)"
 export function formatEnvelope(message, refMsg = null) {

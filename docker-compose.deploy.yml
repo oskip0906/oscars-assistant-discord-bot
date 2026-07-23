@@ -1,0 +1,35 @@
+# Full production stack: the bot (from Docker Hub) + a private SearXNG instance.
+#   export DOCKERHUB_USERNAME=youruser
+#   cp .env.example .env               # fill in real secrets
+#   cp searxng/config/settings.example.yml searxng/config/settings.yml
+#   #   set a secret_key: openssl rand -hex 32
+#   docker compose -f docker-compose.deploy.yml up -d
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: panda-searxng
+    restart: unless-stopped
+    volumes:
+      - ./searxng/config:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    networks: [panda]
+
+  bot:
+    image: ${DOCKERHUB_USERNAME:-youruser}/oscars-assistant-discord-bot:latest
+    container_name: panda-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Reach SearXNG over the compose network, not localhost.
+      - SEARXNG_URL=http://searxng:8080
+    depends_on: [searxng]
+    volumes:
+      - panda-data:/app/data
+    networks: [panda]
+
+networks:
+  panda:
+
+volumes:
+  panda-data:
