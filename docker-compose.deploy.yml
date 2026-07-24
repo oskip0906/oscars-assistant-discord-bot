@@ -26,6 +26,11 @@ services:
     depends_on: [searxng]
     volumes:
       - panda-data:/app/data
+      # YouTube cookies for reliable playback (see README): create ./cookies.txt,
+      # UNCOMMENT the line below, and set YT_COOKIES_FILE=/cookies.txt in .env.
+      # (Leave commented if you don't have cookies — a missing bind source would
+      # otherwise be created as a directory.)
+      # - ./cookies.txt:/cookies.txt:ro
     networks: [panda]
 
 networks:

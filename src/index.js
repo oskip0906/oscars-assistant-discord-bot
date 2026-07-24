@@ -24,7 +24,10 @@ async function boot(intents) {
 
   let player = null;
   try {
-    player = await createPlayer(client);
+    player = await createPlayer(client, {
+      cookiesFile: config.ytCookiesFile,
+      cookiesFromBrowser: config.ytCookiesFromBrowser,
+    });
   } catch (err) {
     console.error('[panda] music init failed (continuing without music):', err.message);
   }

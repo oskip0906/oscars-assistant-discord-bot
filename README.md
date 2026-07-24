@@ -111,13 +111,16 @@ Registered **per guild** on startup (instant availability).
 1. **Privileged intents** — "Message Content" must be ON in the Discord Developer Portal.
    "Server Members Intent" is optional: without it the bot auto-retries login without
    `GuildMembers` and `get_user_id` degrades to cache search.
-2. **YouTube playback** (`discord-player-youtubei`) breaks upstream periodically. Two
-   things keep it working, both already applied:
-   - `youtubei.js` is pinned to `^17` via an npm **override** in `package.json` (16.x can
-     no longer extract YouTube's signature decipher function). When it breaks again:
-     `npm i youtubei.js@latest` and bump the override.
-   - The extractor is registered with `generateWithPoToken: true` (in
-     `src/music/player.js`) — YouTube gates stream URLs behind a proof-of-origin token.
-   `self_fix` can do the bump for you: "@Panda self_fix: update youtubei.js and fix
-   YouTube playback".
+2. **YouTube playback** — audio is streamed via **yt-dlp** (`youtube-dl-exec`), not
+   youtubei.js. youtubei is kept only for search/metadata; its streaming path is broken
+   upstream (returns "streaming data not available") and even when it worked, YouTube
+   throttled and reset the WEB stream mid-song (`ECONNRESET` → no sound). yt-dlp resolves
+   and pipes the audio itself, reliably, via discord-player's `onBeforeCreateStream` hook
+   (`src/music/player.js`).
+   - **Cookies are required for reliable playback.** YouTube bot-walls unauthenticated
+     extraction under load ("Sign in to confirm you're not a bot"). Export your
+     `youtube.com` cookies to a Netscape `cookies.txt` (browser extension *Get cookies.txt
+     LOCALLY*) and set `YT_COOKIES_FILE=/path/to/cookies.txt`. For local runs you can
+     instead set `YT_COOKIES_FROM_BROWSER=chrome`. Without cookies, many videos still play
+     but some fail with a "skipping" message.
 3. Secrets live only in `.env` (gitignored). Never commit them.

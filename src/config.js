@@ -34,6 +34,10 @@ export const config = {
   maxToolIterations: Math.max(1, parseInt(process.env.MAX_TOOL_ITERATIONS || '12', 10) || 12),
   braveApiKey: process.env.BRAVE_API_KEY || '',
   jinaApiKey: process.env.JINA_API_KEY || '',
+  // YouTube now bot-walls unauthenticated stream extraction under load; a cookies
+  // file (or browser) lets yt-dlp authenticate and play reliably.
+  ytCookiesFile: process.env.YT_COOKIES_FILE || '',
+  ytCookiesFromBrowser: process.env.YT_COOKIES_FROM_BROWSER || '',
   searxngUrl: (process.env.SEARXNG_URL || 'http://127.0.0.1:8888').replace(/\/$/, ''),
 };
 
