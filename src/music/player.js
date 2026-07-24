@@ -59,8 +59,38 @@ function ytdlpStream(url, cookieArgs = []) {
     ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
-  proc.on('error', (err) => console.error('[player] yt-dlp spawn error:', err.message));
-  proc.stderr.on('data', () => {}); // drain stderr so it can't block
+  // Watchdog: if yt-dlp produces no audio within 20s (hung auth, network stall,
+  // etc.) kill it and surface an error so playback fails fast instead of the bot
+  // hanging on "thinking" forever. Once audio starts, let it run the whole song.
+  let started = false;
+  let errTail = '';
+  const watchdog = setTimeout(() => {
+    if (!started) {
+      console.error('[player] yt-dlp watchdog: no audio within 20s — killing');
+      proc.kill('SIGKILL');
+      proc.stdout.destroy(new Error('yt-dlp produced no audio (timed out)'));
+    }
+  }, 20_000);
+
+  proc.stdout.once('data', () => {
+    started = true;
+    clearTimeout(watchdog);
+  });
+  proc.stderr.on('data', (d) => {
+    errTail = (errTail + d).slice(-300); // keep last bit for diagnostics
+  });
+  proc.on('error', (err) => {
+    clearTimeout(watchdog);
+    console.error('[player] yt-dlp spawn error:', err.message);
+    proc.stdout.destroy(err);
+  });
+  proc.on('close', (code) => {
+    clearTimeout(watchdog);
+    if (code && !started) {
+      console.error(`[player] yt-dlp exited ${code}: ${errTail}`);
+      proc.stdout.destroy(new Error(`yt-dlp failed (exit ${code})`));
+    }
+  });
   proc.stdout.on('error', () => {}); // guard against EPIPE when a track is skipped
   return proc.stdout;
 }

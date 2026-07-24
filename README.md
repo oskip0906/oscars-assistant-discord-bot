@@ -122,8 +122,14 @@ Registered **per guild** on startup (instant availability).
         the Node binary the bot already runs on (no deno/extra install). Without a JS
         runtime yt-dlp returns *"Requested format is not available"*.
      2. **Cookies** — YouTube bot-walls unauthenticated extraction under load ("Sign in to
-        confirm you're not a bot"). Local runs use `YT_COOKIES_FROM_BROWSER=chrome` (reads
-        your logged-in Chrome directly — zero manual steps). For Docker (no browser), export
-        `youtube.com` cookies to a Netscape `cookies.txt` and set
-        `YT_COOKIES_FILE=/path/to/cookies.txt` instead.
+        confirm you're not a bot"). The bot uses a **cookies file** (`YT_COOKIES_FILE`) —
+        stable, no keychain access at runtime (so it never hangs a background daemon), and
+        works in Docker. Generate/refresh it from your logged-in Chrome with one command
+        (no extension needed):
+        ```bash
+        npm run yt-cookies      # writes ./cookies.txt from Chrome, then set YT_COOKIES_FILE=./cookies.txt
+        ```
+        Cookies expire eventually; if playback starts failing, re-run `npm run yt-cookies`.
+        (`YT_COOKIES_FROM_BROWSER=chrome` also works for foreground/interactive runs, but the
+        file is preferred for a detached daemon.)
 3. Secrets live only in `.env` (gitignored). Never commit them.

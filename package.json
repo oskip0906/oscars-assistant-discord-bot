@@ -7,7 +7,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "yt-cookies": "node -e \"const{execFileSync}=require('child_process');const bin=require('youtube-dl-exec/src/constants.js').YOUTUBE_DL_PATH;execFileSync(bin,['--cookies-from-browser','chrome','--cookies','./cookies.txt','--js-runtimes','node:'+process.execPath,'--skip-download','--no-warnings','https://www.youtube.com/watch?v=dQw4w9WgXcQ'],{stdio:'inherit'});console.log('wrote ./cookies.txt')\""
   },
   "dependencies": {
     "@discord-player/extractor": "^7.2.0",
