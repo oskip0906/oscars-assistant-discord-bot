@@ -9,7 +9,7 @@ import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
 import { vaultFetch, githubCall } from '../agent/tools/github.js';
-import { promptClaude, selfFix } from '../agent/tools/claude.js';
+import { promptClaude, selfFix, gitPush } from '../agent/tools/claude.js';
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -61,6 +61,10 @@ export const commandDefs = [
     .setName('self_fix')
     .setDescription('Patch Panda’s own source code and restart (owner only)')
     .addStringOption((o) => o.setName('instruction').setDescription('What to change/fix about the bot').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('git_push')
+    .setDescription("Commit & push Panda's own source changes to GitHub (owner only)")
+    .addStringOption((o) => o.setName('message').setDescription('Commit message (optional)')),
   new SlashCommandBuilder()
     .setName('private')
     .setDescription('Private mode: Panda only responds to Oscar (owner only)')
@@ -274,6 +278,18 @@ export function createInteractionHandler({ client, config, contextStore, player,
           setTimeout(() => process.exit(42), 1500);
         }
         return;
+      }
+
+      if (name === 'git_push') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+        }
+        await interaction.deferReply();
+        const result = await gitPush(
+          { message: interaction.options.getString('message') ?? undefined },
+          buildInvocation(),
+        );
+        return await sendToolResult(result);
       }
 
       // Music commands below

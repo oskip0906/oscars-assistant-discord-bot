@@ -45,7 +45,8 @@ export function buildMenuEmbed(client, config) {
         name: '🛠️ Power Tools (Oscar only)',
         value: [
           '`/claude <prompt> [directory]` : Drive Claude Code on Oscar’s Mac',
-          '`/self_fix <instruction>` : Patch my own source code and restart',
+          '`/self_fix <instruction>` : Patch my own source code, push to GitHub, and restart',
+          '`/git_push [message]` : Commit & push my own source changes to GitHub',
           '`/private on|off|status` : Only respond to Oscar',
         ].join('\n'),
       },

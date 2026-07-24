@@ -19,7 +19,7 @@ export const defs = [
     function: {
       name: 'github',
       description:
-        "OWNER ONLY. General GitHub integration: call any GitHub REST API endpoint, authenticated as Oscar (oskip0906) — this can read and modify Oscar's private repositories, so it is restricted to Oscar. Examples: GET /user/repos, GET /repos/{owner}/{repo}/issues, POST /repos/{owner}/{repo}/issues with body {title}. Endpoint must start with '/'.",
+        "OWNER ONLY. General GitHub REST API integration: call any GitHub REST endpoint, authenticated as Oscar (oskip0906) — this can read and modify Oscar's private repositories, so it is restricted to Oscar. Examples: GET /user/repos, GET /repos/{owner}/{repo}/issues, POST /repos/{owner}/{repo}/issues with body {title}. Endpoint must start with '/'. DO NOT use this to push local source changes or create commits (there is no POST …/commits endpoint — it 404s); to push Oscar's own source to GitHub use the git_push tool instead.",
       parameters: {
         type: 'object',
         properties: {
