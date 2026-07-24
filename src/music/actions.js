@@ -1,5 +1,6 @@
 // Shared music helpers used by both slash commands and the play_music AI tool.
 
+// Returns { ok:true, track, queued, position } or { ok:false, error }.
 export async function playQuery(player, voiceChannel, textChannel, query, requestedBy) {
   try {
     const { track, queue } = await player.play(voiceChannel, query, {
@@ -14,10 +15,10 @@ export async function playQuery(player, voiceChannel, textChannel, query, reques
         leaveOnEndCooldown: 120_000,
       },
     });
-    const queued = queue?.currentTrack && queue.currentTrack.id !== track.id;
-    return `🎶 ${queued ? `Queued (position ${queue.tracks.size})` : 'Playing'}: **${track.title}** by ${track.author} \`${track.duration}\``;
+    const queued = Boolean(queue?.currentTrack && queue.currentTrack.id !== track.id);
+    return { ok: true, track, queued, position: queued ? queue.tracks.size : 0 };
   } catch (err) {
-    return `❌ Couldn't play "${query}": ${String(err.message || err).slice(0, 200)}`;
+    return { ok: false, error: `❌ Couldn't play "${query}": ${String(err.message || err).slice(0, 200)}` };
   }
 }
 
@@ -50,19 +51,4 @@ export function stop(player, guildId) {
   if (!queue) return 'Nothing is playing.';
   queue.delete();
   return '⏹️ Stopped and cleared the queue.';
-}
-
-export function queueInfo(player, guildId) {
-  const queue = getQueue(player, guildId);
-  if (!queue?.currentTrack) return 'Nothing is playing.';
-  const lines = [
-    `▶️ Now playing: **${queue.currentTrack.title}** by ${queue.currentTrack.author} \`${queue.currentTrack.duration}\`${queue.node.isPaused() ? ' (paused)' : ''}`,
-  ];
-  const upNext = queue.tracks.toArray().slice(0, 10);
-  if (upNext.length) {
-    lines.push('', '**Up next:**');
-    upNext.forEach((t, i) => lines.push(`${i + 1}. ${t.title} \`${t.duration}\``));
-    if (queue.tracks.size > 10) lines.push(`…and ${queue.tracks.size - 10} more`);
-  }
-  return lines.join('\n');
 }

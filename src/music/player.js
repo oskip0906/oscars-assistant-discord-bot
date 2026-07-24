@@ -2,6 +2,7 @@ import { Player, onBeforeCreateStream as registerBeforeCreateStream } from 'disc
 import { DefaultExtractors } from '@discord-player/extractor';
 import { YoutubeiExtractor } from 'discord-player-youtubei';
 import { Log } from 'youtubei.js';
+import { nowPlayingEmbed } from './embeds.js';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -150,7 +151,7 @@ export async function createPlayer(client, opts = {}) {
 
   player.events.on('playerStart', (queue, track) => {
     console.log('[music] ▶ playerStart:', track.title);
-    queue.metadata?.channel?.send(`🎶 Now playing: **${track.title}** — ${track.author}`).catch(() => {});
+    queue.metadata?.channel?.send({ embeds: [nowPlayingEmbed(queue)] }).catch(() => {});
   });
   player.events.on('emptyQueue', (queue) => {
     queue.metadata?.channel?.send('✅ Queue finished.').catch(() => {});

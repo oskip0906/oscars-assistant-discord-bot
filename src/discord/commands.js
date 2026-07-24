@@ -6,6 +6,7 @@ import { chunkMessage } from './chunk.js';
 import { suppressLinkEmbeds } from './messageHandler.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
 import * as actions from '../music/actions.js';
+import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
 import { vaultFetch, githubCall } from '../agent/tools/github.js';
 import { promptClaude, selfFix } from '../agent/tools/claude.js';
@@ -289,14 +290,18 @@ export function createInteractionHandler({ client, config, contextStore, player,
           return await interaction.reply({ content: '🔇 Join a voice channel first.', flags: MessageFlags.Ephemeral });
         }
         await interaction.deferReply();
-        const result = await actions.playQuery(
+        const r = await actions.playQuery(
           player,
           voiceChannel,
           interaction.channel,
           interaction.options.getString('query', true),
           interaction.user,
         );
-        return await interaction.editReply(result);
+        if (!r.ok) return await interaction.editReply(r.error);
+        // Queued → show the "Added to Queue" card. Playing now → the playerStart
+        // event posts the full Now Playing embed, so just ack the interaction.
+        if (r.queued) return await interaction.editReply({ embeds: [addedEmbed(r.track, r.position)] });
+        return await interaction.editReply(`▶️ Playing **${r.track.title}** 🎶`);
       }
 
       const guildId = interaction.guild.id;
@@ -304,7 +309,11 @@ export function createInteractionHandler({ client, config, contextStore, player,
       if (name === 'pause') return await interaction.reply(actions.pause(player, guildId));
       if (name === 'resume') return await interaction.reply(actions.resume(player, guildId));
       if (name === 'stop') return await interaction.reply(actions.stop(player, guildId));
-      if (name === 'queue') return await interaction.reply(actions.queueInfo(player, guildId));
+      if (name === 'queue') {
+        const q = player.nodes.get(guildId);
+        if (!q?.currentTrack) return await interaction.reply('Nothing is playing.');
+        return await interaction.reply({ embeds: [queueEmbed(q)] });
+      }
     } catch (err) {
       // 10062 Unknown interaction / 40060 already acknowledged → the token is
       // dead (usually a stale interaction from a restart). Nothing to say back.
