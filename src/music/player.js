@@ -1,4 +1,4 @@
-import { Player } from 'discord-player';
+import { Player, onBeforeCreateStream as registerBeforeCreateStream } from 'discord-player';
 import { DefaultExtractors } from '@discord-player/extractor';
 import { YoutubeiExtractor } from 'discord-player-youtubei';
 import { Log } from 'youtubei.js';
@@ -115,9 +115,15 @@ export async function createPlayer(client, opts = {}) {
   // Override the stream source for YouTube tracks: return yt-dlp's stdout so
   // discord-player never touches youtubei's broken streaming path. Returning
   // null falls back to the default extractor (e.g. for SoundCloud).
-  player.onBeforeCreateStream = async (track) => {
+  //
+  // MUST be registered via the exported global setter (or Player options) — a
+  // queue reads the hook from the global registry at creation time, so assigning
+  // `player.onBeforeCreateStream` after construction is silently ignored and
+  // playback falls through to youtubei's broken stream (ECONNRESET, no audio).
+  registerBeforeCreateStream(async (track) => {
     if (isYouTube(track.url) || track.source === 'youtube') {
       try {
+        console.log(`[player] streaming via yt-dlp: ${track.title}`);
         return ytdlpStream(track.url, cookieArgs);
       } catch (err) {
         console.error('[player] yt-dlp stream failed:', err.message);
@@ -125,9 +131,25 @@ export async function createPlayer(client, opts = {}) {
       }
     }
     return null;
-  };
+  });
+
+  // --- Temporary deep debug: shows exactly where audio dies (voice connect →
+  // opus → encryption → stream). Enable with MUSIC_DEBUG=1.
+  if (process.env.MUSIC_DEBUG === '1') {
+    console.log('[music] opus module:', (() => {
+      try { return require('@discord-player/opus').OpusEncoder ? 'ok' : '?'; } catch { return 'FAIL'; }
+    })());
+    player.on('debug', (m) => console.log('[player:debug]', String(m).slice(0, 300)));
+    player.events.on('debug', (q, m) => console.log('[queue:debug]', String(m).slice(0, 300)));
+    player.events.on('connection', () => console.log('[music] ▶ voice CONNECTED'));
+    player.events.on('connectionError', (_q, e) => console.error('[music] ✗ connectionError:', e.message));
+    player.events.on('disconnect', () => console.log('[music] voice disconnected'));
+    player.events.on('playerFinish', (_q, t) => console.log('[music] ✔ finished:', t.title));
+    player.events.on('audioTrackAdd', (_q, t) => console.log('[music] track queued:', t.title));
+  }
 
   player.events.on('playerStart', (queue, track) => {
+    console.log('[music] ▶ playerStart:', track.title);
     queue.metadata?.channel?.send(`🎶 Now playing: **${track.title}** — ${track.author}`).catch(() => {});
   });
   player.events.on('emptyQueue', (queue) => {
