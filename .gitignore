@@ -6,3 +6,7 @@ npm-debug.log*
 
 # local searxng secret (generated per-machine)
 searxng/config/settings.yml
+
+# YouTube auth cookies — never commit
+cookies.txt
+*cookies*.txt

@@ -35,6 +35,11 @@ const isYouTube = (url = '') => /(?:youtube\.com|youtu\.be|music\.youtube\.com)/
 // mid-song (ECONNRESET → no sound). yt-dlp resolves and pipes the audio itself,
 // reliably and without the reset, so we hand its stdout to discord-player (which
 // transcodes it through ffmpeg). youtubei is kept only for search/metadata.
+// yt-dlp needs a JavaScript runtime to solve YouTube's signature/nsig challenges
+// (without one it returns "Requested format is not available"). We already run
+// on Node, so point yt-dlp at this exact node binary — no deno/extra install.
+const JS_RUNTIME = `node:${process.execPath}`;
+
 function ytdlpStream(url, cookieArgs = []) {
   const proc = spawn(
     YTDLP,
@@ -47,6 +52,8 @@ function ytdlpStream(url, cookieArgs = []) {
       '--no-warnings',
       '--quiet',
       '--force-ipv4',
+      '--js-runtimes',
+      JS_RUNTIME,
       ...cookieArgs,
       url,
     ],

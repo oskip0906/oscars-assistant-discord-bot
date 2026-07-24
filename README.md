@@ -117,10 +117,13 @@ Registered **per guild** on startup (instant availability).
    throttled and reset the WEB stream mid-song (`ECONNRESET` → no sound). yt-dlp resolves
    and pipes the audio itself, reliably, via discord-player's `onBeforeCreateStream` hook
    (`src/music/player.js`).
-   - **Cookies are required for reliable playback.** YouTube bot-walls unauthenticated
-     extraction under load ("Sign in to confirm you're not a bot"). Export your
-     `youtube.com` cookies to a Netscape `cookies.txt` (browser extension *Get cookies.txt
-     LOCALLY*) and set `YT_COOKIES_FILE=/path/to/cookies.txt`. For local runs you can
-     instead set `YT_COOKIES_FROM_BROWSER=chrome`. Without cookies, many videos still play
-     but some fail with a "skipping" message.
+   - **Two things make it reliable, both wired in:**
+     1. `--js-runtimes node` — yt-dlp solves YouTube's signature/nsig JS challenges using
+        the Node binary the bot already runs on (no deno/extra install). Without a JS
+        runtime yt-dlp returns *"Requested format is not available"*.
+     2. **Cookies** — YouTube bot-walls unauthenticated extraction under load ("Sign in to
+        confirm you're not a bot"). Local runs use `YT_COOKIES_FROM_BROWSER=chrome` (reads
+        your logged-in Chrome directly — zero manual steps). For Docker (no browser), export
+        `youtube.com` cookies to a Netscape `cookies.txt` and set
+        `YT_COOKIES_FILE=/path/to/cookies.txt` instead.
 3. Secrets live only in `.env` (gitignored). Never commit them.
