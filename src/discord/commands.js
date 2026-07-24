@@ -82,6 +82,12 @@ export function createInteractionHandler({ client, config, contextStore, player,
   return async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
+    // Discord gives 3s to acknowledge an interaction. One delivered while the
+    // bot was down (e.g. during a self_fix restart) can arrive already near/past
+    // that deadline — any deferReply/reply then throws 10062 "Unknown
+    // interaction". Drop it up front instead of failing a doomed API call.
+    if (Date.now() - interaction.createdTimestamp > 2600) return;
+
     // Minimal invocation shim so the shared tool functions (which were written
     // for the message pipeline) work when driven by a slash command. Only the
     // fields the tools actually read are provided: config, isOwner, a channel
@@ -300,6 +306,9 @@ export function createInteractionHandler({ client, config, contextStore, player,
       if (name === 'stop') return await interaction.reply(actions.stop(player, guildId));
       if (name === 'queue') return await interaction.reply(actions.queueInfo(player, guildId));
     } catch (err) {
+      // 10062 Unknown interaction / 40060 already acknowledged → the token is
+      // dead (usually a stale interaction from a restart). Nothing to say back.
+      if (err?.code === 10062 || err?.code === 40060) return;
       console.error('[panda] interaction failed:', err);
       const payload = { content: `⚠️ ${String(err.message || err).slice(0, 250)}` };
       try {
