@@ -15,6 +15,9 @@ function harness({ fix, ship, verify } = {}) {
     requestRestart: false,
   };
   const deps = {
+    // These tests exercise the orchestration AFTER Oscar confirms; auto-confirm
+    // so they don't block on the 30s development-task confirmation prompt.
+    confirm: async () => 'confirm',
     runFix: async () => fix ?? { completed: true, text: 'Claude did the thing.', rounds: 1 },
     verify: async () => verify ?? { changed: ['src/a.js'], problems: [] },
     ship: async (args) => {
