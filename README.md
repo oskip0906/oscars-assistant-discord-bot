@@ -95,6 +95,7 @@ Jina-reads-DDG → direct DuckDuckGo.
 | `image_search` | SearXNG images → DuckDuckGo fallback; returns direct URLs Discord embeds |
 | `vault_fetch` | reads Oscar's private vault GitHub repo (list/read/search paths) |
 | `github` | any GitHub REST endpoint, authenticated as the configured user *(owner only)* |
+| `create_pr` | open (and optionally auto-merge) a PR on **any** of Oscar's repos *(owner only)* |
 | `clear_context` / `clear_all_context` | wipe this server's memory / ALL memory *(all owner)* |
 | `git_push` | commit & push local source to GitHub via real git *(owner only)* |
 | `self_fix` | rewrite the bot's own source, then verify → PR → merge → pull → restart *(owner only)* |
@@ -108,7 +109,9 @@ it). When done, the change is syntax/import-checked and then shipped **through G
 through the local checkout**: the edits are uploaded as a pull request against `main`,
 auto-merged (squash), and pulled back down so this machine matches the remote exactly. Then
 the bot exits 42 and `start.sh` pulls once more and reboots into the merged code. If the PR
-fails to open or merge, nothing is pulled and the bot does **not** restart.
+fails to open or merge, nothing is pulled and the bot does **not** restart. Either way Oscar
+gets a **DM the moment it settles** — sent directly, not through the model, since the bot is
+about to restart.
 
 ### Start scripts
 
@@ -124,7 +127,15 @@ marker to have an existing `start.sh` regenerated.
 
 `/menu` · `/usage` · `/model` · `/play` `/skip` `/pause` `/resume` `/stop` `/queue` ·
 `/web_search` `/web_fetch` `/image_search` `/vault_fetch` · `/clear` · `/clearall` (owner) ·
-`/github` (owner) · `/self_fix` (owner) · `/git_push` (owner) · `/private on|off|status` (owner)
+`/github` (owner) · `/self_fix` (owner) · `/git_push` (owner) · `/switch_model` (owner) ·
+`/private on|off|status` (owner)
+
+`/switch_model` autocompletes against OpenRouter's live catalogue, writes the chosen id to
+`OPENROUTER_MODEL` in `.env`, and restarts (exit 42) so the new model is actually loaded.
+Every GitHub surface — the `github` tool, `create_pr`, `git_push`, `git_pull`, `self_fix`,
+and the `/github` command — is **Oscar-only**, enforced in code against the authenticated
+Discord id. `vault_fetch` is the deliberate exception: guests use it to ask about Oscar, and
+it only ever reads the one vault repo.
 
 `/web_search`, `/web_fetch`, `/image_search`, `/vault_fetch`, and `/github` each take a
 **single free-text field** in the Discord UI (query / url / body) — no fiddly structured
