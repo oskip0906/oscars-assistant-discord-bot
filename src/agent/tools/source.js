@@ -81,7 +81,7 @@ export async function selfFix(
     await notify(
       invocation.client,
       config.ownerId,
-      [`🛠️ **${headline}**`, `> ${String(instruction).replace(/\n/g, ' ').slice(0, 500)}`, '', summary].join('\n'),
+      `🛠️ **${headline}**\n${summary}`,
     );
     return summary;
   };

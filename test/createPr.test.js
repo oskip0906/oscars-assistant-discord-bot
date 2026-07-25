@@ -39,7 +39,7 @@ test('create_pr sends an approved development task to the remote sandbox', async
   assert.match(result, /PR #7/);
 });
 
-test('create_pr auto-merges only Panda’s configured own repository', async () => {
+test('create_pr leaves Panda’s own repository PR for manual approval too', async () => {
   const calls = [];
   await createPr(
     { repo: 'oskip0906/oscars-assistant-discord-bot', instruction: 'Improve docs' },
@@ -54,7 +54,7 @@ test('create_pr auto-merges only Panda’s configured own repository', async () 
       },
     },
   );
-  assert.equal(calls[0].autoMerge, true);
+  assert.equal(calls[0].autoMerge, false);
 });
 
 test('create_pr requires an explicit instruction instead of local file contents', async () => {
@@ -67,4 +67,23 @@ test('a non-owner never starts a development sandbox', async () => {
   blocked.isOwner = false;
   const result = await createPr({ repo: 'x/y', instruction: 'change it' }, blocked);
   assert.match(result, /restricted/i);
+});
+
+test('a completed development PR sends Oscar a short DM with its link', async () => {
+  const notifications = [];
+  await createPr(
+    { repo: 'other-project', instruction: 'Add a health endpoint' },
+    invocation(),
+    {
+      confirm: async () => 'confirm',
+      getConfig: () => ({ model: 'openai/gpt-5.4-dev' }),
+      state: { begin() {}, end() {} },
+      notify: async (_client, _owner, message) => notifications.push(message),
+      runSandbox: async (args) => {
+        await args.onPullRequest({ number: 8, html_url: 'https://example.test/pr/8' });
+        return { ok: false, summary: '⚠️ The pull request is still open and awaiting merge.' };
+      },
+    },
+  );
+  assert.deepEqual(notifications, ['🛠️ Development PR #8: https://example.test/pr/8']);
 });

@@ -2,6 +2,9 @@ import { getAIConfig } from '../../configManager.js';
 import { selfFixState } from '../../selfFixState.js';
 import { requestDevelopmentApproval } from './source.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
+import { dmOwner } from '../../discord/notify.js';
+
+const repoChoiceCache = {};
 
 export const defs = [
   {
@@ -130,13 +133,62 @@ export async function githubApi({ method = 'GET', endpoint, body }, invocation) 
   return githubCall({ method, endpoint, body, auth: true }, invocation);
 }
 
+// Lists repositories the configured account can push to. This is deliberately
+// separate from public repository search: autocomplete must never leak private
+// repo names to a guest and only offers repositories usable by the sandbox.
+export async function listWritableRepos(config, { fetchImpl = fetch } = {}) {
+  if (!config.githubPat) return [];
+  const repos = [];
+  for (let page = 1; page <= 100; page++) {
+    const res = await fetchImpl(
+      `https://api.github.com/user/repos?affiliation=owner,collaborator,organization&per_page=100&page=${page}&sort=full_name`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.githubPat}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'panda-bot',
+        },
+      },
+    );
+    if (!res.ok) return [];
+    const pageRepos = await res.json();
+    repos.push(...pageRepos.filter((repo) => repo.permissions?.push || repo.permissions?.admin || repo.permissions?.maintain));
+    if (pageRepos.length < 100) break;
+  }
+  return [...new Set(repos.map((repo) => repo.full_name).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+export async function writableRepoChoices(config, focused = '', { listRepos = listWritableRepos, cache = repoChoiceCache } = {}) {
+  const now = Date.now();
+  if (!cache.repos || now - cache.at > 5 * 60 * 1000) {
+    try {
+      cache.repos = await listRepos(config);
+      cache.at = now;
+    } catch {
+      return [];
+    }
+  }
+  const query = String(focused).trim().toLowerCase();
+  return cache.repos
+    .filter((repo) => !query || repo.toLowerCase().includes(query))
+    .slice(0, 25)
+    .map((repo) => ({ name: repo.slice(0, 100), value: repo.slice(0, 100) }));
+}
+
 // Development changes on any repository use the same remote-only sandbox as
 // self_fix. The bot never receives full replacement file contents or creates a
 // source commit from its own process.
 export async function createPr(
   { repo, instruction, base },
   invocation,
-  { runSandbox = runDevelopmentSandbox, confirm = requestDevelopmentApproval, state = selfFixState, getConfig = getAIConfig } = {},
+  {
+    runSandbox = runDevelopmentSandbox,
+    confirm = requestDevelopmentApproval,
+    state = selfFixState,
+    getConfig = getAIConfig,
+    notify = dmOwner,
+  } = {},
 ) {
   if (!invocation.isOwner) {
     return '⛔ create_pr is restricted to Oscar (it writes to his repos with his credentials). The current sender is not Oscar — refuse.';
@@ -154,15 +206,19 @@ export async function createPr(
 
   state.begin();
   try {
-    const ownRepo = slug.toLowerCase() === String(invocation.config.developmentSandboxRepo || '').toLowerCase();
     const result = await runSandbox({
       repo: slug,
       instruction,
       model,
       base,
-      autoMerge: ownRepo,
+      // /run_dev and the assistant-facing create_pr tool always leave review
+      // to Oscar. Only self_fix is allowed to request automatic merging.
+      autoMerge: false,
       selfFix: false,
       config: invocation.config,
+      onPullRequest: async (pr) => {
+        await notify(invocation.client, invocation.config.ownerId, `🛠️ Development PR #${pr.number}: ${pr.html_url}`).catch(() => {});
+      },
     });
     return result.summary;
   } finally {

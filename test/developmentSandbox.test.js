@@ -23,8 +23,17 @@ test('dispatches a remote workflow and waits until its self-fix PR is merged', a
     pulls++;
     return { status: 200, json: [{ number: 42, state: 'open', merged_at: pulls > 1 ? '2026-01-01T00:00:00Z' : null, html_url: 'https://example.test/pr/42' }] };
   };
+  const observed = [];
   const result = await runDevelopmentSandbox(
-    { repo: 'oskip0906/oscars-assistant-discord-bot', instruction: 'Fix the queue', model: 'openai/gpt-5.4-dev', selfFix: true, autoMerge: true, config },
+    {
+      repo: 'oskip0906/oscars-assistant-discord-bot',
+      instruction: 'Fix the queue',
+      model: 'openai/gpt-5.4-dev',
+      selfFix: true,
+      autoMerge: true,
+      config,
+      onPullRequest: async (pr) => observed.push(pr.number),
+    },
     { gh, sleep: async () => {}, timeoutMs: 1_000 },
   );
   assert.equal(result.ok, true);
@@ -32,4 +41,5 @@ test('dispatches a remote workflow and waits until its self-fix PR is merged', a
   assert.equal(dispatch.body.inputs.auto_merge, 'true');
   assert.equal(dispatch.body.inputs.commit_title, '🛠️ Self-fix: Fix the queue');
   assert.match(dispatch.body.inputs.branch, /^panda-dev-/);
+  assert.deepEqual(observed, [42]);
 });

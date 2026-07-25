@@ -50,14 +50,19 @@ async function defaultBranch(gh, repo) {
   return res.status === 200 ? res.json?.default_branch || 'main' : null;
 }
 
-async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now }) {
+async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onPullRequest = () => {} }) {
   const [owner] = repo.split('/');
   const deadline = now() + timeoutMs;
   let pr = null;
+  let reported = false;
   while (now() < deadline) {
     const result = await gh('GET', `/repos/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=1`);
     if (result.status === 200 && result.json?.[0]) {
       pr = result.json[0];
+      if (!reported) {
+        reported = true;
+        await onPullRequest(pr);
+      }
       if (pr.merged_at) return { ok: true, pr, merged: true };
       if (pr.state === 'closed') return { ok: false, pr, merged: false, detail: 'The pull request was closed without merging.' };
     }
@@ -71,7 +76,7 @@ async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now }) {
 // sandbox. The bot process merely asks, observes, and (for its own repository)
 // restarts after the PR actually merges.
 export async function runDevelopmentSandbox(
-  { repo, instruction, model, base, autoMerge = false, selfFix = false, config },
+  { repo, instruction, model, base, autoMerge = false, selfFix = false, config, onPullRequest },
   { gh = githubRequest(config.githubPat), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, timeoutMs = DEFAULT_TIMEOUT_MS } = {},
 ) {
   const targetRepo = cleanRepo(repo);
@@ -104,7 +109,7 @@ export async function runDevelopmentSandbox(
     return { ok: false, summary: `❌ Could not start the remote development sandbox (HTTP ${dispatch.status}): ${responseText(dispatch.json)}` };
   }
 
-  const waited = await waitForPullRequest({ gh, repo: targetRepo, branch, timeoutMs, sleep, now });
+  const waited = await waitForPullRequest({ gh, repo: targetRepo, branch, timeoutMs, sleep, now, onPullRequest });
   const url = waited.pr?.html_url ? `\n${waited.pr.html_url}` : '';
   if (!waited.ok) return { ok: false, summary: `⚠️ ${waited.detail || 'Development sandbox failed.'}${url}`, pr: waited.pr };
   return {

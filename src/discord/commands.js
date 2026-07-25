@@ -8,7 +8,7 @@ import { PRIVATE_MESSAGE } from '../privateMode.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
-import { vaultFetch, githubCall, createPr } from '../agent/tools/github.js';
+import { vaultFetch, githubCall, createPr, writableRepoChoices } from '../agent/tools/github.js';
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
 import { setDevelopmentModel } from '../configManager.js';
@@ -31,7 +31,7 @@ export const commandDefs = [
     .setName('set_dev_model')
     .setDescription('Set the OpenRouter model used for development tasks like self_fix (owner only)')
     .addStringOption((o) =>
-      o.setName('model').setDescription('OpenRouter model id (e.g. openai/gpt-4o)').setRequired(true),
+      o.setName('model').setDescription('OpenRouter model id — start typing to search').setRequired(true).setAutocomplete(true),
     ),
   new SlashCommandBuilder()
     .setName('play')
@@ -126,9 +126,14 @@ export function createInteractionHandler({ client, config, contextStore, player,
     // Autocomplete is a separate interaction type with a 3s budget and no
     // deferral — answer it from the cached catalog and return.
     if (interaction.isAutocomplete()) {
-      if (interaction.commandName !== 'switch_model') return;
       if (interaction.user.id !== config.ownerId) return await interaction.respond([]).catch(() => {});
-      const choices = await modelChoices(config, interaction.options.getFocused());
+      const focused = interaction.options.getFocused(true);
+      if (interaction.commandName === 'switch_model' || interaction.commandName === 'set_dev_model') {
+        const choices = await modelChoices(config, focused.value);
+        return await interaction.respond(choices).catch(() => {});
+      }
+      if (interaction.commandName !== 'run_dev' || focused.name !== 'repo') return await interaction.respond([]).catch(() => {});
+      const choices = await writableRepoChoices(config, focused.value);
       return await interaction.respond(choices).catch(() => {});
     }
 
