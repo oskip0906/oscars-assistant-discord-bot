@@ -103,7 +103,7 @@ function enqueueContext(key, task) {
   return next;
 }
 
-export function createMessageHandler({ client, config, contextStore, player, privateMode, selfFix = selfFixState, runAgentImpl = runAgent }) {
+export function createMessageHandler({ client, config, contextStore, player, privateMode, toggledResponses, selfFix = selfFixState, runAgentImpl = runAgent }) {
   // channelId -> { queue: Batch[], busy: boolean }
   // Batch = { claimantId, messages: Message[], closed: boolean, collected: Promise }
   const channels = new Map();
@@ -253,6 +253,10 @@ export function createMessageHandler({ client, config, contextStore, player, pri
   return async (message) => {
     try {
       if (message.author.id === client.user.id) return;
+
+      // Toggled-off users: their messages are never routed to the model, so the
+      // bot simply doesn't respond to them (no batch, no reply — silence).
+      if (toggledResponses?.has(message.author.id)) return;
 
       const channelId = message.channelId;
 

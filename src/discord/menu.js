@@ -47,6 +47,7 @@ export function buildMenuEmbed(client, config) {
           '`/self_fix <instruction>` : Patch my own source code, push to GitHub, and restart',
           '`/git_push [message]` : Commit & push my own source changes to GitHub',
           '`/private on|off|status` : Only respond to Oscar',
+          '`/toggle_response <user_id>` : Toggle whether I respond to a specific user id',
         ].join('\n'),
       },
       {
