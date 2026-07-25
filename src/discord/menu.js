@@ -44,6 +44,7 @@ export function buildMenuEmbed(client, config) {
         name: '🛠️ Power Tools (Oscar only)',
         value: [
           '`/self_fix <instruction>` : Approve a remote-sandbox self-fix PR, then restart after it merges',
+          '`/run_dev <instruction> [repo]` : Approve a remote-sandbox development PR',
           '`/switch_model <model>` : Switch me to another OpenRouter model and restart',
           '`/github [body]` : Call the GitHub API with Oscar’s credentials',
           '`/private on|off|status` : Only respond to Oscar',

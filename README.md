@@ -152,7 +152,7 @@ marker to have an existing `start.sh` regenerated.
 
 `/menu` · `/usage` · `/model` · `/play` `/skip` `/pause` `/resume` `/stop` `/queue` ·
 `/web_search` `/web_fetch` `/image_search` `/vault_fetch` · `/clear` · `/clearall` (owner) ·
-`/github` (owner) · `/self_fix` (owner) · `/switch_model` (owner) ·
+`/github` (owner) · `/self_fix` (owner) · `/run_dev` (owner) · `/switch_model` (owner) ·
 `/private on|off|status` (owner)
 
 `/switch_model` autocompletes against OpenRouter's live catalogue, writes the chosen id to
@@ -165,3 +165,7 @@ it only ever reads the one vault repo.
 `/web_search`, `/web_fetch`, `/image_search`, `/vault_fetch`, and `/github` each take a
 **single free-text field** in the Discord UI (query / url / body) — no fiddly structured
 parameters. Registered **per guild** on startup (instant availability).
+
+`/run_dev` is the direct development shortcut: give it an instruction and, optionally, an
+`owner/repo` target. It shows the same approval buttons as `self_fix`, then runs the remote
+sandbox and opens a PR. With no repo it targets Panda’s configured sandbox repository.

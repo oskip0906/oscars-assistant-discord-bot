@@ -8,7 +8,7 @@ import { PRIVATE_MESSAGE } from '../privateMode.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
-import { vaultFetch, githubCall } from '../agent/tools/github.js';
+import { vaultFetch, githubCall, createPr } from '../agent/tools/github.js';
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
 import { setDevelopmentModel } from '../configManager.js';
@@ -74,6 +74,15 @@ export const commandDefs = [
     .setName('self_fix')
     .setDescription('Patch Panda’s own source code and restart (owner only)')
     .addStringOption((o) => o.setName('instruction').setDescription('What to change/fix about the bot').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('run_dev')
+    .setDescription('Run an approved remote development task and open a PR (owner only)')
+    .addStringOption((o) => o.setName('instruction').setDescription('What to build, change, or fix').setRequired(true))
+    .addStringOption((o) =>
+      o
+        .setName('repo')
+        .setDescription('Target owner/repo; defaults to Panda’s own repository'),
+    ),
   new SlashCommandBuilder()
     .setName('toggle_response')
     .setDescription('Toggle whether Panda responds to a given user id (owner only)')
@@ -357,6 +366,19 @@ export function createInteractionHandler({ client, config, contextStore, player,
           setTimeout(() => process.exit(42), 1500);
         }
         return;
+      }
+
+      if (name === 'run_dev') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+        }
+        await interaction.deferReply();
+        const repo = interaction.options.getString('repo') || config.developmentSandboxRepo;
+        const result = await createPr(
+          { repo, instruction: interaction.options.getString('instruction', true) },
+          buildInvocation(),
+        );
+        return await sendToolResult(result);
       }
 
       // Music commands below
