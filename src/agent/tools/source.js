@@ -474,7 +474,12 @@ export async function selfFix(
       );
     }
 
-    const title = `self_fix: ${String(instruction).replace(/\s+/g, ' ').trim().slice(0, 72)}`;
+    // The squash-merged commit takes its title from `title` (the branch PR
+    // title) and its body from `body`. Keep the title short and prefixed, and
+    // build the body as a detailed description from the completion output — the
+    // same thing Oscar sees reported when a self_fix lands.
+    const shortInstruction = String(instruction).replace(/\s+/g, ' ').trim();
+    const title = `🛠️ Self-fix: ${shortInstruction.slice(0, 60)}`;
     // Ship through GitHub, not through this checkout: PR against main →
     // auto-merge → pull the merged result back down. If any of that fails the
     // local code is NOT what main says, so we must not restart into it.
@@ -482,11 +487,17 @@ export async function selfFix(
       root,
       title,
       body: [
-        'Opened automatically by panda-bot `self_fix`.',
+        'Performed automatically by panda-bot `self_fix`.',
         '',
-        `**Instruction from Oscar:** ${String(instruction).slice(0, 1500)}`,
+        `**Instruction from Oscar:** ${shortInstruction.slice(0, 1500)}`,
         '',
-        `Verified with \`node --check\` + import resolution across ${changed.length} changed file(s).`,
+        '**Files modified:**',
+        changed.length ? changed.map((f) => `- \`${f}\``).join('\n') : '- (none reported)',
+        '',
+        `**Verified:** \`node --check\` + import resolution passed across ${changed.length} changed file(s).`,
+        '',
+        '**Details from the self_fix run:**',
+        tail,
       ].join('\n'),
       changed,
       pat: config.githubPat,
