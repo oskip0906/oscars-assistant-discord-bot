@@ -38,6 +38,18 @@ export const defs = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'git_pull',
+      description:
+        "OWNER ONLY. Fetch and merge remote changes into YOUR OWN local source by running real git `pull origin HEAD` on the current branch. Use this when a push was rejected because the remote has commits you don't have locally; self_fix calls it automatically before retrying a rejected push.",
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
 ];
 
 // Run one git subcommand in cwd. Never rejects — resolves to {code, stdout, stderr}.
@@ -72,6 +84,21 @@ async function changedFiles(root) {
     .map((p) => p.replace(/^"|"$/g, ''));
 }
 
+// Ephemeral auth for a network git operation: supply Oscar's PAT as an HTTP
+// basic-auth header via `-c http.extraHeader=…` so the secret stays out of
+// .git/config and the remote URL, and clear any inherited credential helper so
+// a stale cached credential can't override it. Empty when no PAT is set.
+function authArgs(pat) {
+  return pat
+    ? [
+        '-c',
+        'credential.helper=',
+        '-c',
+        `http.extraHeader=Authorization: Basic ${Buffer.from(`x-access-token:${pat}`).toString('base64')}`,
+      ]
+    : [];
+}
+
 // Stage everything, commit (if there's anything to commit), and push to origin
 // on the current branch using traditional git. Auth: Oscar's PAT is attached as
 // an ephemeral HTTP Authorization header via `-c http.extraHeader=…` so it is
@@ -102,20 +129,7 @@ export async function pushSource({ root, message, pat }) {
     }
   }
 
-  // Auth for the push:
-  //  * `-c credential.helper=` clears any inherited helper (e.g. macOS
-  //    osxkeychain), so a STALE cached credential can't override the PAT.
-  //  * `-c http.extraHeader=Authorization: Basic …` supplies the PAT as HTTP
-  //    basic auth, keeping the secret out of .git/config and the remote URL.
-  const authArgs = pat
-    ? [
-        '-c',
-        'credential.helper=',
-        '-c',
-        `http.extraHeader=Authorization: Basic ${Buffer.from(`x-access-token:${pat}`).toString('base64')}`,
-      ]
-    : [];
-  const push = await git([...authArgs, 'push', 'origin', 'HEAD'], root);
+  const push = await git([...authArgs(pat), 'push', 'origin', 'HEAD'], root);
   if (push.code !== 0) {
     const raw = push.stderr || push.stdout;
     const detail = (pat ? raw.split(pat).join('***') : raw).slice(0, 1500);
@@ -130,6 +144,27 @@ export async function pushSource({ root, message, pat }) {
     return `✅ Nothing new to commit on ${branch}; pushed any pending commits.\n${summary.slice(0, 800)}`;
   }
   return `✅ Committed ${files.length} file(s) and pushed to origin/${branch}.\nFiles: ${files.slice(0, 20).join(', ')}${files.length > 20 ? ' …' : ''}\n${summary.slice(0, 800)}`;
+}
+
+// Fetch and merge remote changes into the current branch with real git
+// (`pull origin HEAD`). Uses the same ephemeral PAT auth as pushSource so
+// private repos authenticate without persisting the secret. Never throws —
+// returns a human-readable summary string suitable for a tool result.
+export async function pullSource({ root, pat }) {
+  const inside = await git(['rev-parse', '--is-inside-work-tree'], root);
+  if (inside.code !== 0 || inside.stdout.trim() !== 'true') {
+    return `❌ ${root} is not a git repository — cannot pull. (${inside.stderr.trim() || 'no origin'})`;
+  }
+
+  const pull = await git([...authArgs(pat), 'pull', 'origin', 'HEAD'], root);
+  if (pull.code !== 0) {
+    const raw = pull.stderr || pull.stdout;
+    const detail = (pat ? raw.split(pat).join('***') : raw).slice(0, 1500);
+    return `❌ git pull failed:\n${detail}`;
+  }
+
+  const summary = pull.stdout.trim() || pull.stderr.trim() || 'already up to date';
+  return `✅ Pulled from origin.\n${summary.slice(0, 800)}`;
 }
 
 // Decide whether Claude finished or is waiting on an answer, and if it's
@@ -242,7 +277,16 @@ export async function selfFix({ instruction }, invocation) {
     // Stage, commit, and push are handled by pushSource, which never throws.
     // A push failure must NOT block the restart — the code changes are already
     // verified and on disk, so we log the failure and still restart.
-    const pushResult = await pushSource({ root, message: commitMsg, pat: config.githubPat });
+    let pushResult = await pushSource({ root, message: commitMsg, pat: config.githubPat });
+    // If the push was rejected because the remote moved on (someone else
+    // pushed), pull to merge those changes and retry the push once. Log the
+    // outcome of both the pull and the retried push.
+    if (pushResult.startsWith('❌') && /rejected|fetch first|non-fast-forward/i.test(pushResult)) {
+      const pullResult = await pullSource({ root, pat: config.githubPat });
+      console.error(`[self_fix] push rejected; ran git pull:\n${pullResult}`);
+      pushResult = await pushSource({ root, message: commitMsg, pat: config.githubPat });
+      console.error(`[self_fix] retried git push after pull:\n${pushResult}`);
+    }
     if (pushResult.startsWith('❌')) {
       console.error(`[self_fix] git push failed but continuing to restart:\n${pushResult}`);
     }
@@ -260,4 +304,8 @@ export async function selfFix({ instruction }, invocation) {
 
 export async function gitPush({ message }) {
   return pushSource({ root: config.projectRoot, message, pat: config.githubPat });
+}
+
+export async function gitPull() {
+  return pullSource({ root: config.projectRoot, pat: config.githubPat });
 }
