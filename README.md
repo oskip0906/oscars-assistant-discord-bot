@@ -4,8 +4,6 @@ Oscar's Discord AI agent, built **from scratch**: plain Node.js + discord.js v14
 **OpenRouter** tool-calling loop. Per-server memory, music, self-hosted web/image search,
 GitHub vault integration, self-fixing source code, private mode, and emoji reactions.
 
-## Screenshot of Panda-bot
-
 ![Screenshot of Panda-bot](assets/Panda_Screenshot.png)
 
 ## Quick start (local)
@@ -115,25 +113,3 @@ GitHub** (`git_push`), and the bot restarts (exit 42 → `run.sh` reloads) to ap
 `/web_search`, `/web_fetch`, `/image_search`, `/vault_fetch`, and `/github` each take a
 **single free-text field** in the Discord UI (query / url / body) — no fiddly structured
 parameters. Registered **per guild** on startup (instant availability).
-
-## Caveats
-
-1. **Privileged intents** — "Message Content" must be ON in the Discord Developer Portal.
-   "Server Members Intent" is optional: without it the bot auto-retries login without
-   `GuildMembers` and `get_user_id` degrades to cache search.
-2. **YouTube playback** — audio is streamed via **yt-dlp** (`youtube-dl-exec`), not
-   youtubei.js, whose streaming path is broken upstream. youtubei.js is kept only for
-   search/metadata, and its noisy parser errors (YouTube constantly ships new renderer
-   types like `HorizontalShelfView` that the pinned release doesn't know about, spamming
-   `InnertubeError: … not found!`) are silenced by muting its logger in
-   `src/music/player.js`. Two things keep yt-dlp reliable, both wired in:
-     - `--js-runtimes node` — solves YouTube's signature/nsig JS challenges using the Node
-       binary the bot already runs on (no deno/extra install).
-     - **Cookies** — YouTube bot-walls unauthenticated extraction under load. The bot uses a
-       cookies file (`YT_COOKIES_FILE`), stable and Docker-friendly. Regenerate it with:
-       ```bash
-       npm run yt-cookies      # writes ./cookies.txt from Chrome
-       ```
-       Cookies expire eventually; re-run if playback starts failing.
-3. Secrets live only in `.env` (gitignored). Never commit them.
-```
