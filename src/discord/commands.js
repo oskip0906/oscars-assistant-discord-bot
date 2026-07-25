@@ -9,7 +9,8 @@ import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
 import { vaultFetch, githubCall } from '../agent/tools/github.js';
-import { selfFix, gitPush } from '../agent/tools/source.js';
+import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
+import { selfFixState } from '../selfFixState.js';
 import { setDevelopmentModel } from '../configManager.js';
 
 export const commandDefs = [
@@ -74,10 +75,6 @@ export const commandDefs = [
     .setDescription('Patch Panda’s own source code and restart (owner only)')
     .addStringOption((o) => o.setName('instruction').setDescription('What to change/fix about the bot').setRequired(true)),
   new SlashCommandBuilder()
-    .setName('git_push')
-    .setDescription("Commit & push Panda's own source changes to GitHub (owner only)")
-    .addStringOption((o) => o.setName('message').setDescription('Commit message (optional)')),
-  new SlashCommandBuilder()
     .setName('toggle_response')
     .setDescription('Toggle whether Panda responds to a given user id (owner only)')
     .addStringOption((o) =>
@@ -101,6 +98,22 @@ export const commandDefs = [
 
 export function createInteractionHandler({ client, config, contextStore, player, privateMode, toggledResponses }) {
   return async (interaction) => {
+    if (interaction.isButton?.()) {
+      const approval = parseApprovalButtonId(interaction.customId);
+      if (!approval) return;
+      if (interaction.user.id !== config.ownerId) {
+        return await interaction.reply({ content: '⛔ Only Oscar can approve development work.', flags: MessageFlags.Ephemeral });
+      }
+      const consumed = selfFixState.submitApproval(interaction.user.id, approval.id, approval.approved);
+      if (!consumed) {
+        return await interaction.reply({ content: '⌛ This development approval has expired.', flags: MessageFlags.Ephemeral });
+      }
+      return await interaction.update({
+        content: approval.approved ? '✅ Development task approved. Starting the remote sandbox…' : '🚫 Development task cancelled.',
+        components: [],
+      });
+    }
+
     // Autocomplete is a separate interaction type with a 3s budget and no
     // deferral — answer it from the cached catalog and return.
     if (interaction.isAutocomplete()) {
@@ -247,7 +260,7 @@ export function createInteractionHandler({ client, config, contextStore, player,
         }
         const applied = setDevelopmentModel(model);
         return await interaction.reply({
-          content: `🛠️ Development-task model set to \`${applied}\`. self_fix will use it (after confirmation) from now on.`,
+          content: `🛠️ Development-task model set to \`${applied}\`. self_fix will use it after Discord button approval from now on.`,
           flags: MessageFlags.Ephemeral,
           allowedMentions: { parse: [] },
         });
@@ -344,18 +357,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
           setTimeout(() => process.exit(42), 1500);
         }
         return;
-      }
-
-      if (name === 'git_push') {
-        if (!isOwner) {
-          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
-        }
-        await interaction.deferReply();
-        const result = await gitPush(
-          { message: interaction.options.getString('message') ?? undefined },
-          buildInvocation(),
-        );
-        return await sendToolResult(result);
       }
 
       // Music commands below

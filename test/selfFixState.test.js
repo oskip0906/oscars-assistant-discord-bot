@@ -62,3 +62,13 @@ test('the busy reply is a hardcoded string, never model-composed', () => {
   assert.equal(typeof SELF_FIX_MESSAGE, 'string');
   assert.match(SELF_FIX_MESSAGE, /rebuild/i);
 });
+
+test('only the matching owner button can approve a development task', async () => {
+  const s = new SelfFixState();
+  const approval = s.beginApproval({ userId: 'OWNER', id: 'nonce', timeoutMs: 1_000 });
+  assert.equal(s.submitApproval('OTHER', 'nonce', true), false);
+  assert.equal(s.submitApproval('OWNER', 'old', true), false);
+  assert.equal(s.submitApproval('OWNER', 'nonce', true), true);
+  assert.equal(await approval.result, 'confirm');
+  assert.equal(s.isAwaitingConfirmation(), false);
+});

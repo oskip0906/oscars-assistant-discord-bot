@@ -1,4 +1,7 @@
-import { openAutoMergedPr } from './prFlow.js';
+import { getAIConfig } from '../../configManager.js';
+import { selfFixState } from '../../selfFixState.js';
+import { requestDevelopmentApproval } from './source.js';
+import { runDevelopmentSandbox } from './developmentSandbox.js';
 
 export const defs = [
   {
@@ -21,7 +24,7 @@ export const defs = [
     function: {
       name: 'github',
       description:
-        "OWNER ONLY. General GitHub REST API integration: call any GitHub REST endpoint, authenticated as Oscar (oskip0906) — this can read and modify Oscar's private repositories, so it is restricted to Oscar. Examples: GET /user/repos, GET /repos/{owner}/{repo}/issues, POST /repos/{owner}/{repo}/issues with body {title}. Endpoint must start with '/'. DO NOT use this to push local source changes or create commits (there is no POST …/commits endpoint — it 404s); to push Oscar's own source to GitHub use the git_push tool instead.",
+        "OWNER ONLY. General GitHub REST API integration: call any GitHub REST endpoint, authenticated as Oscar (oskip0906) — this can read and modify Oscar's private repositories, so it is restricted to Oscar. Examples: GET /user/repos, GET /repos/{owner}/{repo}/issues, POST /repos/{owner}/{repo}/issues with body {title}. Endpoint must start with '/'. Never use this endpoint to create source commits: use create_pr or self_fix so code changes go through the approved remote sandbox.",
       parameters: {
         type: 'object',
         properties: {
@@ -38,29 +41,15 @@ export const defs = [
     function: {
       name: 'create_pr',
       description:
-        "OWNER ONLY. Open a pull request on ANY of Oscar's GitHub repos — not just your own source. Give the repo, a title, and the full new content of each file you want changed; the files are committed to a fresh branch off the repo's default branch and a PR is opened. Set auto_merge to squash-merge it immediately. Use this for editing OTHER repos; to change your own source use self_fix instead.",
+        'OWNER ONLY. Request a source change on any permitted GitHub repository. Panda first presents Oscar with Discord approval buttons. After approval, the configured OpenRouter development model works only in an isolated GitHub Actions sandbox, verifies the change, and opens a pull request. It waits for a merge; auto-merge is enabled only for Panda’s own repository.',
       parameters: {
         type: 'object',
         properties: {
           repo: { type: 'string', description: "Target repo, 'owner/name' or just 'name' for one of Oscar's own" },
-          title: { type: 'string', description: 'Pull request title (also the commit message)' },
-          body: { type: 'string', description: 'Pull request description' },
+          instruction: { type: 'string', description: 'The requested source-code change' },
           base: { type: 'string', description: "Branch to target (default: the repo's default branch)" },
-          files: {
-            type: 'array',
-            description: 'The files to change. Content is the COMPLETE new file, not a diff.',
-            items: {
-              type: 'object',
-              properties: {
-                path: { type: 'string', description: 'Path in the repo, e.g. src/index.js' },
-                content: { type: 'string', description: 'Full new file content. Omit or null to DELETE the file.' },
-              },
-              required: ['path'],
-            },
-          },
-          auto_merge: { type: 'boolean', description: 'Squash-merge the PR immediately (default false)' },
         },
-        required: ['repo', 'title', 'files'],
+        required: ['repo', 'instruction'],
       },
     },
   },
@@ -141,66 +130,42 @@ export async function githubApi({ method = 'GET', endpoint, body }, invocation) 
   return githubCall({ method, endpoint, body, auth: true }, invocation);
 }
 
-// Open a pull request on any repo Oscar's PAT can reach. Same machinery
-// self_fix ships itself with (prFlow), pointed at someone else's repo — so a
-// change to another project never involves cloning it locally.
-//
-// Never throws; returns a tool-result string.
+// Development changes on any repository use the same remote-only sandbox as
+// self_fix. The bot never receives full replacement file contents or creates a
+// source commit from its own process.
 export async function createPr(
-  { repo, title, body, base, files, auto_merge: autoMerge = false },
+  { repo, instruction, base },
   invocation,
-  { openPr = openAutoMergedPr, gh: rawGh, now = Date.now } = {},
+  { runSandbox = runDevelopmentSandbox, confirm = requestDevelopmentApproval, state = selfFixState, getConfig = getAIConfig } = {},
 ) {
   if (!invocation.isOwner) {
     return '⛔ create_pr is restricted to Oscar (it writes to his repos with his credentials). The current sender is not Oscar — refuse.';
   }
-  if (!Array.isArray(files) || files.length === 0) {
-    return '⚠️ create_pr needs a non-empty `files` array — each entry is a path plus the COMPLETE new file content (omit content to delete).';
-  }
-  if (!repo || !title) return '⚠️ create_pr needs both `repo` and `title`.';
+  if (!repo || !instruction) return '⚠️ create_pr needs both `repo` and `instruction`.';
 
   // A bare name means one of Oscar's own repos; the vault slug is where his
   // account name already lives in config.
   const owner = String(invocation.config.vaultRepo || '').split('/')[0] || 'oskip0906';
   const slug = String(repo).includes('/') ? String(repo).replace(/^\/+|\/+$/g, '') : `${owner}/${repo}`;
 
-  const gh = rawGh || ghJson(invocation.config.githubPat);
+  const { model } = getConfig('development');
+  const outcome = await confirm({ instruction, invocation, state, model, label: `Development PR for ${slug}` });
+  if (outcome !== 'confirm') return '🚫 Development PR aborted — it was not approved with the Discord button.';
 
-  // Not every repo calls its trunk "main" — ask before targeting one.
-  let target = base;
-  if (!target) {
-    const info = await gh('GET', `/repos/${slug}`);
-    if (info.status !== 200) {
-      return `❌ Can't reach \`${slug}\` (HTTP ${info.status}): ${info.json?.message || 'unknown error'}`;
-    }
-    target = info.json?.default_branch || 'main';
+  state.begin();
+  try {
+    const ownRepo = slug.toLowerCase() === String(invocation.config.developmentSandboxRepo || '').toLowerCase();
+    const result = await runSandbox({
+      repo: slug,
+      instruction,
+      model,
+      base,
+      autoMerge: ownRepo,
+      selfFix: false,
+      config: invocation.config,
+    });
+    return result.summary;
+  } finally {
+    state.end();
   }
-
-  const result = await openPr({
-    gh,
-    slug,
-    base: target,
-    branchName: `panda-${now()}`,
-    title,
-    body: body || `Opened by panda-bot on Oscar's behalf.`,
-    files: files.map((f) => ({ path: f.path, content: f.content ?? null, mode: '100644' })),
-    autoMerge: Boolean(autoMerge),
-  });
-
-  if (!result.ok) return `❌ ${result.detail}${result.url ? `\n${result.url}` : ''}`;
-  return `✅ ${result.detail}\n${result.url}`;
-}
-
-// prFlow's {status, json} shape, authenticated with Oscar's PAT.
-function ghJson(pat) {
-  return async (method, endpoint, body) => {
-    const { status, text } = await gh({ config: { githubPat: pat } }, endpoint, { method, body, auth: true });
-    let json = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      json = { message: String(text).slice(0, 400) };
-    }
-    return { status, json };
-  };
 }

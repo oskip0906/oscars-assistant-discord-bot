@@ -24,13 +24,13 @@ const envLines = (config) => fs.readFileSync(path.join(config.projectRoot, '.env
 test('switching the model rewrites only the model line', () => {
   const config = scaffoldEnv();
 
-  const result = writeEnvModel(config, 'anthropic/claude-sonnet-4.5');
+  const result = writeEnvModel(config, 'openai/gpt-5.4');
 
   assert.equal(result.ok, true);
   assert.deepEqual(envLines(config), [
     '# Panda config',
     'DISCORD_TOKEN=super-secret',
-    'OPENROUTER_MODEL=anthropic/claude-sonnet-4.5',
+    'OPENROUTER_MODEL=openai/gpt-5.4',
     '',
     'BOT_NAME=Panda   # trailing comment',
   ]);
@@ -62,20 +62,20 @@ test('an empty model id is refused', () => {
 
 // --- the command-level flow ---------------------------------------------
 
-const CATALOG = ['google/gemini-2.5-flash', 'anthropic/claude-sonnet-4.5', 'openai/gpt-5'];
+const CATALOG = ['google/gemini-2.5-flash', 'openai/gpt-5.4', 'openai/gpt-5'];
 
 test('picking a real OpenRouter model writes it and asks for a restart', async () => {
   const config = { ...scaffoldEnv(), model: 'google/gemini-2.5-flash' };
 
   const result = await switchModel(
-    { model: 'anthropic/claude-sonnet-4.5', config },
+    { model: 'openai/gpt-5.4', config },
     { listModels: async () => CATALOG },
   );
 
   assert.equal(result.ok, true);
   assert.equal(result.restart, true);
-  assert.match(result.summary, /anthropic\/claude-sonnet-4\.5/);
-  assert.match(envLines(config).join('\n'), /OPENROUTER_MODEL=anthropic\/claude-sonnet-4\.5/);
+  assert.match(result.summary, /openai\/gpt-5\.4/);
+  assert.match(envLines(config).join('\n'), /OPENROUTER_MODEL=openai\/gpt-5\.4/);
 });
 
 test('a model OpenRouter does not serve is refused before the bot restarts into it', async () => {
@@ -104,7 +104,7 @@ test('an unreachable model catalog does not block a switch', async () => {
   const config = { ...scaffoldEnv(), model: 'google/gemini-2.5-flash' };
 
   const result = await switchModel(
-    { model: 'anthropic/claude-sonnet-4.5', config },
+    { model: 'openai/gpt-5.4', config },
     { listModels: async () => { throw new Error('offline'); } },
   );
 
@@ -116,13 +116,13 @@ test('an unreachable model catalog does not block a switch', async () => {
 
 test('autocomplete narrows the catalog to what Oscar is typing', async () => {
   const config = { openrouterApiKey: 'k', model: 'google/gemini-2.5-flash' };
-  const catalog = ['google/gemini-2.5-flash', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.1'];
+  const catalog = ['google/gemini-2.5-flash', 'openai/gpt-5.4', 'openai/gpt-5'];
 
-  const choices = await modelChoices(config, 'CLAUDE', { listModels: async () => catalog, cache: {} });
+  const choices = await modelChoices(config, 'GPT', { listModels: async () => catalog, cache: {} });
 
   assert.deepEqual(
     choices.map((c) => c.value),
-    ['anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.1'],
+    ['openai/gpt-5.4', 'openai/gpt-5'],
   );
   assert.ok(choices.every((c) => c.name.length <= 100 && c.value.length <= 100));
 });

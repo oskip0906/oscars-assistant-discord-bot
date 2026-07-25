@@ -1,7 +1,7 @@
 {
   "name": "panda-bot",
   "version": "1.0.0",
-  "description": "Panda — Oscar's from-scratch Discord AI agent (OpenRouter tool-calling, music, search, vault, claude-code self-fix)",
+  "description": "Panda — Oscar's from-scratch Discord AI agent (OpenRouter tool-calling, music, search, vault, remote-sandbox self-fix)",
   "type": "module",
   "private": true,
   "main": "src/index.js",

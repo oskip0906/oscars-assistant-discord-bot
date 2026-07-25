@@ -1,0 +1,72 @@
+name: Development sandbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: Repository to change (owner/name)
+        required: true
+        type: string
+      base:
+        description: Base branch
+        required: true
+        type: string
+      instruction:
+        description: Approved development task
+        required: true
+        type: string
+      model:
+        description: OpenRouter development model
+        required: true
+        type: string
+      request_id:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+      commit_title:
+        required: true
+        type: string
+      auto_merge:
+        required: true
+        type: boolean
+      self_fix:
+        required: true
+        type: boolean
+
+# The workflow itself only reads this control repo. PANDA_DEV_GITHUB_TOKEN is a
+# repository secret with access to the target repos; it is never exposed to the
+# OpenRouter request or checked out target files.
+permissions:
+  contents: read
+
+jobs:
+  develop:
+    name: ${{ inputs.request_id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Create isolated target checkout
+        env:
+          GH_TOKEN: ${{ secrets.PANDA_DEV_GITHUB_TOKEN }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+          BASE: ${{ inputs.base }}
+        run: gh repo clone "$TARGET_REPO" target -- --branch "$BASE" --single-branch
+      - name: Develop, verify, and open pull request
+        env:
+          GH_TOKEN: ${{ secrets.PANDA_DEV_GITHUB_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+          BASE: ${{ inputs.base }}
+          INSTRUCTION: ${{ inputs.instruction }}
+          MODEL: ${{ inputs.model }}
+          BRANCH: ${{ inputs.branch }}
+          COMMIT_TITLE: ${{ inputs.commit_title }}
+          AUTO_MERGE: ${{ inputs.auto_merge }}
+          SELF_FIX: ${{ inputs.self_fix }}
+        run: node .github/scripts/development-sandbox.mjs target

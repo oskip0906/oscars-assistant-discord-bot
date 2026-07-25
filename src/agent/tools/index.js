@@ -9,7 +9,7 @@ import * as musicTools from './music.js';
 // (invocation.isOwner) — never by anything a message could claim, so no one can
 // impersonate Oscar into these. github is here because it acts with Oscar's
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
-export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'git_push', 'git_pull', 'clear_all_context', 'github', 'create_pr']);
+export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'clear_all_context', 'github', 'create_pr']);
 
 const modules = [discordTools, searchTools, githubTools, contextTools, sourceTools, musicTools];
 
@@ -28,8 +28,6 @@ const executors = {
   clear_context: contextTools.clearContext,
   clear_all_context: contextTools.clearAllContext,
   self_fix: sourceTools.selfFix,
-  git_push: sourceTools.gitPush,
-  git_pull: sourceTools.gitPull,
   play_music: musicTools.playMusic,
 };
 

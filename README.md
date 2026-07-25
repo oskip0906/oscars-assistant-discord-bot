@@ -48,10 +48,10 @@ docker compose -f docker-compose.deploy.yml up -d
 This starts SearXNG and the bot together on a private network; the bot reaches search at
 `http://searxng:8080` (wired automatically). Bot state persists in the `panda-data` volume.
 
-> Note: `self_fix` shells out to the `claude` CLI, which isn't in the container — it only
-> works on a machine with Claude Code installed. The container also runs `node src/index.js`
-> directly rather than `run.sh`, since there's no git checkout to pull into; restarts are the
-> orchestrator's job there. Everything else runs fine containerized.
+> `self_fix` and `create_pr` never edit the running container or local checkout. They use a
+> remote GitHub Actions sandbox, so they work the same way for Docker and local deployments.
+> The container runs `node src/index.js` directly; after a self-fix merges, your deployment
+> mechanism should roll out the new `main` image as usual.
 
 ## Search backend (SearXNG — no rate limits)
 
@@ -95,23 +95,48 @@ Jina-reads-DDG → direct DuckDuckGo.
 | `image_search` | SearXNG images → DuckDuckGo fallback; returns direct URLs Discord embeds |
 | `vault_fetch` | reads Oscar's private vault GitHub repo (list/read/search paths) |
 | `github` | any GitHub REST endpoint, authenticated as the configured user *(owner only)* |
-| `create_pr` | open (and optionally auto-merge) a PR on **any** of Oscar's repos *(owner only)* |
+| `create_pr` | request a remote-sandbox PR on **any** permitted repo *(owner only)* |
 | `clear_context` / `clear_all_context` | wipe this server's memory / ALL memory *(all owner)* |
-| `git_push` | commit & push local source to GitHub via real git *(owner only)* |
-| `self_fix` | rewrite the bot's own source, then verify → PR → merge → pull → restart *(owner only)* |
+| `self_fix` | remote-sandbox change → verified PR → auto-merge → restart *(owner only)* |
 | `play_music` | AI-routed music: "play X", skip, pause, resume, stop, queue |
 | `react` | react to the current message with an emoji |
 
-**`self_fix`** hands the instruction to Claude Code inside the project folder, which reads
-and edits the files. Each round is supervised by the **OpenRouter model** (it decides
-whether Claude finished or needs an answer, and replies unattended so nobody has to babysit
-it). When done, the change is syntax/import-checked and then shipped **through GitHub, never
-through the local checkout**: the edits are uploaded as a pull request against `main`,
-auto-merged (squash), and pulled back down so this machine matches the remote exactly. Then
-the bot exits 42 and `start.sh` pulls once more and reboots into the merged code. If the PR
-fails to open or merge, nothing is pulled and the bot does **not** restart. Either way Oscar
-gets a **DM the moment it settles** — sent directly, not through the model, since the bot is
-about to restart.
+**Development workflow:** `self_fix` and `create_pr` begin with a Discord UI approval card —
+click **Approve remote sandbox** or **Cancel**. Text replies cannot approve a code change. On
+approval, GitHub Actions checks out a fresh isolated copy of the target repo, calls the custom
+`OPENROUTER_DEV_MODEL`, applies only a JSON edit plan, runs JavaScript and project tests, then
+opens a detailed PR. The live bot checkout is never read or edited. A self-fix targets Panda’s
+own repo, enables GitHub auto-merge, waits for the PR to merge, and only then restarts. Every
+self-fix commit is titled `🛠️ Self-fix: <short task>` and includes the approved task, detailed
+description, changed files, model, and verification results in its commit body and PR body.
+
+### One-time development sandbox setup
+
+The workflow file is [`.github/workflows/development-sandbox.yml`](.github/workflows/development-sandbox.yml).
+After this refactor is pushed to the repository that runs Panda, add these repository **Actions
+secrets** there:
+
+| Secret | Value |
+|---|---|
+| `OPENROUTER_API_KEY` | the key for the custom development model |
+| `PANDA_DEV_GITHUB_TOKEN` | a fine-grained PAT with **Contents: read/write** and **Pull requests: read/write** on every repo Panda may change |
+
+Set these bot environment values (the first usually matches Panda’s own repo):
+
+```bash
+OPENROUTER_DEV_MODEL=your-org/your-development-model
+DEVELOPMENT_SANDBOX_REPO=oskip0906/oscars-assistant-discord-bot
+DEVELOPMENT_SANDBOX_WORKFLOW=development-sandbox.yml
+DEVELOPMENT_SANDBOX_REF=main
+```
+
+`GITHUB_PAT` must have **Actions: write** plus pull-request read access on the sandbox repo so
+it can dispatch and observe the workflow. `PANDA_DEV_GITHUB_TOKEN` needs access to every
+target repo because the sandbox uses it only to clone, push its short-lived branch, and open
+the PR.
+Enable **Allow auto-merge** in that repository’s GitHub settings; branch protection can still
+require checks/reviews, and Panda will wait until GitHub reports the PR merged. For other repos,
+Panda opens the PR and waits for your normal review/merge process instead of auto-merging.
 
 ### Start scripts
 
@@ -127,12 +152,12 @@ marker to have an existing `start.sh` regenerated.
 
 `/menu` · `/usage` · `/model` · `/play` `/skip` `/pause` `/resume` `/stop` `/queue` ·
 `/web_search` `/web_fetch` `/image_search` `/vault_fetch` · `/clear` · `/clearall` (owner) ·
-`/github` (owner) · `/self_fix` (owner) · `/git_push` (owner) · `/switch_model` (owner) ·
+`/github` (owner) · `/self_fix` (owner) · `/switch_model` (owner) ·
 `/private on|off|status` (owner)
 
 `/switch_model` autocompletes against OpenRouter's live catalogue, writes the chosen id to
 `OPENROUTER_MODEL` in `.env`, and restarts (exit 42) so the new model is actually loaded.
-Every GitHub surface — the `github` tool, `create_pr`, `git_push`, `git_pull`, `self_fix`,
+Every GitHub surface — the `github` tool, `create_pr`, `self_fix`,
 and the `/github` command — is **Oscar-only**, enforced in code against the authenticated
 Discord id. `vault_fetch` is the deliberate exception: guests use it to ask about Oscar, and
 it only ever reads the one vault repo.

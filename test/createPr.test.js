@@ -2,103 +2,69 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createPr } from '../src/agent/tools/github.js';
 
-function harness({ pr = { ok: true, number: 3, url: 'https://gh/pr/3', merged: false, detail: 'PR #3 opened.' }, defaultBranch = 'main' } = {}) {
-  const opened = [];
-  const invocation = { isOwner: true, config: { githubPat: 'pat', vaultRepo: 'oskip0906/oskip-vault' } };
-  const deps = {
-    openPr: async (args) => {
-      opened.push(args);
-      return pr;
+function invocation() {
+  return {
+    isOwner: true,
+    client: {},
+    config: {
+      ownerId: 'OWNER',
+      vaultRepo: 'oskip0906/oskip-vault',
+      githubPat: 'token',
+      developmentSandboxRepo: 'oskip0906/oscars-assistant-discord-bot',
     },
-    // Only the repo lookup goes through the raw REST stub here.
-    gh: async () => ({ status: 200, json: { default_branch: defaultBranch } }),
-    now: () => 1700000000000,
+    message: { channel: { send: async () => {} } },
   };
-  return { invocation, deps, opened };
 }
 
-test('a PR can be opened against any of Oscar’s repos', async () => {
-  const { invocation, deps, opened } = harness();
-
+test('create_pr sends an approved development task to the remote sandbox', async () => {
+  const calls = [];
   const result = await createPr(
-    { repo: 'oskip0906/oskip-vault', title: 'Add a note', files: [{ path: 'notes/a.md', content: '# hi' }] },
-    invocation,
-    deps,
+    { repo: 'other-project', instruction: 'Add a health endpoint', base: 'trunk' },
+    invocation(),
+    {
+      confirm: async () => 'confirm',
+      getConfig: () => ({ model: 'openai/gpt-5.4-dev' }),
+      state: { begin() {}, end() {} },
+      runSandbox: async (args) => {
+        calls.push(args);
+        return { ok: true, summary: '✅ PR #7 opened.\nhttps://example.test/pr/7' };
+      },
+    },
   );
-
-  assert.equal(opened.length, 1);
-  assert.equal(opened[0].slug, 'oskip0906/oskip-vault');
-  assert.deepEqual(opened[0].files, [{ path: 'notes/a.md', content: '# hi', mode: '100644' }]);
-  assert.match(result, /PR #3/);
-  assert.match(result, /https:\/\/gh\/pr\/3/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].repo, 'oskip0906/other-project');
+  assert.equal(calls[0].base, 'trunk');
+  assert.equal(calls[0].model, 'openai/gpt-5.4-dev');
+  assert.equal(calls[0].autoMerge, false);
+  assert.match(result, /PR #7/);
 });
 
-test('a bare repo name resolves to Oscar’s account', async () => {
-  const { invocation, deps, opened } = harness();
-
-  await createPr({ repo: 'panda-bot', title: 't', files: [{ path: 'a.md', content: 'x' }] }, invocation, deps);
-
-  assert.equal(opened[0].slug, 'oskip0906/panda-bot');
+test('create_pr auto-merges only Panda’s configured own repository', async () => {
+  const calls = [];
+  await createPr(
+    { repo: 'oskip0906/oscars-assistant-discord-bot', instruction: 'Improve docs' },
+    invocation(),
+    {
+      confirm: async () => 'confirm',
+      getConfig: () => ({ model: 'openai/gpt-5.4-dev' }),
+      state: { begin() {}, end() {} },
+      runSandbox: async (args) => {
+        calls.push(args);
+        return { ok: true, summary: 'ok' };
+      },
+    },
+  );
+  assert.equal(calls[0].autoMerge, true);
 });
 
-test('a repo whose default branch is not main is targeted correctly', async () => {
-  const { invocation, deps, opened } = harness({ defaultBranch: 'master' });
-
-  await createPr({ repo: 'o/old-repo', title: 't', files: [{ path: 'a.md', content: 'x' }] }, invocation, deps);
-
-  assert.equal(opened[0].base, 'master');
+test('create_pr requires an explicit instruction instead of local file contents', async () => {
+  const result = await createPr({ repo: 'other-project' }, invocation());
+  assert.match(result, /instruction/i);
 });
 
-test('an explicit base branch wins over the repo default', async () => {
-  const { invocation, deps, opened } = harness();
-
-  await createPr({ repo: 'o/r', title: 't', base: 'dev', files: [{ path: 'a.md', content: 'x' }] }, invocation, deps);
-
-  assert.equal(opened[0].base, 'dev');
-});
-
-test('PRs on other repos are left open unless auto-merge is asked for', async () => {
-  const { invocation, deps, opened } = harness();
-
-  await createPr({ repo: 'o/r', title: 't', files: [{ path: 'a.md', content: 'x' }] }, invocation, deps);
-  assert.equal(opened[0].autoMerge, false, 'merging someone’s repo by surprise is not the default');
-
-  await createPr({ repo: 'o/r', title: 't', auto_merge: true, files: [{ path: 'a.md', content: 'x' }] }, invocation, deps);
-  assert.equal(opened[1].autoMerge, true);
-});
-
-test('a deletion is expressed as a file with null content', async () => {
-  const { invocation, deps, opened } = harness();
-
-  await createPr({ repo: 'o/r', title: 't', files: [{ path: 'dead.md', content: null }] }, invocation, deps);
-
-  assert.deepEqual(opened[0].files, [{ path: 'dead.md', content: null, mode: '100644' }]);
-});
-
-test('a non-owner never reaches GitHub', async () => {
-  const { invocation, deps, opened } = harness();
-  invocation.isOwner = false;
-
-  const result = await createPr({ repo: 'o/r', title: 't', files: [{ path: 'a.md', content: 'x' }] }, invocation, deps);
-
-  assert.equal(opened.length, 0);
-  assert.match(result, /⛔/);
-});
-
-test('a call with no files is refused with an explanation', async () => {
-  const { invocation, deps, opened } = harness();
-
-  const result = await createPr({ repo: 'o/r', title: 't', files: [] }, invocation, deps);
-
-  assert.equal(opened.length, 0);
-  assert.match(result, /files/i);
-});
-
-test('a failed PR is reported as a failure', async () => {
-  const { invocation, deps } = harness({ pr: { ok: false, number: null, merged: false, detail: 'Validation failed' } });
-
-  const result = await createPr({ repo: 'o/r', title: 't', files: [{ path: 'a.md', content: 'x' }] }, invocation, deps);
-
-  assert.match(result, /❌/);
-  assert.match(result, /Validation failed/);
+test('a non-owner never starts a development sandbox', async () => {
+  const blocked = invocation();
+  blocked.isOwner = false;
+  const result = await createPr({ repo: 'x/y', instruction: 'change it' }, blocked);
+  assert.match(result, /restricted/i);
 });

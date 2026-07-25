@@ -6,10 +6,10 @@
 export const SELF_FIX_MESSAGE =
   "🛠️ I'm rebuilding my own source code right now — I'll be back in a few minutes once it lands and I restart.";
 
-// Absolute cap on how long the lock may hold. A missing `claude` binary or a
-// wedged child process must never leave the bot permanently ignoring everyone,
-// so isActive() releases itself past this deadline even if end() never ran.
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+// Absolute cap on how long the lock may hold. A remote sandbox can legitimately
+// wait for CI and auto-merge, but it must still fail open rather than leaving
+// the bot permanently ignoring everyone.
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 
 export class SelfFixState {
   constructor({ timeoutMs = DEFAULT_TIMEOUT_MS, now = Date.now } = {}) {
@@ -18,8 +18,7 @@ export class SelfFixState {
     this.startedAt = null;
     this.notified = new Set();
     // 'idle' → 'awaiting_confirmation' → 'executing' → 'idle'. A development
-    // task (self_fix) first asks Oscar to confirm; only on 'confirm' does it
-    // begin() and go 'executing'.
+    // task first receives an explicit Discord button approval.
     this.status = 'idle';
     this.pending = null; // { userId, resolve } while awaiting_confirmation
   }
@@ -37,14 +36,14 @@ export class SelfFixState {
     return this.status === 'awaiting_confirmation';
   }
 
-  // Enter 'awaiting_confirmation' and return a Promise that resolves to
-  // 'confirm', 'cancel', or 'timeout'. The status flips synchronously (before
-  // any await), so the message handler starts capturing the owner's answer the
-  // moment this is called. Only submitConfirmation() or the timeout resolves it.
-  awaitConfirmation({ userId, timeoutMs = 30_000 } = {}) {
+  // Enter 'awaiting_confirmation' and expose a nonce-bound button id plus a
+  // result promise. The status flips synchronously before the UI is sent, so a
+  // click cannot race the setup. Only a matching owner click or timeout settles
+  // the request; plain text never approves source changes.
+  beginApproval({ userId, timeoutMs = 30_000, id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}` } = {}) {
     this.status = 'awaiting_confirmation';
     this.notified = new Set();
-    return new Promise((resolve) => {
+    const result = new Promise((resolve) => {
       let timer = null;
       const finish = (outcome) => {
         if (timer) clearTimeout(timer);
@@ -54,27 +53,19 @@ export class SelfFixState {
       };
       timer = setTimeout(() => finish('timeout'), timeoutMs);
       if (timer.unref) timer.unref();
-      this.pending = { userId, resolve: finish };
+      this.pending = { userId, id, resolve: finish };
     });
+    return { id, result };
   }
 
-  // Feed a candidate confirmation reply. Returns true iff it was a recognized
-  // answer ('confirm'/'cancel') from the awaited user and was consumed; false
-  // otherwise (wrong user, not awaiting, or unrecognized text — the caller
-  // should let the owner try again until the timeout).
-  submitConfirmation(userId, text) {
+  // Consume one Discord approval button click. Returns false for old buttons,
+  // other users, and any state other than the active approval.
+  submitApproval(userId, id, approved) {
     if (this.status !== 'awaiting_confirmation' || !this.pending) return false;
     if (this.pending.userId && this.pending.userId !== userId) return false;
-    const t = String(text ?? '').trim().toLowerCase();
-    if (t === 'confirm' || t === 'yes' || t === 'y') {
-      this.pending.resolve('confirm');
-      return true;
-    }
-    if (t === 'cancel' || t === 'no' || t === 'abort') {
-      this.pending.resolve('cancel');
-      return true;
-    }
-    return false;
+    if (this.pending.id !== id) return false;
+    this.pending.resolve(approved ? 'confirm' : 'cancel');
+    return true;
   }
 
   begin() {

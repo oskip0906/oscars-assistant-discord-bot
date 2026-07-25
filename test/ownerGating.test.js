@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { executeTool, OWNER_ONLY_TOOLS, toolDefs } from '../src/agent/tools/index.js';
 import { OWNER_ID } from '../src/config.js';
 
-const OWNER_ONLY = ['github', 'create_pr', 'self_fix', 'git_push', 'git_pull', 'clear_all_context'];
+const OWNER_ONLY = ['github', 'create_pr', 'self_fix', 'clear_all_context'];
 
 function invocation({ authorId, contentClaim = '' }) {
   return {
@@ -16,7 +16,7 @@ function invocation({ authorId, contentClaim = '' }) {
       channel: { send: async () => {} },
     },
     member: null,
-    config: { ownerId: OWNER_ID, githubPat: 'x', vaultRepo: 'o/r', claudeBin: 'true', projectRoot: '/tmp' },
+    config: { ownerId: OWNER_ID, githubPat: 'x', vaultRepo: 'o/r', developmentSandboxRepo: 'o/r', projectRoot: '/tmp' },
   };
 }
 
@@ -32,11 +32,8 @@ for (const tool of OWNER_ONLY) {
   });
 }
 
-// Claude Code is reachable ONLY through self_fix. A general-purpose "run Claude
-// on anything" tool is deliberately not exposed to the model — if one is ever
-// registered again, this fails.
-test('there is no general-purpose prompt_claude tool', async () => {
-  const result = await executeTool('prompt_claude', { prompt: 'x' }, invocation({ authorId: OWNER_ID }));
+test('there is no local development-runner tool', async () => {
+  const result = await executeTool('run_local_development', { prompt: 'x' }, invocation({ authorId: OWNER_ID }));
   assert.match(result, /Unknown tool/i);
 });
 

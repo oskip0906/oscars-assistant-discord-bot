@@ -33,9 +33,12 @@ export const config = {
   ownerId: OWNER_ID,
   githubPat: process.env.GITHUB_PAT || '',
   vaultRepo: process.env.VAULT_REPO || 'oskip0906/oskip-vault',
-  // Claude Code drives self_fix (and only self_fix — there is no general
-  // "run Claude on anything" tool exposed to the model).
-  claudeBin: process.env.CLAUDE_BIN || 'claude',
+  // The sandbox workflow lives in this control repository. It is deliberately
+  // separate from the bot's checkout: development work never edits the live
+  // deployment filesystem.
+  developmentSandboxRepo: process.env.DEVELOPMENT_SANDBOX_REPO || 'oskip0906/oscars-assistant-discord-bot',
+  developmentSandboxWorkflow: process.env.DEVELOPMENT_SANDBOX_WORKFLOW || 'development-sandbox.yml',
+  developmentSandboxRef: process.env.DEVELOPMENT_SANDBOX_REF || 'main',
   botName: process.env.BOT_NAME || 'Panda',
   allowBots: bool(process.env.ALLOW_BOTS, true),
   // DM functionality is disabled: the bot ignores direct messages regardless of

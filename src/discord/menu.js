@@ -43,8 +43,7 @@ export function buildMenuEmbed(client, config) {
       {
         name: '🛠️ Power Tools (Oscar only)',
         value: [
-          '`/self_fix <instruction>` : Patch my own source code via an auto-merged PR to main, then restart',
-          '`/git_push [message]` : Commit & push my own source changes to GitHub',
+          '`/self_fix <instruction>` : Approve a remote-sandbox self-fix PR, then restart after it merges',
           '`/switch_model <model>` : Switch me to another OpenRouter model and restart',
           '`/github [body]` : Call the GitHub API with Oscar’s credentials',
           '`/private on|off|status` : Only respond to Oscar',
