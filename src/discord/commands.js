@@ -10,6 +10,7 @@ import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
 import { vaultFetch, githubCall } from '../agent/tools/github.js';
 import { selfFix, gitPush } from '../agent/tools/source.js';
+import { setDevelopmentModel } from '../configManager.js';
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -24,6 +25,12 @@ export const commandDefs = [
         .setDescription('OpenRouter model id — start typing to search')
         .setRequired(true)
         .setAutocomplete(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('set_dev_model')
+    .setDescription('Set the OpenRouter model used for development tasks like self_fix (owner only)')
+    .addStringOption((o) =>
+      o.setName('model').setDescription('OpenRouter model id (e.g. openai/gpt-4o)').setRequired(true),
     ),
   new SlashCommandBuilder()
     .setName('play')
@@ -225,6 +232,25 @@ export function createInteractionHandler({ client, config, contextStore, player,
           setTimeout(() => process.exit(42), 1500);
         }
         return;
+      }
+
+      if (name === 'set_dev_model') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+        }
+        const model = interaction.options.getString('model', true).trim();
+        if (!model) {
+          return await interaction.reply({
+            content: '⚠️ Provide a non-empty OpenRouter model id.',
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+        const applied = setDevelopmentModel(model);
+        return await interaction.reply({
+          content: `🛠️ Development-task model set to \`${applied}\`. self_fix will use it (after confirmation) from now on.`,
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        });
       }
 
       if (name === 'clear') {

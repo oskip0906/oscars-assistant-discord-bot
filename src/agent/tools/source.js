@@ -6,6 +6,28 @@ import { verifyChangedFiles } from './verifyEdits.js';
 import { openAutoMergedPr, repoSlug, snapshotFiles } from './prFlow.js';
 import { dmOwner } from '../../discord/notify.js';
 import { selfFixState } from '../../selfFixState.js';
+import { getAIConfig } from '../../configManager.js';
+
+// How long Oscar has to type 'confirm' before a development task auto-cancels.
+const CONFIRM_TIMEOUT_MS = 30 * 1000;
+
+// self_fix is a 'development' task: before it touches anything, present the
+// model that will do the work and the task description, then wait for Oscar to
+// type 'confirm'. Resolves to 'confirm' | 'cancel' | 'timeout'. Injectable so
+// the orchestration tests can auto-confirm without a live channel.
+async function requestConfirmation({ instruction, invocation, state, model }) {
+  const prompt = [
+    `🛠️ You are about to perform a **development task** using the OpenRouter model \`${model}\`.`,
+    `The task is: "${String(instruction).replace(/\n/g, ' ').slice(0, 500)}".`,
+    `Type \`confirm\` to proceed, or \`cancel\` to abort (auto-cancels in ${CONFIRM_TIMEOUT_MS / 1000}s).`,
+  ].join('\n');
+
+  // Flip to awaiting_confirmation FIRST (synchronous), then announce — so the
+  // message handler is already capturing Oscar's reply before the prompt sends.
+  const answered = state.awaitConfirmation({ userId: config.ownerId, timeoutMs: CONFIRM_TIMEOUT_MS });
+  await invocation.message?.channel?.send(prompt).catch(() => {});
+  return answered;
+}
 
 // self_fix always targets the repo's main line; a deployment that ends up on
 // any other branch is a mistake to correct, not a state to preserve.
@@ -376,7 +398,15 @@ async function judgeClaudeOutput(text, instruction) {
 export async function selfFix(
   { instruction },
   invocation,
-  { runFix = runClaudeFix, verify = verifyWorkingTree, ship = shipViaPullRequest, notify = dmOwner } = {},
+  {
+    runFix = runClaudeFix,
+    verify = verifyWorkingTree,
+    ship = shipViaPullRequest,
+    notify = dmOwner,
+    state = selfFixState,
+    getConfig = getAIConfig,
+    confirm = requestConfirmation,
+  } = {},
 ) {
   const root = config.projectRoot;
 
@@ -392,10 +422,21 @@ export async function selfFix(
     return summary;
   };
 
+  // Development-task confirmation gate: pick the dev model, show Oscar what will
+  // run, and wait for an explicit 'confirm'. Anything else aborts before we
+  // touch a single file or take the executing lock.
+  const { model: devModel } = getConfig('development');
+  const outcome = await confirm({ instruction, invocation, state, model: devModel });
+  if (outcome !== 'confirm') {
+    const why = outcome === 'cancel' ? 'you cancelled' : `no confirmation within ${CONFIRM_TIMEOUT_MS / 1000}s`;
+    await invocation.message?.channel?.send(`🚫 Self-fix aborted — ${why}. Nothing was changed.`).catch(() => {});
+    return `Self-fix aborted before starting (${why}). Nothing was changed.`;
+  }
+
   // Lock first, announce second: the lock must be up before we await anything.
-  selfFixState.begin();
+  state.begin();
   await invocation.message?.channel
-    ?.send(`🛠️ Self-fix starting in \`${root}\` — I'll be unresponsive until it lands, then restart.`)
+    ?.send(`🛠️ Self-fix confirmed — starting in \`${root}\` using \`${devModel}\`. I'll be unresponsive until it lands, then restart.`)
     .catch(() => {});
 
   try {
@@ -469,7 +510,7 @@ export async function selfFix(
   } finally {
     // Always release. A crash, a timeout, or a missing `claude` binary must
     // never leave the bot permanently ignoring everyone.
-    selfFixState.end();
+    state.end();
   }
 }
 

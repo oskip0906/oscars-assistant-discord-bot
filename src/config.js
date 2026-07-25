@@ -24,6 +24,12 @@ export const config = {
   discordToken: process.env.DISCORD_TOKEN || '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
   model: process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
+  // Dual model configuration: conversation vs. development. configManager seeds
+  // its mutable, in-memory selection from these and lets Oscar override the dev
+  // model at runtime via /set_dev_model.
+  defaultModelName:
+    process.env.OPENROUTER_DEFAULT_MODEL || process.env.OPENROUTER_MODEL || 'google/gemini-1.5-flash-openrouter',
+  developmentModelName: process.env.OPENROUTER_DEV_MODEL || 'mistralai/mistral-7b-instruct-v0.1-openrouter',
   ownerId: OWNER_ID,
   githubPat: process.env.GITHUB_PAT || '',
   vaultRepo: process.env.VAULT_REPO || 'oskip0906/oskip-vault',

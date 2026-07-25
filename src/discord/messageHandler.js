@@ -258,6 +258,16 @@ export function createMessageHandler({ client, config, contextStore, player, pri
       // bot simply doesn't respond to them (no batch, no reply — silence).
       if (toggledResponses?.has(message.author.id)) return;
 
+      // Self-fix awaiting confirmation: Oscar's next message IS the answer to the
+      // 'confirm'/'cancel' prompt, so capture it directly (no mention required)
+      // and hand it to the waiting self_fix call instead of treating it as a
+      // normal trigger. Unrecognized text is swallowed so he can try again until
+      // the timeout. Everyone else falls through to the busy handling below.
+      if (selfFix?.isAwaitingConfirmation() && message.author.id === config.ownerId) {
+        selfFix.submitConfirmation(message.author.id, message.content);
+        return;
+      }
+
       const channelId = message.channelId;
 
       // A sender with a still-collecting batch in this channel gets everything
@@ -288,8 +298,10 @@ export function createMessageHandler({ client, config, contextStore, player, pri
       // route anything to the model. Triggers get the hardcoded busy string and
       // nothing else — once per sender, so a multi-minute fix can't flood the
       // channel. Sits after trigger qualification on purpose: people who aren't
-      // talking to the bot get silence, not busy spam.
-      if (selfFix?.isActive()) {
+      // talking to the bot get silence, not busy spam. The awaiting-confirmation
+      // window counts as busy too (Oscar's own confirm/cancel was already
+      // captured above, so anything reaching here is someone else triggering).
+      if (selfFix?.isActive() || selfFix?.isAwaitingConfirmation()) {
         if (selfFix.shouldNotify(message.author.id)) {
           await message
             .reply({ content: SELF_FIX_MESSAGE, allowedMentions: { parse: [] } })
