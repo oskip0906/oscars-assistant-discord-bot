@@ -30,7 +30,9 @@ export const config = {
   claudeBin: process.env.CLAUDE_BIN || 'claude',
   botName: process.env.BOT_NAME || 'Panda',
   allowBots: bool(process.env.ALLOW_BOTS, true),
-  dmEnabled: bool(process.env.DM_ENABLED, true),
+  // DM functionality is disabled: the bot ignores direct messages regardless of
+  // the DM_ENABLED env var. See messageHandler's `isDM && !config.dmEnabled` guard.
+  dmEnabled: false,
   maxToolIterations: Math.max(1, parseInt(process.env.MAX_TOOL_ITERATIONS || '12', 10) || 12),
   braveApiKey: process.env.BRAVE_API_KEY || '',
   jinaApiKey: process.env.JINA_API_KEY || '',
