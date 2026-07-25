@@ -27,6 +27,9 @@ export const config = {
   ownerId: OWNER_ID,
   githubPat: process.env.GITHUB_PAT || '',
   vaultRepo: process.env.VAULT_REPO || 'oskip0906/oskip-vault',
+  // Claude Code drives self_fix (and only self_fix — there is no general
+  // "run Claude on anything" tool exposed to the model).
+  claudeBin: process.env.CLAUDE_BIN || 'claude',
   botName: process.env.BOT_NAME || 'Panda',
   allowBots: bool(process.env.ALLOW_BOTS, true),
   // DM functionality is disabled: the bot ignores direct messages regardless of
@@ -40,7 +43,6 @@ export const config = {
   ytCookiesFile: process.env.YT_COOKIES_FILE || '',
   ytCookiesFromBrowser: process.env.YT_COOKIES_FROM_BROWSER || '',
   searxngUrl: (process.env.SEARXNG_URL || 'http://127.0.0.1:8888').replace(/\/$/, ''),
-  isSelfFixInProgress: false, // New state variable for self-fix
 };
 
 export function validateConfig() {

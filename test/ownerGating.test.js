@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { executeTool } from '../src/agent/tools/index.js';
 import { OWNER_ID } from '../src/config.js';
 
-const OWNER_ONLY = ['github', 'prompt_claude', 'self_fix', 'clear_all_context'];
+const OWNER_ONLY = ['github', 'self_fix', 'git_push', 'clear_all_context'];
 
 function invocation({ authorId, contentClaim = '' }) {
   return {
@@ -31,6 +31,14 @@ for (const tool of OWNER_ONLY) {
     assert.doesNotMatch(result, /HTTP \d/); // never actually executed
   });
 }
+
+// Claude Code is reachable ONLY through self_fix. A general-purpose "run Claude
+// on anything" tool is deliberately not exposed to the model — if one is ever
+// registered again, this fails.
+test('there is no general-purpose prompt_claude tool', async () => {
+  const result = await executeTool('prompt_claude', { prompt: 'x' }, invocation({ authorId: OWNER_ID }));
+  assert.match(result, /Unknown tool/i);
+});
 
 test('OWNER_ID is pinned to Oscar', () => {
   assert.equal(OWNER_ID, '767525911695851550');
