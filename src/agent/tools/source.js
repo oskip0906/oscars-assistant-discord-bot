@@ -2,6 +2,8 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chatCompletion } from '../openrouter.js';
+import { config } from '../../config.js';
+// import { restart } from '../../index.js'; // No direct restart function in index.js, rely on process exit
 
 export const defs = [
   {
@@ -154,7 +156,7 @@ function nodeCheck(file, cwd) {
 
 // Drive the OpenRouter model through the sandboxed edit loop. Never throws —
 // resolves to { summary, changed: string[], log: string[] }.
-async function runOpenRouterFix({ root, instruction, config }) {
+async function runOpenRouterFix({ root, instruction }) {
   const changed = new Set();
   const log = [];
   const system = [
@@ -211,161 +213,127 @@ async function runOpenRouterFix({ root, instruction, config }) {
         if (!abs) result = `❌ Refused: ${args.path} is outside the project or a protected path.`;
         else {
           try {
-            result = fs.readFileSync(abs, 'utf8').slice(0, MAX_FILE_BYTES);
+            result = fs.readFileSync(abs, 'utf8');
+            if (result.length > MAX_FILE_BYTES) {
+              result = `❌ Refused: ${args.path} is too large (${result.length} bytes).`;
+            }
           } catch (err) {
-            result = `❌ Could not read ${args.path}: ${String(err.message || err).slice(0, 200)}`;
+            result = `❌ Read failed: ${err.message}`;
           }
         }
       } else if (name === 'write_file') {
         const abs = safeResolve(root, args.path);
-        if (!abs) result = `❌ Refused: ${args.path} is outside the project or a protected path.`;
-        else if (typeof args.content !== 'string') result = '❌ write_file needs a string `content`.';
-        else {
+        if (!abs) {
+          result = `❌ Refused: ${args.path} is outside the project or a protected path.`;
+        } else {
           try {
-            fs.mkdirSync(path.dirname(abs), { recursive: true });
-            fs.writeFileSync(abs, args.content);
-            const rel = path.relative(root, abs);
-            changed.add(rel);
-            log.push(`wrote ${rel} (${args.content.length} bytes)`);
-            result = `✅ Wrote ${rel}.`;
-            if (rel.endsWith('.js')) {
-              const err = await nodeCheck(rel, root);
-              result += err ? `\n⚠️ node --check FAILED — fix it:\n${err}` : '\n✅ node --check passed.';
-            }
+            fs.writeFileSync(abs, args.content, 'utf8');
+            changed.add(path.relative(root, abs));
+            result = `✅ Wrote ${args.path}.`;
           } catch (err) {
-            result = `❌ Could not write ${args.path}: ${String(err.message || err).slice(0, 200)}`;
+            result = `❌ Write failed: ${err.message}`;
           }
         }
       } else if (name === 'finish') {
-        finished = String(args.summary || '').trim() || '(no summary)';
-        result = '✅ Done.';
+        finished = args.summary;
+        result = `✅ Self-fix complete: ${args.summary}`;
       } else {
-        result = `Unknown tool: ${name}`;
+        result = `❌ Unknown tool: ${name}`;
       }
-      messages.push({ role: 'tool', tool_call_id: call.id, content: String(result).slice(0, 8000) });
+      const toolMsg = {
+        role: 'tool',
+        tool_call_id: call.id,
+        content: String(result).slice(0, TOOL_RESULT_CAP),
+      };
+      messages.push(toolMsg);
     }
-
-    if (finished !== null) return { summary: finished, changed: [...changed], log };
+    if (finished) return { summary: finished, changed: [...changed], log };
   }
-
-  return { summary: '⚠️ self_fix hit its edit-iteration limit before finishing.', changed: [...changed], log };
+  return { summary: '⚠️ Reached MAX_FIX_ITERATIONS', changed: [...changed], log };
 }
 
-// Run one git subcommand in cwd. Never rejects — resolves to {code, stdout, stderr}.
-function git(args, cwd, timeoutMs = 60 * 1000) {
-  return new Promise((resolve) => {
-    execFile(
-      'git',
-      args,
-      {
-        cwd,
-        timeout: timeoutMs,
-        maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}` },
-      },
-      (err, stdout, stderr) => {
-        resolve({ code: err?.code ?? (err ? 1 : 0), stdout: stdout || '', stderr: stderr || '' });
-      },
-    );
+function runGit(cwd, args) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, timeout: 30 * 1000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(`git ${args[0]} failed: ${stderr || stdout || err.message}`));
+      resolve(stdout);
+    });
   });
 }
 
-// Stage everything, commit (if there's anything to commit), and push to origin
-// on the current branch using traditional git. Auth: Oscar's PAT is attached as
-// an ephemeral HTTP Authorization header via `-c http.extraHeader=…` so it is
-// never written into .git/config or the remote URL. Falls back to whatever git
-// credentials are already configured when no PAT is set.
-//
-// Never throws — returns a human-readable summary string suitable for a tool
-// result. Reads the repo's actual origin remote, so it works regardless of the
-// GitHub repo name (the old REST call hardcoded the wrong repo and 404'd).
-export async function pushSource({ root, message, pat }) {
-  const inside = await git(['rev-parse', '--is-inside-work-tree'], root);
-  if (inside.code !== 0 || inside.stdout.trim() !== 'true') {
-    return `❌ ${root} is not a git repository — cannot push. (${inside.stderr.trim() || 'no origin'})`;
+async function performGitPush(message) {
+  const cwd = config.projectRoot;
+
+  // Stage all changes
+  await runGit(cwd, ['add', '.']);
+
+  // Check if there are any staged changes to commit
+  const status = await runGit(cwd, ['status', '--porcelain']);
+  if (!status.trim()) {
+    return 'No changes to commit or push.';
   }
 
-  const branchRes = await git(['rev-parse', '--abbrev-ref', 'HEAD'], root);
-  const branch = branchRes.stdout.trim() || 'HEAD';
+  // Commit
+  const commitMessage = message || `self_fix: automated commit at ${new Date().toLocaleString()}`;
+  await runGit(cwd, ['commit', '-m', commitMessage]);
 
-  await git(['add', '-A'], root);
+  // Push
+  await runGit(cwd, ['push']);
+  return `Successfully committed and pushed changes: ${commitMessage}`;
+}
 
-  const staged = await git(['diff', '--cached', '--name-only'], root);
-  const changedFiles = staged.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+export async function selfFix(args, invocation) {
+  config.isSelfFixInProgress = true;
+  const log = [];
+  try {
+    log.push('Starting self-fix operation...');
+    // Run the OpenRouter fix agent
+    const { summary, changed, log: fixLog } = await runOpenRouterFix({
+      root: config.projectRoot,
+      instruction: args.instruction,
+    });
+    log.push(...fixLog);
 
-  if (changedFiles.length) {
-    const commit = await git(['commit', '-m', message || 'panda-bot: update source'], root);
-    if (commit.code !== 0) {
-      return `❌ git commit failed:\n${(commit.stderr || commit.stdout).slice(0, 1500)}`;
+    if (changed.length) {
+      log.push(`Changed files: ${changed.join(', ')}`);
+
+      // Validate changed JS files with node --check
+      const jsFiles = changed.filter((f) => f.endsWith('.js'));
+      for (const file of jsFiles) {
+        log.push(`Checking ${file} with node --check...`);
+        const error = await nodeCheck(path.join(config.projectRoot, file), config.projectRoot);
+        if (error) {
+          log.push(`❌ ${file} failed node --check:\n${error}`);
+          return `Self-fix completed with changes, but validation failed for ${file}:\n${error}\nNo changes were committed or pushed.`;
+        }
+        log.push(`✅ ${file} passed node --check.`);
+      }
+
+      // Commit and push changes
+      log.push('Committing and pushing changes...');
+      const pushResult = await performGitPush(`self_fix: ${summary}`);
+      log.push(pushResult);
+      log.push('Self-fix complete. Exiting process to allow for restart.');
+      process.exit(0); // Exit process to trigger a restart by a process manager
+      return `Self-fix successful! ${summary}\nChanges committed, pushed, and bot is restarting.`;
+    } else {
+      log.push('No files were changed by the self-fix process.');
+      return `Self-fix completed with no changes: ${summary}`;
     }
+  } catch (err) {
+    log.push(`Self-fix encountered a critical error: ${err.message}`);
+    return `Self-fix failed: ${err.message}`;
+  } finally {
+    config.isSelfFixInProgress = false;
+    console.log(`Self-fix operation finished. Log:\n${log.join('\n')}`);
   }
-
-  // Auth for the push:
-  //  * `-c credential.helper=` clears any inherited helper (e.g. macOS
-  //    osxkeychain), so a STALE cached credential can't override the PAT.
-  //  * `-c http.extraHeader=Authorization: Basic …` supplies the PAT as HTTP
-  //    basic auth (username is ignored by GitHub for token auth), keeping the
-  //    secret out of .git/config and the remote URL.
-  // With no PAT we fall back to whatever git credentials are already configured.
-  const authArgs = pat
-    ? [
-        '-c',
-        'credential.helper=',
-        '-c',
-        `http.extraHeader=Authorization: Basic ${Buffer.from(`x-access-token:${pat}`).toString('base64')}`,
-      ]
-    : [];
-  const push = await git([...authArgs, 'push', 'origin', 'HEAD'], root);
-  if (push.code !== 0) {
-    const raw = (push.stderr || push.stdout);
-    const detail = (pat ? raw.split(pat).join('***') : raw).slice(0, 1500);
-    // A 403 AFTER the token authenticates (GitHub names the account in the
-    // error) means the PAT lacks write access — for a fine-grained token that
-    // is a missing "Contents: Read and write" permission or a repo not in its
-    // scope. The repo's API `permissions` shows Oscar's USER role, so it can
-    // look like write access even when the token itself can't push.
-    const permHint = /403|denied|permission/i.test(raw)
-      ? '\n\nℹ️ The token authenticated but was denied write. Give the GitHub PAT "Contents: Read and write" permission (fine-grained) — or "repo" scope (classic) — and make sure this repository is in its scope, then retry.'
-      : '';
-    return `❌ git push failed on branch ${branch}:\n${detail}${permHint}`;
-  }
-
-  const summary =
-    push.stderr.trim() || push.stdout.trim() || 'up to date';
-  if (!changedFiles.length) {
-    return `✅ Nothing new to commit on ${branch}; pushed any pending commits.\n${summary.slice(0, 800)}`;
-  }
-  return `✅ Committed ${changedFiles.length} file(s) and pushed to origin/${branch}.\nFiles: ${changedFiles.slice(0, 20).join(', ')}${changedFiles.length > 20 ? ' …' : ''}\n${summary.slice(0, 800)}`;
 }
 
-export async function gitPush({ message }, invocation) {
-  return pushSource({
-    root: invocation.config.projectRoot,
-    message,
-    pat: invocation.config.githubPat,
-  });
-}
-
-export async function selfFix({ instruction }, invocation) {
-  const root = invocation.config.projectRoot;
-  await invocation.message.channel
-    .send(`🛠️ Self-fix starting in \`${root}\` — the model is editing my source; I'll commit, push, and restart once it's done…`)
-    .catch(() => {});
-
-  const fix = await runOpenRouterFix({ root, instruction, config: invocation.config });
-
-  // Nothing was written → don't commit/push/restart; report and stop.
-  if (!fix.changed.length) {
-    return `⚠️ Self-fix made no file changes.\n\n${fix.summary}`;
+export async function gitPush(args) {
+  try {
+    const pushResult = await performGitPush(args.message);
+    return pushResult;
+  } catch (err) {
+    return `Git push failed: ${err.message}`;
   }
-
-  // Persist the edits to GitHub with traditional git so the change survives the
-  // restart and lives in the remote. Best-effort: a push failure never blocks
-  // the restart, it's just reported.
-  const commitMsg = `self_fix: ${String(instruction).replace(/\s+/g, ' ').trim().slice(0, 72)}`;
-  const pushResult = await pushSource({ root, message: commitMsg, pat: invocation.config.githubPat });
-
-  invocation.requestRestart = true;
-  const changedList = fix.changed.slice(0, 20).join(', ') + (fix.changed.length > 20 ? ' …' : '');
-  return `🛠️ ${fix.summary}\n\n📝 Changed: ${changedList}\n\n🔁 Git: ${pushResult}\n\n[NOTE: the bot restarts to apply the changes right after you send your reply — mention that.]`;
 }

@@ -40,6 +40,7 @@ export const config = {
   ytCookiesFile: process.env.YT_COOKIES_FILE || '',
   ytCookiesFromBrowser: process.env.YT_COOKIES_FROM_BROWSER || '',
   searxngUrl: (process.env.SEARXNG_URL || 'http://127.0.0.1:8888').replace(/\/$/, ''),
+  isSelfFixInProgress: false, // New state variable for self-fix
 };
 
 export function validateConfig() {
