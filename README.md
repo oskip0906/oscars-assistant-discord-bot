@@ -15,8 +15,9 @@ cd searxng && cp config/settings.example.yml config/settings.yml
 docker compose up -d        # start the search backend
 cd ..
 npm install
-./run.sh                    # supervised: restarts on crash and on self_fix (exit 42)
-# or: npm start (single run) · npm test (unit tests)
+./run.sh                    # or npm start — generates the gitignored start.sh
+                            # supervisor, which pulls main before every boot
+# or: npm run start:once (one run, no pull/restart loop) · npm test (unit tests)
 ```
 
 ## Deploy with Docker (CI/CD → Docker Hub)
@@ -48,7 +49,9 @@ This starts SearXNG and the bot together on a private network; the bot reaches s
 `http://searxng:8080` (wired automatically). Bot state persists in the `panda-data` volume.
 
 > Note: `self_fix` shells out to the `claude` CLI, which isn't in the container — it only
-> works on a machine with Claude Code installed. Everything else runs fine containerized.
+> works on a machine with Claude Code installed. The container also runs `node src/index.js`
+> directly rather than `run.sh`, since there's no git checkout to pull into; restarts are the
+> orchestrator's job there. Everything else runs fine containerized.
 
 ## Search backend (SearXNG — no rate limits)
 
@@ -94,15 +97,28 @@ Jina-reads-DDG → direct DuckDuckGo.
 | `github` | any GitHub REST endpoint, authenticated as the configured user *(owner only)* |
 | `clear_context` / `clear_all_context` | wipe this server's memory / ALL memory *(all owner)* |
 | `git_push` | commit & push local source to GitHub via real git *(owner only)* |
-| `self_fix` | rewrite the bot's own source, then verify → push → restart *(owner only)* |
+| `self_fix` | rewrite the bot's own source, then verify → PR → merge → pull → restart *(owner only)* |
 | `play_music` | AI-routed music: "play X", skip, pause, resume, stop, queue |
 | `react` | react to the current message with an emoji |
 
 **`self_fix`** hands the instruction to Claude Code inside the project folder, which reads
 and edits the files. Each round is supervised by the **OpenRouter model** (it decides
 whether Claude finished or needs an answer, and replies unattended so nobody has to babysit
-it). When done, the change is syntax/import-checked, committed, **automatically pushed to
-GitHub** (`git_push`), and the bot restarts (exit 42 → `run.sh` reloads) to apply it.
+it). When done, the change is syntax/import-checked and then shipped **through GitHub, never
+through the local checkout**: the edits are uploaded as a pull request against `main`,
+auto-merged (squash), and pulled back down so this machine matches the remote exactly. Then
+the bot exits 42 and `start.sh` pulls once more and reboots into the merged code. If the PR
+fails to open or merge, nothing is pulled and the bot does **not** restart.
+
+### Start scripts
+
+`run.sh` is the entry point; on an unsupervised launch it generates **`start.sh`** (gitignored)
+and hands over to it. `start.sh` is the long-lived supervisor: it runs `git pull --ff-only
+origin main` before every boot, then `run.sh` runs the bot once and passes node's exit code
+back up (0 = stop, 42 = self-fix restart, anything else = crash, retry in 3s). The supervisor
+has to be gitignored because bash reads a script as it executes it — a `git pull` rewriting
+the running loop mid-flight would corrupt it. Edit the template in `run.sh`; bump its version
+marker to have an existing `start.sh` regenerated.
 
 ## Slash commands
 

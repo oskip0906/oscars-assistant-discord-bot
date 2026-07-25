@@ -30,7 +30,6 @@ export function buildMenuEmbed(client, config) {
           '`/web_fetch <url>` : Read a full page',
           '`/image_search <query>` : Find pictures of anything',
           '`/vault_fetch <query>` : Read Oscar’s knowledge vault',
-          '`/github <body>` : GitHub API — `endpoint` & `method` are usually inferred (default `GET /user/repos`) *(public GET for all; writes/private Oscar only)*',
           '_…or just ask me in chat — I still use these skills myself, plus `get_user_id` and `react`._',
         ].join('\n'),
       },
@@ -44,8 +43,10 @@ export function buildMenuEmbed(client, config) {
       {
         name: '🛠️ Power Tools (Oscar only)',
         value: [
-          '`/self_fix <instruction>` : Patch my own source code, push to GitHub, and restart',
+          '`/self_fix <instruction>` : Patch my own source code via an auto-merged PR to main, then restart',
           '`/git_push [message]` : Commit & push my own source changes to GitHub',
+          '`/switch_model <model>` : Switch me to another OpenRouter model and restart',
+          '`/github [body]` : Call the GitHub API with Oscar’s credentials',
           '`/private on|off|status` : Only respond to Oscar',
           '`/toggle_response <user_id>` : Toggle whether I respond to a specific user id',
         ].join('\n'),

@@ -3,7 +3,13 @@ import { chatCompletion } from '../openrouter.js';
 import { config } from '../../config.js';
 import { runClaudeFix } from './claudeRunner.js';
 import { verifyChangedFiles } from './verifyEdits.js';
+import { openAutoMergedPr, repoSlug, snapshotFiles } from './prFlow.js';
+import { dmOwner } from '../../discord/notify.js';
 import { selfFixState } from '../../selfFixState.js';
+
+// self_fix always targets the repo's main line; a deployment that ends up on
+// any other branch is a mistake to correct, not a state to preserve.
+const DEFAULT_BASE = 'main';
 
 export const defs = [
   {
@@ -11,7 +17,7 @@ export const defs = [
     function: {
       name: 'self_fix',
       description:
-        'OWNER ONLY. Fix or change YOUR OWN source code. Hands the instruction to Claude Code running inside the panda-bot project folder, which reads and edits the files; the change is then syntax- and import-checked, committed, pushed to GitHub, and the bot restarts to apply it. Describe WHAT should change; Claude Code does the editing. While this runs the bot answers nobody, so warn the user it will be unavailable for a few minutes.',
+        'OWNER ONLY. Fix or change YOUR OWN source code. Hands the instruction to Claude Code running inside the panda-bot project folder, which reads and edits the files; the change is then syntax- and import-checked, opened as a pull request against remote main on GitHub, auto-merged there, pulled back down so this machine matches remote, and the bot restarts to apply it. Nothing is ever committed to the local checkout. Describe WHAT should change; Claude Code does the editing. While this runs the bot answers nobody, so warn the user it will be unavailable for a few minutes.',
       parameters: {
         type: 'object',
         properties: {
@@ -43,7 +49,7 @@ export const defs = [
     function: {
       name: 'git_pull',
       description:
-        "OWNER ONLY. Fetch and merge remote changes into YOUR OWN local source by running real git `pull origin HEAD` on the current branch. Use this when a push was rejected because the remote has commits you don't have locally; self_fix calls it automatically before retrying a rejected push.",
+        "OWNER ONLY. Fetch and merge remote changes into YOUR OWN local source by running real git `pull origin HEAD` on the current branch. Use this when a push was rejected because the remote has commits you don't have locally, or to pick up changes someone pushed to GitHub. (self_fix does its own harder sync — fetch + reset to origin/main — after its PR merges.)",
       parameters: {
         type: 'object',
         properties: {},
@@ -73,8 +79,13 @@ function git(args, cwd, timeoutMs = 60 * 1000) {
 
 // Files in the working tree that differ from HEAD — i.e. exactly what a commit
 // would capture. This is what we verify before shipping.
-async function changedFiles(root) {
-  const res = await git(['status', '--porcelain'], root);
+//
+// `-uall` matters: plain --porcelain collapses a brand-new directory to a
+// single "src/deep/" entry, and a shipping step that tried to upload that as a
+// blob would die on EISDIR. Ignored files (.env, data/, node_modules) never
+// appear either way — git filters them out for us.
+export async function changedFiles(root) {
+  const res = await git(['status', '--porcelain', '-uall'], root);
   if (res.code !== 0) return [];
   return res.stdout
     .split('\n')
@@ -167,6 +178,132 @@ export async function pullSource({ root, pat }) {
   return `✅ Pulled from origin.\n${summary.slice(0, 800)}`;
 }
 
+// One authenticated GitHub REST call, shaped the way prFlow wants it.
+function ghRequest(pat) {
+  return async (method, endpoint, body) => {
+    const res = await fetch(`https://api.github.com${endpoint}`, {
+      method,
+      headers: {
+        ...(pat ? { Authorization: `Bearer ${pat}` } : {}),
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'panda-bot',
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = { message: text.slice(0, 400) };
+    }
+    return { status: res.status, json };
+  };
+}
+
+// How a self_fix reaches production: the edits Claude left in the working tree
+// are uploaded as a pull request against remote main, auto-merged there, and
+// then pulled back down. The local checkout is never committed to — it only
+// ever consumes what main says, which is what keeps it from drifting.
+//
+// Never throws; returns {ok, summary}. ok:false means the code on this machine
+// is NOT the merged code, so the caller must not restart into it.
+export async function shipViaPullRequest({
+  root,
+  title,
+  body = '',
+  changed,
+  base = DEFAULT_BASE,
+  pat,
+  openPr = openAutoMergedPr,
+  sync = syncToRemote,
+  now = Date.now,
+}) {
+  const remote = await git(['remote', 'get-url', 'origin'], root);
+  const slug = remote.code === 0 ? repoSlug(remote.stdout) : null;
+  if (!slug) {
+    return {
+      ok: false,
+      summary: `❌ No GitHub \`origin\` remote in ${root} — cannot open a pull request. (${(remote.stderr || remote.stdout).trim().slice(0, 200)})`,
+    };
+  }
+
+  const files = snapshotFiles(root, changed);
+  const branchName = `self-fix-${now()}`;
+
+  const pr = await openPr({ gh: ghRequest(pat), slug, base, branchName, title, body, files });
+  if (!pr.ok) {
+    return {
+      ok: false,
+      summary: `❌ ${pr.detail}${pr.url ? `\n${pr.url}` : ''}\nThe edits are still on disk and I am NOT restarting.`,
+    };
+  }
+
+  // Only now is main the truth. Pulling before the merge would wipe the fix.
+  const pulled = await sync({ root, base, pat });
+  if (pulled.startsWith('❌')) {
+    return { ok: false, summary: `⚠️ ${pr.detail}\n${pr.url}\nBut the local pull failed, so I am NOT restarting:\n${pulled}` };
+  }
+
+  return { ok: true, summary: `✅ ${pr.detail}\n${pr.url}\n${pulled}` };
+}
+
+// Bring the local checkout into line with a remote branch, discarding whatever
+// is in the working tree. This is the step self_fix runs after its PR is merged:
+// the merged code is the truth, and the local edits are a spent draft of it.
+//
+// It is `fetch` + `reset --hard` rather than `pull` on purpose. A pull is a
+// merge, and a merge aborts when local files (Claude's edits, or an untracked
+// new file that the PR also added) would be overwritten — which is the normal
+// case here, not an exception. Never throws; returns a summary string.
+export async function syncToRemote({ root, base = 'main', pat }) {
+  const inside = await git(['rev-parse', '--is-inside-work-tree'], root);
+  if (inside.code !== 0 || inside.stdout.trim() !== 'true') {
+    return `❌ ${root} is not a git repository — cannot sync to origin/${base}.`;
+  }
+
+  const fetch = await git([...authArgs(pat), 'fetch', 'origin', base], root);
+  if (fetch.code !== 0) {
+    const raw = fetch.stderr || fetch.stdout;
+    return `❌ git fetch failed:\n${redact(raw, pat).slice(0, 1500)}`;
+  }
+
+  // A deployment that drifted onto another branch still has to end up running
+  // main. The trees are identical at this point, so the switch can't conflict.
+  const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], root)).stdout.trim();
+  let stayedOn = '';
+  if (branch !== base) {
+    const checkout = await git(['checkout', '-B', base], root);
+    if (checkout.code !== 0) {
+      // Another worktree already has `base` checked out, so this one can't take
+      // the name. The branch it sits on matters far less than its contents, so
+      // reset that branch to the remote instead of giving up.
+      stayedOn = ` (still on \`${branch}\` — ${base} is checked out elsewhere)`;
+    }
+  }
+
+  const reset = await git(['reset', '--hard', 'FETCH_HEAD'], root);
+  if (reset.code !== 0) {
+    return `❌ git reset to origin/${base} failed:\n${(reset.stderr || reset.stdout).slice(0, 1500)}`;
+  }
+
+  const head = (await git(['log', '-1', '--oneline'], root)).stdout.trim();
+  return `✅ Pulled origin/${base} — local checkout now matches remote at ${head}${stayedOn}`;
+}
+
+function redact(text, pat) {
+  return pat ? String(text).split(pat).join('***') : String(text);
+}
+
+// What ships is whatever the working tree now differs from HEAD by, checked
+// before it leaves the machine.
+async function verifyWorkingTree({ root }) {
+  const changed = await changedFiles(root);
+  return { changed, problems: await verifyChangedFiles(root, changed) };
+}
+
 // Decide whether Claude finished or is waiting on an answer, and if it's
 // waiting, produce the answer. This is what lets self_fix run unattended: the
 // bot is deaf to Discord while fixing, so nobody else can answer for it.
@@ -234,8 +371,26 @@ async function judgeClaudeOutput(text, instruction) {
   }
 }
 
-export async function selfFix({ instruction }, invocation) {
+// Deps are injectable so the orchestration can be tested without ever reaching
+// the real `claude` binary, GitHub, or Discord.
+export async function selfFix(
+  { instruction },
+  invocation,
+  { runFix = runClaudeFix, verify = verifyWorkingTree, ship = shipViaPullRequest, notify = dmOwner } = {},
+) {
   const root = config.projectRoot;
+
+  // Every exit path ends here: Oscar gets a DM the moment the fix settles,
+  // sent directly rather than through the model — self_fix ends in a restart,
+  // and a report routed through the agent could be reworded or lost with it.
+  const finish = async (headline, summary) => {
+    await notify(
+      invocation.client,
+      config.ownerId,
+      [`🛠️ **${headline}**`, `> ${String(instruction).replace(/\n/g, ' ').slice(0, 500)}`, '', summary].join('\n'),
+    );
+    return summary;
+  };
 
   // Lock first, announce second: the lock must be up before we await anything.
   selfFixState.begin();
@@ -244,7 +399,7 @@ export async function selfFix({ instruction }, invocation) {
     .catch(() => {});
 
   try {
-    const result = await runClaudeFix({
+    const result = await runFix({
       bin: config.claudeBin,
       cwd: root,
       instruction,
@@ -254,47 +409,63 @@ export async function selfFix({ instruction }, invocation) {
     const tail = result.text.length > 4000 ? `…${result.text.slice(-4000)}` : result.text;
 
     if (!result.completed) {
-      return `⚠️ Self-fix did not complete (${result.rounds} round(s)). Nothing was committed or pushed, and I am NOT restarting.\n\n${tail}`;
+      return finish(
+        'self_fix did not complete',
+        `⚠️ Self-fix did not complete (${result.rounds} round(s)). Nothing was shipped, and I am NOT restarting.\n\n${tail}`,
+      );
     }
 
     // Verify before shipping. A bad edit that gets committed and restarted into
     // takes the bot down until it is fixed by hand — which is exactly how the
     // '../../config.js' crash happened.
-    const changed = await changedFiles(root);
-    const problems = await verifyChangedFiles(root, changed);
+    const { changed, problems } = await verify({ root });
     if (problems.length) {
-      return [
-        '❌ Self-fix made changes but they failed verification, so nothing was committed, pushed, or restarted.',
-        'The edits are still on disk if you want to look at them.',
-        '',
-        problems.join('\n\n').slice(0, 2000),
-        '',
-        tail,
-      ].join('\n');
+      return finish(
+        'self_fix failed verification',
+        [
+          '❌ Self-fix made changes but they failed verification, so nothing was shipped or restarted.',
+          'The edits are still on disk if you want to look at them.',
+          '',
+          problems.join('\n\n').slice(0, 2000),
+          '',
+          tail,
+        ].join('\n'),
+      );
     }
 
-    const commitMsg = `self_fix: ${String(instruction).replace(/\s+/g, ' ').trim().slice(0, 72)}`;
-    // Stage, commit, and push are handled by pushSource, which never throws.
-    // A push failure must NOT block the restart — the code changes are already
-    // verified and on disk, so we log the failure and still restart.
-    let pushResult = await pushSource({ root, message: commitMsg, pat: config.githubPat });
-    // If the push was rejected because the remote moved on (someone else
-    // pushed), pull to merge those changes and retry the push once. Log the
-    // outcome of both the pull and the retried push.
-    if (pushResult.startsWith('❌') && /rejected|fetch first|non-fast-forward/i.test(pushResult)) {
-      const pullResult = await pullSource({ root, pat: config.githubPat });
-      console.error(`[self_fix] push rejected; ran git pull:\n${pullResult}`);
-      pushResult = await pushSource({ root, message: commitMsg, pat: config.githubPat });
-      console.error(`[self_fix] retried git push after pull:\n${pushResult}`);
-    }
-    if (pushResult.startsWith('❌')) {
-      console.error(`[self_fix] git push failed but continuing to restart:\n${pushResult}`);
+    const title = `self_fix: ${String(instruction).replace(/\s+/g, ' ').trim().slice(0, 72)}`;
+    // Ship through GitHub, not through this checkout: PR against main →
+    // auto-merge → pull the merged result back down. If any of that fails the
+    // local code is NOT what main says, so we must not restart into it.
+    const shipped = await ship({
+      root,
+      title,
+      body: [
+        'Opened automatically by panda-bot `self_fix`.',
+        '',
+        `**Instruction from Oscar:** ${String(instruction).slice(0, 1500)}`,
+        '',
+        `Verified with \`node --check\` + import resolution across ${changed.length} changed file(s).`,
+      ].join('\n'),
+      changed,
+      pat: config.githubPat,
+    });
+
+    if (!shipped.ok) {
+      console.error(`[self_fix] not restarting:\n${shipped.summary}`);
+      return finish(
+        'self_fix could not ship',
+        `${tail}\n\n✅ Verified ${changed.length} changed file(s), but shipping failed.\n${shipped.summary}`,
+      );
     }
 
     invocation.requestRestart = true;
-    return `${tail}\n\n✅ Verified ${changed.length} changed file(s).\n🔁 Git: ${pushResult}\n\n[NOTE: the bot restarts to apply the changes right after you send your reply — mention that.]`;
+    return finish(
+      'self_fix landed — restarting now',
+      `${tail}\n\n✅ Verified ${changed.length} changed file(s).\n🔁 ${shipped.summary}\n\n[NOTE: the bot restarts to apply the changes right after you send your reply — mention that.]`,
+    );
   } catch (err) {
-    return `Self-fix failed: ${String(err.message || err).slice(0, 500)}`;
+    return finish('self_fix crashed', `Self-fix failed: ${String(err.message || err).slice(0, 500)}`);
   } finally {
     // Always release. A crash, a timeout, or a missing `claude` binary must
     // never leave the bot permanently ignoring everyone.
