@@ -27,7 +27,6 @@ export const config = {
   ownerId: OWNER_ID,
   githubPat: process.env.GITHUB_PAT || '',
   vaultRepo: process.env.VAULT_REPO || 'oskip0906/oskip-vault',
-  claudeBin: process.env.CLAUDE_BIN || 'claude',
   botName: process.env.BOT_NAME || 'Panda',
   allowBots: bool(process.env.ALLOW_BOTS, true),
   // DM functionality is disabled: the bot ignores direct messages regardless of

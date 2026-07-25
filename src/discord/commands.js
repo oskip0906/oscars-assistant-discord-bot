@@ -9,7 +9,7 @@ import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
 import { vaultFetch, githubCall } from '../agent/tools/github.js';
-import { promptClaude, selfFix, gitPush } from '../agent/tools/claude.js';
+import { selfFix, gitPush } from '../agent/tools/source.js';
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -46,11 +46,6 @@ export const commandDefs = [
     .setDescription("Read Oscar's knowledge vault")
     // Only `query` is user-facing; `path` is resolved programmatically.
     .addStringOption((o) => o.setName('query').setDescription('What to look for in the vault')),
-  new SlashCommandBuilder()
-    .setName('claude')
-    .setDescription("Run Claude Code on Oscar's Mac (owner only)")
-    .addStringOption((o) => o.setName('prompt').setDescription('The task to give Claude Code').setRequired(true))
-    .addStringOption((o) => o.setName('directory').setDescription('Absolute working directory (default: home)')),
   new SlashCommandBuilder()
     .setName('github')
     .setDescription('Call the GitHub API (writes/private repos are owner only)')
@@ -101,7 +96,7 @@ export function createInteractionHandler({ client, config, contextStore, player,
       config,
       client,
       isOwner: interaction.user.id === config.ownerId,
-      // Some tools (prompt_claude/self_fix) post progress via message.channel.send;
+      // Some tools (self_fix) post progress via message.channel.send;
       // fall back to a no-op channel if the interaction has no cached channel.
       message: { channel: interaction.channel ?? { send: async () => {} } },
       requestRestart: false,
@@ -218,16 +213,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
         return await runTool(vaultFetch, {
           path: undefined,
           query: interaction.options.getString('query') ?? undefined,
-        });
-      }
-
-      if (name === 'claude') {
-        if (!isOwner) {
-          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
-        }
-        return await runTool(promptClaude, {
-          prompt: interaction.options.getString('prompt', true),
-          directory: interaction.options.getString('directory') ?? undefined,
         });
       }
 
