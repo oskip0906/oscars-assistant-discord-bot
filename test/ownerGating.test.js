@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { executeTool } from '../src/agent/tools/index.js';
+import { executeTool, OWNER_ONLY_TOOLS, toolDefs } from '../src/agent/tools/index.js';
 import { OWNER_ID } from '../src/config.js';
 
-const OWNER_ONLY = ['github', 'self_fix', 'git_push', 'clear_all_context'];
+const OWNER_ONLY = ['github', 'create_pr', 'self_fix', 'git_push', 'git_pull', 'clear_all_context'];
 
 function invocation({ authorId, contentClaim = '' }) {
   return {
@@ -47,4 +47,19 @@ test('OWNER_ID is pinned to Oscar', () => {
 test('non-owner-gated tool (get_message_sender) still works for guests', async () => {
   const result = await executeTool('get_message_sender', {}, invocation({ authorId: '123' }));
   assert.match(result, /"isOwner":false/);
+});
+
+// Every tool that touches GitHub with Oscar's credentials must be owner-gated.
+// vault_fetch is the deliberate exception: it is how guests ask about Oscar,
+// and it only ever reads the one vault repo.
+test('the owner-only set is exactly what we think it is', () => {
+  assert.deepEqual([...OWNER_ONLY_TOOLS].sort(), [...OWNER_ONLY].sort());
+});
+
+test('no new tool quietly reaches GitHub without owner gating', () => {
+  const githubish = toolDefs()
+    .map((d) => d.function.name)
+    .filter((n) => /git|github|pr\b|repo/i.test(n) && n !== 'vault_fetch');
+  const ungated = githubish.filter((n) => !OWNER_ONLY_TOOLS.has(n));
+  assert.deepEqual(ungated, [], `these GitHub tools are open to guests: ${ungated.join(', ')}`);
 });

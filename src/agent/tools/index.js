@@ -9,7 +9,7 @@ import * as musicTools from './music.js';
 // (invocation.isOwner) — never by anything a message could claim, so no one can
 // impersonate Oscar into these. github is here because it acts with Oscar's
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
-const OWNER_ONLY = new Set(['self_fix', 'git_push', 'git_pull', 'clear_all_context', 'github']);
+export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'git_push', 'git_pull', 'clear_all_context', 'github', 'create_pr']);
 
 const modules = [discordTools, searchTools, githubTools, contextTools, sourceTools, musicTools];
 
@@ -24,6 +24,7 @@ const executors = {
   image_search: searchTools.imageSearch,
   vault_fetch: githubTools.vaultFetch,
   github: githubTools.githubApi,
+  create_pr: githubTools.createPr,
   clear_context: contextTools.clearContext,
   clear_all_context: contextTools.clearAllContext,
   self_fix: sourceTools.selfFix,
@@ -39,7 +40,7 @@ export function toolDefs() {
 export async function executeTool(name, args, invocation) {
   const fn = executors[name];
   if (!fn) return `Unknown tool: ${name}`;
-  if (OWNER_ONLY.has(name) && !invocation.isOwner) {
+  if (OWNER_ONLY_TOOLS.has(name) && !invocation.isOwner) {
     return `⛔ ${name} is restricted to Oscar (the owner). The current sender is not Oscar — politely refuse.`;
   }
   try {

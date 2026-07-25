@@ -1,7 +1,7 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { buildMenuEmbed } from './menu.js';
 import { buildUsageEmbed } from './usage.js';
-import { buildModelEmbed } from './model.js';
+import { buildModelEmbed, switchModel, modelChoices } from './model.js';
 import { chunkMessage } from './chunk.js';
 import { suppressLinkEmbeds } from './messageHandler.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
@@ -15,6 +15,16 @@ export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
   new SlashCommandBuilder().setName('usage').setDescription('Show how much money Panda has spent'),
   new SlashCommandBuilder().setName('model').setDescription('Show which AI model Panda is running on'),
+  new SlashCommandBuilder()
+    .setName('switch_model')
+    .setDescription('Switch Panda to another OpenRouter model and restart (owner only)')
+    .addStringOption((o) =>
+      o
+        .setName('model')
+        .setDescription('OpenRouter model id — start typing to search')
+        .setRequired(true)
+        .setAutocomplete(true),
+    ),
   new SlashCommandBuilder()
     .setName('play')
     .setDescription('Play a song (or add it to the queue)')
@@ -82,10 +92,17 @@ export const commandDefs = [
     ),
 ].map((b) => b.toJSON());
 
-const WRITE_METHODS = ['POST', 'PATCH', 'PUT', 'DELETE'];
-
 export function createInteractionHandler({ client, config, contextStore, player, privateMode, toggledResponses }) {
   return async (interaction) => {
+    // Autocomplete is a separate interaction type with a 3s budget and no
+    // deferral — answer it from the cached catalog and return.
+    if (interaction.isAutocomplete()) {
+      if (interaction.commandName !== 'switch_model') return;
+      if (interaction.user.id !== config.ownerId) return await interaction.respond([]).catch(() => {});
+      const choices = await modelChoices(config, interaction.options.getFocused());
+      return await interaction.respond(choices).catch(() => {});
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     // Discord gives 3s to acknowledge an interaction. One delivered while the
@@ -194,6 +211,22 @@ export function createInteractionHandler({ client, config, contextStore, player,
         return await interaction.reply({ embeds: [buildModelEmbed(client, config)] });
       }
 
+      if (name === 'switch_model') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+        }
+        await interaction.deferReply();
+        const result = await switchModel({ model: interaction.options.getString('model', true), config });
+        await interaction.editReply({ content: result.summary, allowedMentions: { parse: [] } });
+        if (result.restart) {
+          // Same restart path as self_fix: exit 42, and the supervisor pulls and
+          // reboots — which is what actually loads the new OPENROUTER_MODEL.
+          console.log('[panda] /switch_model requested restart — exiting with code 42');
+          setTimeout(() => process.exit(42), 1500);
+        }
+        return;
+      }
+
       if (name === 'clear') {
         const key = interaction.guildId ?? `dm:${interaction.user.id}`;
         contextStore.clear(key);
@@ -244,6 +277,11 @@ export function createInteractionHandler({ client, config, contextStore, player,
       }
 
       if (name === 'github') {
+        // Every GitHub surface is Oscar-only, reads included: this command runs
+        // on his PAT, and even a GET can pull back private-repo data.
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+        }
         // `endpoint` and `method` are no longer user-facing. Default to the most
         // common read action (list the caller's repos). A body-only invocation
         // still resolves to a safe GET.
@@ -251,13 +289,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
         const method = 'GET';
         const bodyRaw = interaction.options.getString('body');
 
-        // Writes (POST/PATCH/PUT/DELETE) act with Oscar's PAT — owner only.
-        if (WRITE_METHODS.includes(method) && !isOwner) {
-          return await interaction.reply({
-            content: '⛔ Write methods (POST/PATCH/PUT/DELETE) are owner only.',
-            flags: MessageFlags.Ephemeral,
-          });
-        }
         let body;
         if (bodyRaw) {
           try {
@@ -270,10 +301,7 @@ export function createInteractionHandler({ client, config, contextStore, player,
           }
         }
         await interaction.deferReply();
-        // Owner → authenticated (full access, incl. private repos). Non-owner →
-        // unauthenticated, so only public repos resolve; Oscar's private repos
-        // 404 because his PAT is never attached.
-        const result = await githubCall({ method, endpoint, body, auth: isOwner }, buildInvocation());
+        const result = await githubCall({ method, endpoint, body, auth: true }, buildInvocation());
         return await sendToolResult(result);
       }
 

@@ -1,3 +1,5 @@
+import { openAutoMergedPr } from './prFlow.js';
+
 export const defs = [
   {
     type: 'function',
@@ -28,6 +30,37 @@ export const defs = [
           body: { type: 'object', description: 'JSON body for POST/PATCH/PUT' },
         },
         required: ['endpoint'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_pr',
+      description:
+        "OWNER ONLY. Open a pull request on ANY of Oscar's GitHub repos — not just your own source. Give the repo, a title, and the full new content of each file you want changed; the files are committed to a fresh branch off the repo's default branch and a PR is opened. Set auto_merge to squash-merge it immediately. Use this for editing OTHER repos; to change your own source use self_fix instead.",
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: "Target repo, 'owner/name' or just 'name' for one of Oscar's own" },
+          title: { type: 'string', description: 'Pull request title (also the commit message)' },
+          body: { type: 'string', description: 'Pull request description' },
+          base: { type: 'string', description: "Branch to target (default: the repo's default branch)" },
+          files: {
+            type: 'array',
+            description: 'The files to change. Content is the COMPLETE new file, not a diff.',
+            items: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: 'Path in the repo, e.g. src/index.js' },
+                content: { type: 'string', description: 'Full new file content. Omit or null to DELETE the file.' },
+              },
+              required: ['path'],
+            },
+          },
+          auto_merge: { type: 'boolean', description: 'Squash-merge the PR immediately (default false)' },
+        },
+        required: ['repo', 'title', 'files'],
       },
     },
   },
@@ -106,4 +139,68 @@ export async function githubApi({ method = 'GET', endpoint, body }, invocation) 
     return '⛔ github is restricted to Oscar (it uses his GitHub credentials). The current sender is not Oscar — refuse.';
   }
   return githubCall({ method, endpoint, body, auth: true }, invocation);
+}
+
+// Open a pull request on any repo Oscar's PAT can reach. Same machinery
+// self_fix ships itself with (prFlow), pointed at someone else's repo — so a
+// change to another project never involves cloning it locally.
+//
+// Never throws; returns a tool-result string.
+export async function createPr(
+  { repo, title, body, base, files, auto_merge: autoMerge = false },
+  invocation,
+  { openPr = openAutoMergedPr, gh: rawGh, now = Date.now } = {},
+) {
+  if (!invocation.isOwner) {
+    return '⛔ create_pr is restricted to Oscar (it writes to his repos with his credentials). The current sender is not Oscar — refuse.';
+  }
+  if (!Array.isArray(files) || files.length === 0) {
+    return '⚠️ create_pr needs a non-empty `files` array — each entry is a path plus the COMPLETE new file content (omit content to delete).';
+  }
+  if (!repo || !title) return '⚠️ create_pr needs both `repo` and `title`.';
+
+  // A bare name means one of Oscar's own repos; the vault slug is where his
+  // account name already lives in config.
+  const owner = String(invocation.config.vaultRepo || '').split('/')[0] || 'oskip0906';
+  const slug = String(repo).includes('/') ? String(repo).replace(/^\/+|\/+$/g, '') : `${owner}/${repo}`;
+
+  const gh = rawGh || ghJson(invocation.config.githubPat);
+
+  // Not every repo calls its trunk "main" — ask before targeting one.
+  let target = base;
+  if (!target) {
+    const info = await gh('GET', `/repos/${slug}`);
+    if (info.status !== 200) {
+      return `❌ Can't reach \`${slug}\` (HTTP ${info.status}): ${info.json?.message || 'unknown error'}`;
+    }
+    target = info.json?.default_branch || 'main';
+  }
+
+  const result = await openPr({
+    gh,
+    slug,
+    base: target,
+    branchName: `panda-${now()}`,
+    title,
+    body: body || `Opened by panda-bot on Oscar's behalf.`,
+    files: files.map((f) => ({ path: f.path, content: f.content ?? null, mode: '100644' })),
+    autoMerge: Boolean(autoMerge),
+  });
+
+  if (!result.ok) return `❌ ${result.detail}${result.url ? `\n${result.url}` : ''}`;
+  return `✅ ${result.detail}\n${result.url}`;
+}
+
+// prFlow's {status, json} shape, authenticated with Oscar's PAT.
+function ghJson(pat) {
+  return async (method, endpoint, body) => {
+    const { status, text } = await gh({ config: { githubPat: pat } }, endpoint, { method, body, auth: true });
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = { message: String(text).slice(0, 400) };
+    }
+    return { status, json };
+  };
 }
