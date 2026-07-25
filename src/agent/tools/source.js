@@ -239,7 +239,13 @@ export async function selfFix({ instruction }, invocation) {
     }
 
     const commitMsg = `self_fix: ${String(instruction).replace(/\s+/g, ' ').trim().slice(0, 72)}`;
+    // Stage, commit, and push are handled by pushSource, which never throws.
+    // A push failure must NOT block the restart — the code changes are already
+    // verified and on disk, so we log the failure and still restart.
     const pushResult = await pushSource({ root, message: commitMsg, pat: config.githubPat });
+    if (pushResult.startsWith('❌')) {
+      console.error(`[self_fix] git push failed but continuing to restart:\n${pushResult}`);
+    }
 
     invocation.requestRestart = true;
     return `${tail}\n\n✅ Verified ${changed.length} changed file(s).\n🔁 Git: ${pushResult}\n\n[NOTE: the bot restarts to apply the changes right after you send your reply — mention that.]`;
