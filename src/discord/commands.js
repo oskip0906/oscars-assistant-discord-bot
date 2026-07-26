@@ -21,8 +21,8 @@ export const commandDefs = [
   new SlashCommandBuilder().setName('usage').setDescription('Show how much money Panda has spent'),
   new SlashCommandBuilder().setName('model').setDescription('Show which AI model Panda is running on'),
   new SlashCommandBuilder()
-    .setName('switch_model')
-    .setDescription('Switch Panda to another OpenRouter model and restart (owner only)')
+    .setName('set_model')
+    .setDescription('Set the OpenRouter model Panda runs on and restart (owner only)')
     .addStringOption((o) =>
       o
         .setName('model')
@@ -167,7 +167,7 @@ export function createInteractionHandler({ client, config, contextStore, player,
     if (interaction.isAutocomplete()) {
       if (interaction.user.id !== config.ownerId) return await interaction.respond([]).catch(() => {});
       const focused = interaction.options.getFocused(true);
-      if (interaction.commandName === 'switch_model' || interaction.commandName === 'set_dev_model') {
+      if (interaction.commandName === 'set_model' || interaction.commandName === 'set_dev_model') {
         const choices = await modelChoices(config, focused.value);
         return await interaction.respond(choices).catch(() => {});
       }
@@ -299,7 +299,7 @@ export function createInteractionHandler({ client, config, contextStore, player,
         return await interaction.reply({ embeds: [buildModelEmbed(client, config)] });
       }
 
-      if (name === 'switch_model') {
+      if (name === 'set_model') {
         if (!isOwner) {
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
         }
@@ -307,7 +307,7 @@ export function createInteractionHandler({ client, config, contextStore, player,
         const result = await switchModel({ model: interaction.options.getString('model', true), config });
         await interaction.editReply({ content: result.summary, allowedMentions: { parse: [] } });
         if (result.restart) {
-          console.log('[panda] /switch_model requested restart — exiting with code 42');
+          console.log('[panda] /set_model requested restart — exiting with code 42');
           setTimeout(() => process.exit(42), 1500);
         }
         return;
