@@ -6,7 +6,7 @@ let personaCache = null;
 function loadPersona(config) {
   if (personaCache !== null) return personaCache;
   const parts = [];
-  for (const file of ['IDENTITY.md', 'SOUL.md', 'USER.md']) {
+  for (const file of ['IDENTITY.md', 'SOUL.md', 'USER.md', 'instructions.md']) {
     try {
       const body = fs.readFileSync(path.join(config.contextFilesDir, file), 'utf8');
       parts.push(`--- ${file} ---\n${body.slice(0, 8000)}`);
@@ -28,6 +28,11 @@ function loadPersona(config) {
   }
   personaCache = parts.join('\n\n');
   return personaCache;
+}
+
+// Called after set_rule writes instructions.md so the next system prompt picks up the new rule.
+export function clearPersonaCache() {
+  personaCache = null;
 }
 
 export function buildSystemPrompt(invocation) {
