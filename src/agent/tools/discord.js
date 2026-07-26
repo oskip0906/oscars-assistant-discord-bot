@@ -4,7 +4,7 @@ export const defs = [
     function: {
       name: 'get_user_id',
       description:
-        "Look up a Discord user's or bot's numeric user id in this server by (partial) name. Use when you need to ping someone whose id is not already inline in the conversation. Ping format: <@id>.",
+        "Look up any guild member's numeric id in this server by (partial) name — PEOPLE AND BOTS ALIKE. Bots are ordinary members and are pinged the same way, so use this whenever you are asked to ping or mention a bot rather than saying you cannot. Accepts a bare name, an @name, a <@id> mention, or a raw id. Ping format: <@id>.",
       parameters: {
         type: 'object',
         properties: {
@@ -43,7 +43,20 @@ export const defs = [
 export async function getUserId({ name }, invocation) {
   const guild = invocation.guild;
   if (!guild) return 'Not in a server (this is a DM) — there is no member list to search.';
-  const query = String(name || '').trim();
+  // The model routinely passes back what it saw on screen: "@SomeBot", a raw
+  // <@123> mention, or the id itself. Searching for those literally finds
+  // nothing, and a fruitless lookup is what it then reports as "I can't".
+  const raw = String(name || '').trim();
+  // Inside <@…> the wrapper already proves it is an id, so any digits count. A
+  // bare number has to look like a snowflake before it is treated as one.
+  const mention = raw.match(/^<@!?(\d+)>$/) || raw.match(/^(\d{15,})$/);
+  if (mention) {
+    const id = mention[1];
+    const member = await guild.members.fetch(id).catch(() => null);
+    const who = member ? `${member.displayName} (@${member.user.username})${member.user.bot ? ' [BOT]' : ''}` : 'that account';
+    return `${who} id:${id} — ping with <@${id}>. Bots are pinged exactly like people.`;
+  }
+  const query = raw.replace(/^@+/, '');
   if (!query) return 'Provide a name to search for.';
 
   const matches = new Map();
@@ -64,14 +77,15 @@ export async function getUserId({ name }, invocation) {
     }
   }
   if (!matches.size) {
-    return `No members matching "${query}" (searched the API and local cache). The name may be spelled differently.`;
+    return `No member matching "${query}" is in this server (searched the API and local cache, people and bots alike). The name may be spelled differently — ask which one they mean. This is a spelling miss, not a restriction on pinging.`;
   }
-  return [...matches.values()]
-    .map(
+  return [
+    ...[...matches.values()].map(
       (m) =>
         `${m.displayName} (@${m.user.username}) id:${m.id}${m.user.bot ? ' [BOT]' : ''} — ping with <@${m.id}>`,
-    )
-    .join('\n');
+    ),
+    'Every id above is pingable with <@id>, bots included.',
+  ].join('\n');
 }
 
 export async function react({ emoji }, invocation) {
