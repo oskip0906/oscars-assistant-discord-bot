@@ -128,25 +128,21 @@ export function createMessageHandler({ client, config, contextStore, player, pri
       anchor.channel.sendTyping().catch(() => {});
       const typing = setInterval(() => anchor.channel.sendTyping().catch(() => {}), 8000);
       try {
-        // If the turn refers back to earlier conversation or is too ambiguous
-        // to stand alone, prepend recent channel history (oldest first) to the
-        // stack so the agent has context. Self-contained messages skip this.
+        // Always prepend recent channel history (oldest first) so the agent has
+        // context for every reply, eliminating placeholder responses.
         let historyParts = [];
-        const rawText = messages.map((m) => m.content || '').join(' ');
-        if (needsHistory(rawText, client.user.id)) {
-          const batchIds = new Set(messages.map((m) => m.id));
-          try {
-            const fetched = await anchor.channel.messages.fetch({ limit: HISTORY_LIMIT });
-            historyParts = [...fetched.values()]
-              .filter((m) => !batchIds.has(m.id)) // drop the current/coalesced messages
-              .reverse() // Discord returns newest-first; the stack wants oldest-first
-              .map((m) => formatEnvelope(m));
-          } catch (err) {
-            console.error('[panda] history fetch failed:', err);
-          }
-          if (historyParts.length) {
-            historyParts.unshift('[recent channel history for context, oldest first]');
-          }
+        const batchIds = new Set(messages.map((m) => m.id));
+        try {
+          const fetched = await anchor.channel.messages.fetch({ limit: HISTORY_LIMIT });
+          historyParts = [...fetched.values()]
+            .filter((m) => !batchIds.has(m.id)) // drop the current/coalesced messages
+            .reverse() // Discord returns newest-first; the stack wants oldest-first
+            .map((m) => formatEnvelope(m));
+        } catch (err) {
+          console.error('[panda] history fetch failed:', err);
+        }
+        if (historyParts.length) {
+          historyParts.unshift('[recent channel history for context, oldest first]');
         }
 
         // Concatenate history + every buffered message into one model input.
