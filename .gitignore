@@ -15,3 +15,8 @@ searxng/config/settings.yml
 # YouTube auth cookies — never commit
 cookies.txt
 *cookies*.txt
+
+# Written at runtime by /set_rule and read back into the system prompt. It is
+# per-deployment state, not source: committing it would ship one machine's rules
+# to every checkout and hand the development sandbox a file it must never edit.
+context/instructions.md
