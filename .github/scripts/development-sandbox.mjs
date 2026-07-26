@@ -228,8 +228,18 @@ run('gh', ['pr', 'create', '--repo', env.TARGET_REPO, '--base', env.BASE, '--hea
 if (env.AUTO_MERGE === 'true') {
   // The pull request already exists at this point; failing the job over merge
   // settings would hide a perfectly good PR behind a red run.
-  const merge = attempt('gh', ['pr', 'merge', env.BRANCH, '--repo', env.TARGET_REPO, '--auto', '--squash', '--delete-branch']);
+  const mergeArgs = ['pr', 'merge', env.BRANCH, '--repo', env.TARGET_REPO, '--squash', '--delete-branch'];
+  let merge = attempt('gh', [...mergeArgs, '--auto']);
   if (!merge.ok) {
-    console.log(`::warning::Could not enable auto-merge; the pull request stays open for a manual merge.\n${merge.output.slice(-1000)}`);
+    // `--auto` needs "Allow auto-merge" enabled on the target repository. Where
+    // it is off, the queue request fails and the caller (self_fix) would wait
+    // for a merge that can never happen. The branch has already passed this
+    // job's own verification and the merge was approved before the run started,
+    // so merge it directly instead.
+    console.log(`::notice::Auto-merge is unavailable on ${env.TARGET_REPO}; merging the verified pull request directly.\n${merge.output.slice(-1000)}`);
+    merge = attempt('gh', mergeArgs);
+  }
+  if (!merge.ok) {
+    console.log(`::warning::Could not merge the pull request; it stays open for a manual merge.\n${merge.output.slice(-1000)}`);
   }
 }

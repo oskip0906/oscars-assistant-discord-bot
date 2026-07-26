@@ -2,6 +2,7 @@ import { config } from '../../config.js';
 import { dmOwner } from '../../discord/notify.js';
 import { selfFixState } from '../../selfFixState.js';
 import { getAIConfig } from '../../configManager.js';
+import { startDevRunLog } from '../../devRunLog.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
 
 const APPROVAL_TIMEOUT_MS = 30 * 1000;
@@ -75,6 +76,7 @@ export async function selfFix(
     state = selfFixState,
     getConfig = getAIConfig,
     confirm = requestDevelopmentApproval,
+    startLog = startDevRunLog,
   } = {},
 ) {
   const finish = async (headline, summary) => {
@@ -87,9 +89,18 @@ export async function selfFix(
   };
 
   const { model: devModel } = getConfig('development');
+  // Logged before the approval prompt so the log shows the request that was
+  // never approved, not just the runs that made it to the sandbox.
+  const logFinish = startLog('self_fix', {
+    repo: config.developmentSandboxRepo,
+    model: devModel,
+    task: instruction,
+  });
+
   const outcome = await confirm({ instruction, invocation, state, model: devModel });
   if (outcome !== 'confirm') {
     const why = outcome === 'cancel' ? 'you cancelled it' : `it was not approved within ${APPROVAL_TIMEOUT_MS / 1000}s`;
+    logFinish('aborted', { reason: why });
     return `🚫 Self-fix aborted — ${why}. Nothing was changed.`;
   }
 
@@ -107,11 +118,16 @@ export async function selfFix(
       selfFix: true,
       config,
     });
-    if (!result.ok) return finish('self_fix did not land', result.summary);
+    if (!result.ok) {
+      logFinish('failed', { pr: result.pr?.number, url: result.pr?.html_url, detail: result.summary });
+      return finish('self_fix did not land', result.summary);
+    }
 
     invocation.requestRestart = true;
+    logFinish('merged', { pr: result.pr?.number, url: result.pr?.html_url });
     return finish('self_fix landed — restarting now', `${result.summary}\n\n🔁 Restarting now to apply the merged remote change.`);
   } catch (err) {
+    logFinish('crashed', { detail: String(err.message || err) });
     return finish('self_fix crashed', `❌ Remote sandbox failed: ${String(err.message || err).slice(0, 500)}`);
   } finally {
     state.end();

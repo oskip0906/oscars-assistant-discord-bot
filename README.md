@@ -121,11 +121,19 @@ secrets** there:
 | `OPENROUTER_API_KEY` | the key for the custom development model — **required** |
 | `PANDA_DEV_GITHUB_TOKEN` | a fine-grained PAT with **Contents: read/write** and **Pull requests: read/write** on every repo Panda may change |
 
+Set them from a machine that already has the values (nothing is echoed):
+
+```bash
+gh secret set OPENROUTER_API_KEY --repo oskip0906/oscars-assistant-discord-bot < <(grep -m1 '^OPENROUTER_API_KEY=' .env | cut -d= -f2-)
+```
+
 Without `PANDA_DEV_GITHUB_TOKEN` the workflow falls back to the built-in `GITHUB_TOKEN`, which
 reaches **only the repository the workflow runs in** — enough for self-fix, but pull requests it
 opens or merges do not trigger other workflows (an auto-merged self-fix will not rebuild the
-Docker image). Developing any other repository fails immediately with an error naming the missing
-secret, rather than after the model call.
+Docker image), and it can open a PR at all only while *Settings → Actions → General → Allow
+GitHub Actions to create and approve pull requests* is enabled. A PAT avoids both limits.
+Developing any other repository fails immediately with an error naming the missing secret,
+rather than after the model call.
 
 Set these bot environment values (the first usually matches Panda’s own repo):
 
@@ -141,14 +149,28 @@ it can dispatch and observe the workflow. `PANDA_DEV_GITHUB_TOKEN` needs access 
 target repo because the sandbox uses it only to clone, push its short-lived branch, and open
 the PR.
 Enable **Allow auto-merge** in that repository’s GitHub settings; branch protection can still
-require checks/reviews, and Panda will wait until GitHub reports the PR merged. If auto-merge
-cannot be enabled the pull request still stands and waits for a manual merge. For other repos,
-Panda opens the PR and waits for your normal review/merge process instead of auto-merging.
+require checks/reviews, and Panda will wait until GitHub reports the PR merged. Where auto-merge
+is turned off, queuing it fails outright and a self-fix would wait for a merge that can never
+happen, so the sandbox merges the pull request directly instead — it has already passed the
+run's own `node --check`, `npm ci`, and `npm test`. For other repos, Panda opens the PR and
+waits for your normal review/merge process instead of auto-merging.
 
 Before spending an OpenRouter request the workflow checks its own credentials and that the token
 can push to the target repo, so misconfiguration fails in seconds with a readable error. Panda
 watches the run as well as the pull request: if the run fails before opening one, it reports the
-conclusion and a link to the run instead of waiting out the 20-minute timeout.
+conclusion, the step it stopped at, and a link to the run instead of waiting out the 20-minute
+timeout.
+
+Every `self_fix` and `/run_dev` request also brackets itself in the bot's stdout log, so an
+approval that was never given and a run that died in the sandbox both leave a trace:
+
+```
+[panda] self_fix start repo=oskip0906/oscars-assistant-discord-bot model=… task="…"
+[panda] self_fix finish outcome=merged seconds=214.7 … pr=31 url=https://github.com/…/pull/31
+```
+
+`outcome` is one of `aborted` (never approved), `merged`, `pull-request-open` (the normal end
+state for `/run_dev`), `failed`, or `crashed`.
 
 ### Start scripts
 

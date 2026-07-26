@@ -3,6 +3,7 @@ import { selfFixState } from '../../selfFixState.js';
 import { requestDevelopmentApproval } from './source.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
 import { dmOwner } from '../../discord/notify.js';
+import { startDevRunLog } from '../../devRunLog.js';
 
 const repoChoiceCache = {};
 
@@ -188,6 +189,7 @@ export async function createPr(
     state = selfFixState,
     getConfig = getAIConfig,
     notify = dmOwner,
+    startLog = startDevRunLog,
   } = {},
 ) {
   if (!invocation.isOwner) {
@@ -201,8 +203,15 @@ export async function createPr(
   const slug = String(repo).includes('/') ? String(repo).replace(/^\/+|\/+$/g, '') : `${owner}/${repo}`;
 
   const { model } = getConfig('development');
+  // Logged before the approval prompt so the log shows the request that was
+  // never approved, not just the runs that made it to the sandbox.
+  const logFinish = startLog('run_dev', { repo: slug, base, model, task: instruction });
+
   const outcome = await confirm({ instruction, invocation, state, model, label: `Development PR for ${slug}` });
-  if (outcome !== 'confirm') return '🚫 Development PR aborted — it was not approved with the Discord button.';
+  if (outcome !== 'confirm') {
+    logFinish('aborted', { reason: 'not approved with the Discord button' });
+    return '🚫 Development PR aborted — it was not approved with the Discord button.';
+  }
 
   state.begin();
   try {
@@ -220,7 +229,14 @@ export async function createPr(
         await notify(invocation.client, invocation.config.ownerId, `🛠️ Development PR #${pr.number}: ${pr.html_url}`).catch(() => {});
       },
     });
+    // /run_dev never auto-merges, so an open pull request is the successful
+    // outcome here — only a run that produced no pull request at all failed.
+    const outcomeName = result.ok ? 'merged' : result.pr ? 'pull-request-open' : 'failed';
+    logFinish(outcomeName, { pr: result.pr?.number, url: result.pr?.html_url, detail: result.summary });
     return result.summary;
+  } catch (err) {
+    logFinish('crashed', { detail: String(err.message || err) });
+    throw err;
   } finally {
     state.end();
   }
