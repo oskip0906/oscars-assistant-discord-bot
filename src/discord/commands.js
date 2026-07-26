@@ -12,6 +12,9 @@ import { vaultFetch, githubCall, createPr, writableRepoChoices } from '../agent/
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
 import { setDevelopmentModel } from '../configManager.js';
+import { clearPersonaCache } from '../agent/systemPrompt.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -47,28 +50,22 @@ export const commandDefs = [
   new SlashCommandBuilder()
     .setName('web_search')
     .setDescription('Search the web and get cited links')
-    // Only `query` is user-facing; result `count` is left to the tool default.
     .addStringOption((o) => o.setName('query').setDescription('What to search for').setRequired(true)),
   new SlashCommandBuilder()
     .setName('web_fetch')
     .setDescription('Fetch and read the full content of a web page')
-    // Only `url` is user-facing; `max_chars` is left to the tool default.
     .addStringOption((o) => o.setName('url').setDescription('Full URL (http:// or https://)').setRequired(true)),
   new SlashCommandBuilder()
     .setName('image_search')
     .setDescription('Search for images')
-    // Only `query` is user-facing; result `count` is left to the tool default.
     .addStringOption((o) => o.setName('query').setDescription('What to find pictures of').setRequired(true)),
   new SlashCommandBuilder()
     .setName('vault_fetch')
     .setDescription("Read Oscar's knowledge vault")
-    // Only `query` is user-facing; `path` is resolved programmatically.
     .addStringOption((o) => o.setName('query').setDescription('What to look for in the vault')),
   new SlashCommandBuilder()
     .setName('github')
     .setDescription('Call the GitHub API (writes/private repos are owner only)')
-    // Only `body` is user-facing; `endpoint`/`method` are resolved
-    // programmatically (default: GET /user/repos when only a body is given).
     .addStringOption((o) => o.setName('body').setDescription('Optional JSON body / request details')),
   new SlashCommandBuilder()
     .setName('self_fix')
@@ -102,6 +99,12 @@ export const commandDefs = [
           { name: 'off', value: 'off' },
           { name: 'status', value: 'status' },
         ),
+    ),
+  new SlashCommandBuilder()
+    .setName('set_rule')
+    .setDescription('Set a rule that Panda always follows — writes to instructions.md (owner only)')
+    .addStringOption((o) =>
+      o.setName('rule').setDescription('The rule text (can be any instruction you want Panda to obey)').setRequired(true),
     ),
 ].map((b) => b.toJSON());
 
@@ -304,8 +307,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
         const result = await switchModel({ model: interaction.options.getString('model', true), config });
         await interaction.editReply({ content: result.summary, allowedMentions: { parse: [] } });
         if (result.restart) {
-          // Same restart path as self_fix: exit 42, and the supervisor pulls and
-          // reboots — which is what actually loads the new OPENROUTER_MODEL.
           console.log('[panda] /switch_model requested restart — exiting with code 42');
           setTimeout(() => process.exit(42), 1500);
         }
@@ -324,9 +325,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
           });
         }
         const applied = setDevelopmentModel(model);
-        // Persisted as well as applied: self_fix restarts the bot, so a choice
-        // that lived only in memory was lost exactly when the next development
-        // run needed it, silently falling back to the default.
         const written = writeEnvModel(config, applied, 'OPENROUTER_DEV_MODEL');
         return await interaction.reply({
           content: [
@@ -357,7 +355,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
       // --- Tool slash commands (work in servers and DMs) ---------------
 
       if (name === 'web_search') {
-        // `count` is hidden from the UI — let the tool apply its own default.
         return await runTool(webSearch, {
           query: interaction.options.getString('query', true),
           count: undefined,
@@ -365,7 +362,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
       }
 
       if (name === 'web_fetch') {
-        // `max_chars` is hidden from the UI — let the tool apply its own default.
         return await runTool(webFetch, {
           url: interaction.options.getString('url', true),
           max_chars: undefined,
@@ -373,7 +369,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
       }
 
       if (name === 'image_search') {
-        // `count` is hidden from the UI — let the tool apply its own default.
         return await runTool(imageSearch, {
           query: interaction.options.getString('query', true),
           count: undefined,
@@ -381,8 +376,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
       }
 
       if (name === 'vault_fetch') {
-        // `path` is hidden from the UI — resolved programmatically by the tool
-        // (a query-only fetch searches the vault rather than reading a fixed path).
         return await runTool(vaultFetch, {
           path: undefined,
           query: interaction.options.getString('query') ?? undefined,
@@ -390,14 +383,9 @@ export function createInteractionHandler({ client, config, contextStore, player,
       }
 
       if (name === 'github') {
-        // Every GitHub surface is Oscar-only, reads included: this command runs
-        // on his PAT, and even a GET can pull back private-repo data.
         if (!isOwner) {
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
         }
-        // `endpoint` and `method` are no longer user-facing. Default to the most
-        // common read action (list the caller's repos). A body-only invocation
-        // still resolves to a safe GET.
         const endpoint = '/user/repos';
         const method = 'GET';
         const bodyRaw = interaction.options.getString('body');
@@ -446,6 +434,33 @@ export function createInteractionHandler({ client, config, contextStore, player,
         return await sendToolResult(result);
       }
 
+      // --- set_rule (owner-only, writes instructions.md) ---------------
+      if (name === 'set_rule') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+        }
+        const ruleText = interaction.options.getString('rule', true).trim();
+        if (!ruleText) {
+          return await interaction.reply({ content: '⚠️ Provide a rule to set.', flags: MessageFlags.Ephemeral });
+        }
+        try {
+          const filePath = path.join(config.contextFilesDir, 'instructions.md');
+          fs.mkdirSync(path.dirname(filePath), { recursive: true });
+          fs.writeFileSync(filePath, ruleText);
+          // Clear the persona cache so the new rule takes effect in the next reply.
+          clearPersonaCache();
+        } catch (err) {
+          return await interaction.reply({
+            content: `⚠️ Could not write instructions.md: ${err.message}`,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+        return await interaction.reply({
+          content: `✅ Rule set. Panda will now follow this rule at all times:\n>>> ${ruleText}`,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
       // Music commands below
       if (!interaction.guild) {
         return await interaction.reply({ content: 'Music only works in a server.', flags: MessageFlags.Ephemeral });
@@ -468,8 +483,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
           interaction.user,
         );
         if (!r.ok) return await interaction.editReply(r.error);
-        // Queued → show the "Added to Queue" card. Playing now → the playerStart
-        // event posts the full Now Playing embed, so just ack the interaction.
         if (r.queued) return await interaction.editReply({ embeds: [addedEmbed(r.track, r.position)] });
         return await interaction.editReply(`▶️ Playing **${r.track.title}** 🎶`);
       }
@@ -485,8 +498,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
         return await interaction.reply({ embeds: [queueEmbed(q)] });
       }
     } catch (err) {
-      // 10062 Unknown interaction / 40060 already acknowledged → the token is
-      // dead (usually a stale interaction from a restart). Nothing to say back.
       if (err?.code === 10062 || err?.code === 40060) return;
       console.error('[panda] interaction failed:', err);
       const payload = { content: `⚠️ ${String(err.message || err).slice(0, 250)}` };
