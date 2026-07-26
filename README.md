@@ -2,6 +2,8 @@
 
 Oscar's Discord AI agent, built from scratch with Node.js + discord.js v14 and an OpenRouter tool-calling loop. It has per-server memory, music playback, web/image search, GitHub vault integration, self-fixing source code, private mode, and emoji reactions.
 
+![Panda Bot Screenshot](https://media.discordapp.net/attachments/1528264572010627212/1530464934054334604/Screenshot_2026-07-25_at_2.41.10_AM.png?ex=6a65ac0a&is=6a645a8a&hm=f8f8c5ab8187f7ebd9f38aad61ed663bfe115a9a1fe4c5da2448875879fd2a84&=&format=webp&quality=lossless&width=856&height=632)
+
 ## What it can do
 
 - Respond to mentions and replies with AI (OpenRouter).
@@ -29,9 +31,31 @@ Oscar's Discord AI agent, built from scratch with Node.js + discord.js v14 and a
 | `play_music` | Control music playback |
 | `react` | React to a message with an emoji |
 
-## Slash commands
+## Slash Commands
 
-`/menu` · `/usage` · `/model` · `/play` `/skip` `/pause` `/resume` `/stop` `/queue` · `/web_search` `/web_fetch` `/image_search` `/vault_fetch` · `/clear` · `/clearall` (owner) · `/github` (owner) · `/self_fix` (owner) · `/run_dev` (owner) · `/set_dev_model` (owner) · `/switch_model` (owner) · `/private on|off|status` (owner) · `/set_rule` (owner) · `/toggle_response` (owner)
+- `/menu` — Show everything Panda can do
+- `/usage` — Show how much money Panda has spent
+- `/model` — Show which AI model Panda is running on
+- `/play <song>` — Play a song or add it to the queue
+- `/skip` — Skip the current track
+- `/pause` — Pause playback
+- `/resume` — Resume playback
+- `/stop` — Stop playback and clear the queue
+- `/queue` — Show the current queue
+- `/web_search <query>` — Search the web and get cited links
+- `/web_fetch <url>` — Fetch and read the full content of a web page
+- `/image_search <query>` — Search for images
+- `/vault_fetch <query>` — Read Oscar’s knowledge vault
+- `/clear` — Erase Panda’s memory of this server
+- `/clearall` (owner) — Erase ALL of Panda’s memory
+- `/github` (owner) — Call the GitHub API (writes/private repos are owner only)
+- `/self_fix <instruction>` (owner) — Patch Panda’s own source code and restart
+- `/run_dev <instruction> [repo]` (owner) — Run an approved remote development task and open a PR
+- `/set_dev_model <model>` (owner) — Set the OpenRouter model used for development tasks
+- `/switch_model <model>` (owner) — Switch Panda to another OpenRouter model and restart
+- `/private on|off|status` (owner) — Turn private mode on, off, or check status
+- `/set_rule <rule>` (owner) — Set a rule that Panda always follows
+- `/toggle_response <user_id>` (owner) — Toggle whether Panda responds to a specific user
 
 ## CI/CD and secrets
 
