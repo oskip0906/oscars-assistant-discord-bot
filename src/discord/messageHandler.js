@@ -16,29 +16,24 @@ import { selfFixState, SELF_FIX_MESSAGE } from '../selfFixState.js';
 // has elapsed.
 const WINDOW_MS = 3000;
 
-// When a trigger message points back at earlier conversation, or is too
-// short/ambiguous to stand on its own, we widen the model input to include
-// recent channel history so the agent has something concrete to reason about.
-// (Normal, self-contained messages skip this and keep the default behavior.)
+// The messages before the ping, always fetched and always labelled as
+// background. Previously this was conditional on the trigger looking ambiguous,
+// which meant a turn that *seemed* self-contained was answered with no idea what
+// the channel had been talking about.
 const HISTORY_LIMIT = 10;
 
-// Phrases that signal the sender is referring to earlier conversation.
-const CONTEXT_REFERENCE_RE =
-  /\b(what about that|you said|you mentioned|you told me|as (?:i|we) (?:said|mentioned|discussed)|earlier|last time|previously|previous (?:topic|message|conversation|chat)|our (?:last|previous) (?:topic|conversation|chat|discussion)|regarding (?:our|the last|that)|remember (?:when|that|how|our)|like i said|as before|back then|that thing (?:we|you)|going back to)\b/i;
+// Two bots that are both polite never stop. Each of slopbot's messages pinged
+// Panda, so Panda answered, so slopbot answered — nine rounds of "sounds good!"
+// with nothing being said. A conversation with another bot gets this many turns
+// to reach a point before Panda stops feeding it; any human message in the
+// channel clears the count, because a human being present means it is a real
+// conversation again.
+const MAX_BOT_EXCHANGES = 3;
 
-// Short/low-signal messages that only make sense with surrounding context.
-const AMBIGUOUS_PHRASES = new Set([
-  'hello', 'hi', 'hey', 'hiya', 'heya', 'yo', 'sup', 'hola',
-  'yes', 'yeah', 'yep', 'yup', 'ya', 'no', 'nope', 'nah',
-  'ok', 'okay', 'k', 'kk', 'sure', 'fine', 'right',
-  'what', 'why', 'how', 'who', 'when', 'where', 'huh', 'wat', 'wut', 'eh',
-  'continue', 'go on', 'more', 'and', 'so', 'then', 'well', 'again',
-  'thanks', 'thank you', 'ty', 'thx',
-  'lol', 'lmao', 'nice', 'cool', 'wow', 'oh', 'ah', 'hmm', 'hm', 'yo?',
-  'help', '?', '??', '???',
-]);
-// A single-word message no longer than this is treated as ambiguous.
-const AMBIGUOUS_MAX_WORD_LEN = 12;
+// Sign-offs. When another bot says one of these there is nothing left to answer:
+// a wave costs one reaction and ends the exchange, where a reply restarts it.
+const FAREWELL_RE =
+  /\b(bye|goodbye|good ?night|see ?ya|see you( later| around)?|cya|later(s)?|take care|farewell|catch you later|have a (great|good|nice|wonderful) (day|one|night|evening)|you too|talk (to you )?later|ttyl|peace out|signing off|i'?m (all set|good)|standing by)\b/i;
 
 // Strip the bot's own mention so detection sees only what the sender "said".
 function stripBotMention(text, clientUserId) {
@@ -48,32 +43,12 @@ function stripBotMention(text, clientUserId) {
     .trim();
 }
 
-function normalizePhrase(text) {
-  return String(text ?? '')
-    .toLowerCase()
-    .replace(/[^\w\s?]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function referencesPastConversation(text) {
-  return CONTEXT_REFERENCE_RE.test(text);
-}
-
-function isAmbiguous(text) {
-  const norm = normalizePhrase(text);
-  if (!norm) return true; // bare mention / nothing but the ping
-  if (AMBIGUOUS_PHRASES.has(norm)) return true;
-  const words = norm.split(/\s+/);
-  if (words.length === 1 && norm.length <= AMBIGUOUS_MAX_WORD_LEN) return true;
-  return false;
-}
-
-// Decide whether this turn should ingest recent channel history alongside the
-// current (and any coalesced) messages.
-function needsHistory(rawText, clientUserId) {
-  const stripped = stripBotMention(rawText, clientUserId);
-  return referencesPastConversation(stripped) || isAmbiguous(stripped);
+// A sign-off that asks nothing. "See you later!" ends a conversation; "bye, but
+// first can you check X?" does not, so a question mark disqualifies it.
+export function isSignOff(text, clientUserId = '') {
+  const stripped = stripBotMention(text, clientUserId);
+  if (!stripped) return false;
+  return FAREWELL_RE.test(stripped) && !stripped.includes('?');
 }
 
 // Suppress Discord link embeds by wrapping bare URLs in <>. Image URLs stay
@@ -108,6 +83,10 @@ export function createMessageHandler({ client, config, contextStore, player, pri
   // Batch = { claimantId, messages: Message[], closed: boolean, collected: Promise }
   const channels = new Map();
 
+  // channelId -> consecutive turns answered for bots with no human in between.
+  // Kept outside `channels`, which is torn down as soon as its queue drains.
+  const botExchanges = new Map();
+
   function makeBatch(message) {
     const batch = { claimantId: message.author.id, messages: [message], closed: false };
     batch.collected = new Promise((resolve) => {
@@ -128,31 +107,45 @@ export function createMessageHandler({ client, config, contextStore, player, pri
       anchor.channel.sendTyping().catch(() => {});
       const typing = setInterval(() => anchor.channel.sendTyping().catch(() => {}), 8000);
       try {
-        // Always prepend recent channel history (oldest first) so the agent has
-        // context for every reply, eliminating placeholder responses.
-        let historyParts = [];
+        // The messages before the ping, always. `before` anchors on the trigger
+        // itself, so this is the run-up to being addressed rather than "the last
+        // ten messages", which on a busy channel is a different set entirely.
         const batchIds = new Set(messages.map((m) => m.id));
+        let historyParts = [];
         try {
-          const fetched = await anchor.channel.messages.fetch({ limit: HISTORY_LIMIT });
+          const fetched = (await anchor.channel.messages?.fetch({ limit: HISTORY_LIMIT, before: messages[0].id })) ?? new Map();
           historyParts = [...fetched.values()]
-            .filter((m) => !batchIds.has(m.id)) // drop the current/coalesced messages
+            .filter((m) => !batchIds.has(m.id))
             .reverse() // Discord returns newest-first; the stack wants oldest-first
             .map((m) => formatEnvelope(m));
         } catch (err) {
           console.error('[panda] history fetch failed:', err);
         }
-        if (historyParts.length) {
-          historyParts.unshift('[recent channel history for context, oldest first]');
-        }
 
-        // Concatenate history + every buffered message into one model input.
         const parts = [];
         for (const m of messages) {
           let ref = null;
           if (m.reference?.messageId) ref = await m.fetchReference().catch(() => null);
           parts.push(formatEnvelope(m, ref));
         }
-        const combined = [...historyParts, ...parts].join('\n');
+
+        // Two labelled blocks, because an unlabelled wall of messages left the
+        // model guessing which line it was supposed to be answering — and it
+        // guessed wrong, replying to the room instead of to the person.
+        const trigger = messages[0].author;
+        const triggerName = messages[0].member?.displayName || trigger.displayName || trigger.username;
+        const combined = [
+          ...(historyParts.length
+            ? [
+                `[HISTORY CONTEXT — the ${historyParts.length} message(s) before you were pinged, oldest first. Background only: do NOT reply to these, they are already said and done.]`,
+                ...historyParts,
+                '[END HISTORY CONTEXT]',
+                '',
+              ]
+            : []),
+          `[RESPOND TO THIS — ${triggerName} pinged you${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This is the turn you are answering.]`,
+          ...parts,
+        ].join('\n');
 
         const invocation = {
           message: anchor,
@@ -256,6 +249,10 @@ export function createMessageHandler({ client, config, contextStore, player, pri
 
       const channelId = message.channelId;
 
+      // Any human speaking in the channel — to the bot or not — means this is a
+      // live conversation again, so the bot-loop budget resets.
+      if (!message.author.bot) botExchanges.delete(channelId);
+
       // A sender with a still-collecting batch in this channel gets everything
       // they say folded into it (no mention needed, timer NOT reset).
       const state = channels.get(channelId);
@@ -279,6 +276,28 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         repliedToBot = ref?.author?.id === client.user.id;
       }
       if (!isDM && !mentioned && !repliedToBot) return;
+
+      // Bot-to-bot: end it deliberately rather than trading pleasantries until
+      // one of us is rate-limited. A sign-off gets a wave and nothing else, and
+      // an exchange that keeps going without ever reaching a point is dropped
+      // once the budget runs out. Both paths stay silent from then on until a
+      // human speaks, which clears the count above.
+      if (message.author.bot) {
+        const spent = botExchanges.get(channelId) || 0;
+        if (isSignOff(message.content, client.user.id)) {
+          botExchanges.set(channelId, MAX_BOT_EXCHANGES);
+          if (spent < MAX_BOT_EXCHANGES) await message.react('👋').catch(() => {});
+          return;
+        }
+        if (spent >= MAX_BOT_EXCHANGES) {
+          if (spent === MAX_BOT_EXCHANGES) {
+            console.log(`[panda] bot loop in ${channelId}: ${MAX_BOT_EXCHANGES} exchanges with @${message.author.username} and no human — holding off until someone else speaks`);
+            botExchanges.set(channelId, spent + 1);
+          }
+          return;
+        }
+        botExchanges.set(channelId, spent + 1);
+      }
 
       // Self-fix in progress: the bot is rewriting its own source and must not
       // route anything to the model. Triggers get the hardcoded busy string and
