@@ -62,6 +62,22 @@ test('while self_fix runs, a trigger gets the canned reply and never reaches the
   assert.equal(textOf(m._sent[0]), SELF_FIX_MESSAGE);
 });
 
+test('a pending approval does not make the bot go quiet on everyone', async () => {
+  const state = new SelfFixState();
+  state.beginApproval({ userId: 'OWNER', id: 'nonce' });
+  const { handler, calls } = harness(state);
+
+  const m = makeMessage({ id: '1', authorId: 'A', content: 'hey panda', mentionsBot: true });
+  await handler(m);
+  await new Promise((r) => setTimeout(r, 3100)); // the handler's debounce
+  await flushAll();
+
+  // Approvals wait for a button with no deadline. Counting that as busy left
+  // the bot answering "I'm rebuilding my source" until Oscar got round to it.
+  assert.equal(calls.length, 1, 'nothing is being rebuilt yet — the model still runs');
+  assert.notEqual(textOf(m._sent[0]), SELF_FIX_MESSAGE);
+});
+
 test('the same user is told once, not on every follow-up', async () => {
   const state = new SelfFixState();
   state.begin();

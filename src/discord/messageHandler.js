@@ -288,9 +288,13 @@ export function createMessageHandler({ client, config, contextStore, player, pri
       // route anything to the model. Triggers get the hardcoded busy string and
       // nothing else — once per sender, so a multi-minute fix can't flood the
       // channel. Sits after trigger qualification on purpose: people who aren't
-      // talking to the bot get silence, not busy spam. The approval window also
-      // counts as busy; only its explicit Discord buttons can settle it.
-      if (selfFix?.isActive() || selfFix?.isAwaitingConfirmation()) {
+      // talking to the bot get silence, not busy spam.
+      //
+      // A pending approval deliberately does NOT count as busy. It waits for a
+      // button with no deadline, and nothing is being rewritten yet — treating
+      // it as busy would leave the bot answering everyone with "I'm rebuilding
+      // my source" until Oscar got round to clicking.
+      if (selfFix?.isActive()) {
         if (selfFix.shouldNotify(message.author.id)) {
           await message
             .reply({ content: SELF_FIX_MESSAGE, allowedMentions: { parse: [] } })

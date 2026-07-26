@@ -63,6 +63,39 @@ test('the busy reply is a hardcoded string, never model-composed', () => {
   assert.match(SELF_FIX_MESSAGE, /rebuild/i);
 });
 
+test('an approval waits for the button instead of expiring on its own', async () => {
+  const s = new SelfFixState();
+  const approval = s.beginApproval({ userId: 'OWNER', id: 'nonce' });
+
+  let settled = null;
+  approval.result.then((outcome) => {
+    settled = outcome;
+  });
+  // Long enough for any lingering deadline to have fired.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(settled, null, 'nothing but a click may settle an approval');
+  assert.equal(s.isAwaitingConfirmation(), true);
+
+  s.submitApproval('OWNER', 'nonce', true);
+  assert.equal(await approval.result, 'confirm');
+});
+
+test('a newer request supersedes an approval left unanswered', async () => {
+  const s = new SelfFixState();
+  const first = s.beginApproval({ userId: 'OWNER', id: 'one' });
+  const second = s.beginApproval({ userId: 'OWNER', id: 'two' });
+
+  // Without this the abandoned request would hold the state forever, and its
+  // caller would wait on a promise nothing left alive could resolve.
+  assert.equal(await first.result, 'cancel');
+  assert.equal(s.matchesPendingApproval('OWNER', 'one'), false);
+  assert.equal(s.matchesPendingApproval('OWNER', 'two'), true);
+
+  s.submitApproval('OWNER', 'two', true);
+  assert.equal(await second.result, 'confirm');
+});
+
 test('only the matching owner button can approve a development task', async () => {
   const s = new SelfFixState();
   const approval = s.beginApproval({ userId: 'OWNER', id: 'nonce', timeoutMs: 1_000 });

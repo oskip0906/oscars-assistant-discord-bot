@@ -102,7 +102,10 @@ Jina-reads-DDG → direct DuckDuckGo.
 | `react` | react to the current message with an emoji |
 
 **Development workflow:** `self_fix` and `create_pr` begin with a Discord UI approval card —
-click **Approve remote sandbox** or **Cancel**. Text replies cannot approve a code change. On
+click **Approve remote sandbox** or **Cancel**. The card has **no deadline**; it waits for a
+button however long that takes, and a newer request supersedes an older unanswered one. A
+pending card does not make the bot busy — it keeps answering everyone normally until a run
+actually starts. Text replies cannot approve a code change. On
 approval, GitHub Actions checks out a fresh isolated copy of the target repo, calls the custom
 `OPENROUTER_DEV_MODEL`, applies only a JSON edit plan, runs JavaScript and project tests, then
 opens a detailed PR. The live bot checkout is never read or edited. A self-fix targets Panda’s
