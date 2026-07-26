@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInteractionHandler } from '../src/discord/commands.js';
 import { SelfFixState } from '../src/selfFixState.js';
-import { approvalButtonId } from '../src/agent/tools/source.js';
+import { approvalButtonId, parseApprovalButtonId } from '../src/agent/tools/source.js';
 
 const config = { ownerId: 'OWNER', projectRoot: '/tmp' };
 
@@ -64,8 +64,8 @@ test('a click from anyone but Oscar neither approves nor throws', async () => {
   assert.equal(state.isAwaitingConfirmation(), true);
 });
 
-test('a stale button reports the expiry rather than releasing a run', async () => {
-  const { handler, interaction, state } = harness();
+test('a button whose request is gone says so, and retires itself', async () => {
+  const { handler, interaction, state, edits } = harness();
   state.end();
   let replied = '';
   interaction.reply = async (payload) => {
@@ -73,5 +73,28 @@ test('a stale button reports the expiry rather than releasing a run', async () =
   };
 
   await handler(interaction);
-  assert.match(replied, /expired/i);
+  assert.match(replied, /already answered, or a newer one took its place/i);
+  assert.deepEqual(edits[0].components, [], 'a dead card must stop looking clickable');
+});
+
+test('a card left over from a previous boot names that, not an expiry', async () => {
+  const { handler, interaction, edits } = harness();
+  // Approval state is in memory, but a Discord button never expires: after a
+  // restart the old card still looks live while its run is long gone.
+  interaction.customId = approvalButtonId('nonce', true, 'deadbeef');
+  let replied = '';
+  interaction.reply = async (payload) => {
+    replied = payload.content;
+  };
+
+  await handler(interaction);
+  assert.match(replied, /from before my last restart/i);
+  assert.doesNotMatch(replied, /expired/i);
+  assert.deepEqual(edits[0].components, []);
+});
+
+test('a button id from an older build still parses, as a previous boot', () => {
+  const parsed = parseApprovalButtonId('panda:development-approval:approve:1730000000-abc123');
+  assert.equal(parsed.approved, true);
+  assert.equal(parsed.fromThisBoot, false);
 });

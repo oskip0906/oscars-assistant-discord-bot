@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { config as botConfig } from '../../config.js';
+import { DevRunStore } from '../../devRunStore.js';
+
+export const devRunStore = new DevRunStore(botConfig.dataDir);
 
 const API = 'https://api.github.com';
 const POLL_MS = 5_000;
@@ -124,7 +128,7 @@ async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onP
 // restarts after the PR actually merges.
 export async function runDevelopmentSandbox(
   { repo, instruction, model, base, autoMerge = false, selfFix = false, config, onPullRequest },
-  { gh = githubRequest(config.githubPat), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, timeoutMs = DEFAULT_TIMEOUT_MS } = {},
+  { gh = githubRequest(config.githubPat), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, timeoutMs = DEFAULT_TIMEOUT_MS, store = devRunStore } = {},
 ) {
   const targetRepo = cleanRepo(repo);
   const sandboxRepo = cleanRepo(config.developmentSandboxRepo);
@@ -156,6 +160,11 @@ export async function runDevelopmentSandbox(
     return { ok: false, summary: `❌ Could not start the remote development sandbox (HTTP ${dispatch.status}): ${responseText(dispatch.json)}` };
   }
 
+  // From here the run outlives this process: a self-fix ends by restarting the
+  // bot that is waiting on it. Recorded so the next boot can report what became
+  // of it instead of the run finishing in silence.
+  store?.begin({ kind: selfFix ? 'self_fix' : 'run_dev', repo: targetRepo, branch, base: targetBase, requestId });
+
   const waited = await waitForPullRequest({
     gh,
     repo: targetRepo,
@@ -169,6 +178,11 @@ export async function runDevelopmentSandbox(
     requestId,
     waitForMerge: Boolean(autoMerge),
   });
+  // This process saw the run through and is about to report it, so there is
+  // nothing left for the next boot to pick up. The record only outlives this
+  // line when the process itself does not — which is the case it exists for.
+  store?.end();
+
   const url = waited.pr?.html_url ? `\n${waited.pr.html_url}` : '';
   if (!waited.ok) return { ok: false, merged: false, summary: `⚠️ ${waited.detail || 'Development sandbox failed.'}${url}`, pr: waited.pr };
   return {

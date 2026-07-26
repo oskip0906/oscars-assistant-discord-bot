@@ -132,9 +132,16 @@ export function createInteractionHandler({ client, config, contextStore, player,
           .catch(() => {});
       }
       if (!state.matchesPendingApproval(interaction.user.id, approval.id)) {
-        return await interaction
-          .reply({ content: '⌛ This development approval has expired.', flags: MessageFlags.Ephemeral })
-          .catch(() => {});
+        // Say which of the two it is. "Expired" was neither true nor useful:
+        // approvals have no deadline, and the usual cause is a card left over
+        // from before a restart, which no amount of waiting will revive.
+        const why = approval.fromThisBoot
+          ? '🚫 This request was already answered, or a newer one took its place. Send it again for a fresh card.'
+          : '🔁 This card is from before my last restart, so the request behind it is gone. Send it again and I will post a fresh one.';
+        await interaction.reply({ content: why, flags: MessageFlags.Ephemeral }).catch(() => {});
+        // Retire the dead card so it cannot be clicked a second time.
+        await interaction.message?.edit({ components: [] }).catch(() => {});
+        return;
       }
       // Answer before consuming. submitApproval resolves the promise the
       // development run is waiting on, and that run resumes — issuing its own
@@ -144,8 +151,10 @@ export function createInteractionHandler({ client, config, contextStore, player,
         approval.approved ? '✅ Development task approved. Starting the remote sandbox…' : '🚫 Development task cancelled.',
       );
       if (!state.submitApproval(interaction.user.id, approval.id, approval.approved)) {
-        // A newer request superseded this one while Discord was being answered.
-        await interaction.message?.edit({ content: '⌛ This development approval expired before it could start.', components: [] }).catch(() => {});
+        // A newer request superseded this one in the moment Discord was answered.
+        await interaction.message
+          ?.edit({ content: '🚫 A newer request took over before this one could start. Nothing ran.', components: [] })
+          .catch(() => {});
       }
       return;
     }

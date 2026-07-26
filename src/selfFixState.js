@@ -45,8 +45,10 @@ export class SelfFixState {
   beginApproval({ userId, timeoutMs = null, id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}` } = {}) {
     // A newer request supersedes the older one. Without a deadline an abandoned
     // approval would otherwise sit in 'awaiting_confirmation' forever, holding a
-    // caller on a promise nothing left alive can resolve.
-    if (this.pending) this.pending.resolve('cancel');
+    // caller on a promise nothing left alive can resolve. It settles as
+    // 'superseded', not 'cancel', so the caller can tell "Oscar pressed Cancel"
+    // from "this request was taken over" and retire the old card accordingly.
+    if (this.pending) this.pending.resolve('superseded');
     this.status = 'awaiting_confirmation';
     this.notified = new Set();
     const result = new Promise((resolve) => {
@@ -95,7 +97,7 @@ export class SelfFixState {
     this.notified = new Set();
     this.status = 'idle';
     if (this.pending) {
-      this.pending.resolve('cancel');
+      this.pending.resolve('aborted');
       this.pending = null;
     }
   }

@@ -1,9 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { config } from '../../config.js';
 import { dmOwner } from '../../discord/notify.js';
 import { selfFixState } from '../../selfFixState.js';
 import { getAIConfig } from '../../configManager.js';
 import { startDevRunLog } from '../../devRunLog.js';
+import { ApprovalCard } from '../../discord/approvalCard.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
+
+export const approvalCard = new ApprovalCard(config.dataDir);
 
 export const DEVELOPMENT_APPROVAL_PREFIX = 'panda:development-approval:';
 
@@ -25,18 +29,27 @@ export const defs = [
   },
 ];
 
-export function approvalButtonId(id, approved) {
-  return `${DEVELOPMENT_APPROVAL_PREFIX}${approved ? 'approve' : 'cancel'}:${id}`;
+// Pending approvals live in memory, and a Discord button never expires — so a
+// card posted before a restart still looks live afterwards, while the run behind
+// it is gone. Stamping the boot into the id lets a click on one of those say so
+// precisely, instead of the flat "expired" that sent Oscar hunting.
+export const BOOT_ID = randomUUID().replace(/-/g, '').slice(0, 8);
+
+export function approvalButtonId(id, approved, boot = BOOT_ID) {
+  return `${DEVELOPMENT_APPROVAL_PREFIX}${approved ? 'approve' : 'cancel'}:${boot}:${id}`;
 }
 
 export function parseApprovalButtonId(customId) {
-  const match = String(customId || '').match(/^panda:development-approval:(approve|cancel):(.+)$/);
-  return match ? { approved: match[1] === 'approve', id: match[2] } : null;
+  // The boot segment is optional so cards written by an older build still parse
+  // — they read as "from a previous boot", which is exactly what they are.
+  const match = String(customId || '').match(/^panda:development-approval:(approve|cancel):(?:([0-9a-f]{8}):)?(.+)$/);
+  if (!match) return null;
+  return { approved: match[1] === 'approve', boot: match[2] || null, id: match[3], fromThisBoot: match[2] === BOOT_ID };
 }
 
 // All development tasks use this Discord-native gate. There is intentionally
 // no text fallback: changing source must be an explicit button interaction.
-export async function requestDevelopmentApproval({ instruction, invocation, state, model, label = 'Self-fix' }) {
+export async function requestDevelopmentApproval({ instruction, invocation, state, model, label = 'Self-fix', card = approvalCard }) {
   const approval = state.beginApproval({ userId: config.ownerId });
   const prompt = {
     content: [
@@ -57,13 +70,31 @@ export async function requestDevelopmentApproval({ instruction, invocation, stat
     ],
     allowedMentions: { parse: [] },
   };
+  let sent = null;
   try {
-    await invocation.message?.channel?.send(prompt);
+    sent = await invocation.message?.channel?.send(prompt);
   } catch {
     state.end();
     return 'cancel';
   }
-  return approval.result;
+  // Recorded before the wait, so a restart mid-wait can find this card and
+  // retire it rather than leaving a live-looking button on a dead request.
+  card?.remember(sent?.channelId, sent?.id);
+
+  const outcome = await approval.result;
+  card?.forget();
+  // A click rewrites the card itself. Every other ending — a newer request
+  // taking over, a run torn down — leaves live-looking buttons on a request
+  // nothing is waiting for, which is the state that produced "expired" clicks.
+  if (outcome !== 'confirm' && outcome !== 'cancel') {
+    await sent
+      ?.edit({
+        content: `🚫 **${label}** was replaced by a newer request and is no longer waiting.`,
+        components: [],
+      })
+      .catch(() => {});
+  }
+  return outcome;
 }
 
 export async function selfFix(
@@ -98,7 +129,9 @@ export async function selfFix(
 
   const outcome = await confirm({ instruction, invocation, state, model: devModel });
   if (outcome !== 'confirm') {
-    const why = outcome === 'cancel' ? 'you cancelled it' : 'the approval was superseded by a newer request';
+    const why =
+      { cancel: 'you cancelled it', superseded: 'a newer request took its place', aborted: 'the request was torn down before you answered' }[outcome] ||
+      'it was not approved';
     logFinish('aborted', { reason: why });
     return `🚫 Self-fix aborted — ${why}. Nothing was changed.`;
   }
