@@ -35,12 +35,13 @@ test('create_pr sends an approved development task to the remote sandbox', async
       startLog: recordLogs(lines),
       runSandbox: async (args) => {
         calls.push(args);
-        return { ok: true, summary: '✅ PR #7 opened.\nhttps://example.test/pr/7' };
+        return { ok: true, merged: false, pr: { number: 7, html_url: 'https://example.test/pr/7' }, summary: '✅ PR #7 opened.\nhttps://example.test/pr/7' };
       },
     },
   );
   assert.equal(lines[0], '[panda] run_dev start repo=oskip0906/other-project base=trunk model=openai/gpt-5.4-dev task="Add a health endpoint"');
-  assert.match(lines[1], /^\[panda\] run_dev finish outcome=merged/);
+  // An open PR is where /run_dev finishes — it never auto-merges.
+  assert.match(lines[1], /^\[panda\] run_dev finish outcome=pull-request-open .*pr=7/);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].repo, 'oskip0906/other-project');
   assert.equal(calls[0].base, 'trunk');

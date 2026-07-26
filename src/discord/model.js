@@ -33,6 +33,7 @@ export function writeEnvModel(config, model, key = 'OPENROUTER_MODEL') {
   }
 
   const file = path.join(config.projectRoot, '.env');
+  let tmp = null;
   try {
     const raw = fs.readFileSync(file, 'utf8');
     const lines = raw.split('\n');
@@ -47,12 +48,24 @@ export function writeEnvModel(config, model, key = 'OPENROUTER_MODEL') {
       lines[index] = `${key}=${value}`;
     }
     // Write via a temp file + rename so a crash mid-write can't leave Oscar
-    // with a truncated .env and a bot that won't boot.
-    const tmp = `${file}.tmp`;
+    // with a truncated .env and a bot that won't boot. The temp name is unique
+    // per write: a shared `.env.tmp` means two writers (two bot processes on one
+    // token both handling the same command, say) race, and the loser's rename
+    // fails with ENOENT after the winner has already moved that path away.
+    tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
     fs.writeFileSync(tmp, lines.join('\n'), { mode: 0o600 });
     fs.renameSync(tmp, file);
     return { ok: true };
   } catch (err) {
+    // A rename that failed leaves the temp copy behind, and it holds the same
+    // secrets as .env — don't litter the project root with them.
+    if (tmp) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* nothing written, or already gone */
+      }
+    }
     return { ok: false, error: `Could not write .env: ${String(err.message || err).slice(0, 200)}` };
   }
 }

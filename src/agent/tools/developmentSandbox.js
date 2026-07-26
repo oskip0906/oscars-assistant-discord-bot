@@ -76,7 +76,11 @@ async function failedStep(gh, sandboxRepo, runId) {
   return null;
 }
 
-async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onPullRequest = () => {}, sandboxRepo, workflow, requestId }) {
+// waitForMerge is false for everything except self_fix. A development PR is
+// reviewed and merged by hand, so an open PR is that run's finished state —
+// polling on for a merge that needs a human would block the agent loop (and the
+// caller's Discord interaction token) for the full timeout after the work landed.
+async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onPullRequest = () => {}, sandboxRepo, workflow, requestId, waitForMerge = true }) {
   const [owner] = repo.split('/');
   const deadline = now() + timeoutMs;
   let pr = null;
@@ -90,6 +94,7 @@ async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onP
         await onPullRequest(pr);
       }
       if (pr.merged_at) return { ok: true, pr, merged: true };
+      if (!waitForMerge) return { ok: true, pr, merged: false };
       if (pr.state === 'closed') return { ok: false, pr, merged: false, detail: 'The pull request was closed without merging.' };
     }
     if (!pr) {
@@ -162,12 +167,16 @@ export async function runDevelopmentSandbox(
     sandboxRepo,
     workflow: config.developmentSandboxWorkflow,
     requestId,
+    waitForMerge: Boolean(autoMerge),
   });
   const url = waited.pr?.html_url ? `\n${waited.pr.html_url}` : '';
-  if (!waited.ok) return { ok: false, summary: `⚠️ ${waited.detail || 'Development sandbox failed.'}${url}`, pr: waited.pr };
+  if (!waited.ok) return { ok: false, merged: false, summary: `⚠️ ${waited.detail || 'Development sandbox failed.'}${url}`, pr: waited.pr };
   return {
     ok: true,
-    summary: `✅ Remote sandbox opened and merged PR #${waited.pr.number} into \`${targetBase}\`.\n${waited.pr.html_url}`,
+    merged: waited.merged,
+    summary: waited.merged
+      ? `✅ Remote sandbox opened and merged PR #${waited.pr.number} into \`${targetBase}\`.\n${waited.pr.html_url}`
+      : `✅ Remote sandbox opened PR #${waited.pr.number} against \`${targetBase}\`. Review and merge it when you're happy with it.\n${waited.pr.html_url}`,
     pr: waited.pr,
   };
 }

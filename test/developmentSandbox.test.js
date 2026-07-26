@@ -45,6 +45,49 @@ test('dispatches a remote workflow and waits until its self-fix PR is merged', a
   assert.deepEqual(observed, [42]);
 });
 
+test('a development run returns as soon as its pull request is open', async () => {
+  let polls = 0;
+  const gh = async (method, endpoint) => {
+    if (endpoint === '/repos/oskip0906/portfolio') return { status: 200, json: { default_branch: 'main' } };
+    if (method === 'POST') return { status: 204, json: {} };
+    if (endpoint.includes('/actions/workflows/')) return { status: 200, json: { workflow_runs: [] } };
+    polls++;
+    return { status: 200, json: [{ number: 9, state: 'open', merged_at: null, html_url: 'https://example.test/pr/9' }] };
+  };
+  const result = await runDevelopmentSandbox(
+    { repo: 'oskip0906/portfolio', instruction: 'Tidy the footer', model: 'openai/gpt-5.4-dev', autoMerge: false, config },
+    { gh, sleep: async () => {}, timeoutMs: 60_000 },
+  );
+  // Without this the tool blocks for the full timeout waiting on a merge that
+  // needs a human, long after the work it was asked for is done.
+  assert.equal(polls, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.merged, false);
+  assert.match(result.summary, /opened PR #9 against `main`/);
+  assert.match(result.summary, /Review and merge it/);
+});
+
+test('a self-fix still waits for the merge before reporting success', async () => {
+  let polls = 0;
+  const gh = async (method, endpoint) => {
+    if (endpoint === '/repos/oskip0906/oscars-assistant-discord-bot') return { status: 200, json: { default_branch: 'main' } };
+    if (method === 'POST') return { status: 204, json: {} };
+    if (endpoint.includes('/actions/workflows/')) return { status: 200, json: { workflow_runs: [] } };
+    polls++;
+    return {
+      status: 200,
+      json: [{ number: 9, state: 'open', merged_at: polls > 2 ? '2026-01-01T00:00:00Z' : null, html_url: 'https://example.test/pr/9' }],
+    };
+  };
+  const result = await runDevelopmentSandbox(
+    { repo: 'oskip0906/oscars-assistant-discord-bot', instruction: 'Fix the queue', model: 'openai/gpt-5.4-dev', autoMerge: true, selfFix: true, config },
+    { gh, sleep: async () => {}, timeoutMs: 60_000 },
+  );
+  assert.equal(polls, 3);
+  assert.equal(result.merged, true);
+  assert.match(result.summary, /opened and merged PR #9/);
+});
+
 test('reports a failed sandbox run instead of waiting for a pull request that never arrives', async () => {
   let requestId = '';
   const gh = async (method, endpoint, body) => {

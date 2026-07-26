@@ -67,6 +67,23 @@ test('setting the development model twice replaces its line instead of stacking'
   assert.deepEqual(devLines, ['OPENROUTER_DEV_MODEL=anthropic/claude-opus-5']);
 });
 
+test('two writers racing on the same .env do not fail each other', () => {
+  const config = scaffoldEnv();
+
+  // Two bot processes on one Discord token both receive the same command. With
+  // a shared .env.tmp the loser's rename hit ENOENT after the winner moved it.
+  const first = writeEnvModel(config, 'openai/gpt-5.4-dev', 'OPENROUTER_DEV_MODEL');
+  const second = writeEnvModel(config, 'openai/gpt-5.4-dev', 'OPENROUTER_DEV_MODEL');
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.deepEqual(
+    fs.readdirSync(config.projectRoot).filter((name) => name.endsWith('.tmp')),
+    [],
+    'no temp copy of .env may be left behind',
+  );
+});
+
 test('a model id that could smuggle extra env lines is refused', () => {
   const config = scaffoldEnv();
 

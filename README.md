@@ -203,7 +203,8 @@ parameters. Registered **per guild** on startup (instant availability).
 `/run_dev` is the direct development shortcut: give it an instruction and, optionally, choose
 an `owner/repo` target from repositories the configured GitHub token can write to. It shows the
 same approval buttons as `self_fix`, then runs the remote sandbox and opens a PR. It **never
-auto-merges**; review and merge the PR manually. With no repo it targets Panda’s configured
+auto-merges**; review and merge the PR manually, and the command finishes as soon as the PR is
+open rather than polling for a merge only you can do. With no repo it targets Panda’s configured
 sandbox repository. `/set_dev_model` has the same live OpenRouter autocomplete dropdown as
 `/switch_model`, but changes only the development-task model. It applies immediately **and**
 writes `OPENROUTER_DEV_MODEL` to `.env`, so the choice survives the restart that ends every
