@@ -1,9 +1,10 @@
 import { EmbedBuilder } from 'discord.js';
+import { randomEmbedColor } from './colors.js';
 
 // Egg-Man-style rich menu: bold category headers, inline-code command names.
 export function buildMenuEmbed(client, config) {
   return new EmbedBuilder()
-    .setColor(0xb57edc)
+    .setColor(randomEmbedColor())
     .setTitle('Hello my friend! 🐼')
     .setDescription(
       `Hi, I'm **${config.botName}** — Oscar's AI familiar, rebuilt fully from scratch. ` +
