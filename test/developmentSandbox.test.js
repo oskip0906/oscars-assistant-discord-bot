@@ -20,6 +20,7 @@ test('dispatches a remote workflow and waits until its self-fix PR is merged', a
     calls.push({ method, endpoint, body });
     if (endpoint === '/repos/oskip0906/oscars-assistant-discord-bot') return { status: 200, json: { default_branch: 'main' } };
     if (method === 'POST') return { status: 204, json: {} };
+    if (endpoint.includes('/actions/workflows/')) return { status: 200, json: { workflow_runs: [] } };
     pulls++;
     return { status: 200, json: [{ number: 42, state: 'open', merged_at: pulls > 1 ? '2026-01-01T00:00:00Z' : null, html_url: 'https://example.test/pr/42' }] };
   };
@@ -42,4 +43,55 @@ test('dispatches a remote workflow and waits until its self-fix PR is merged', a
   assert.equal(dispatch.body.inputs.commit_title, '🛠️ Self-fix: Fix the queue');
   assert.match(dispatch.body.inputs.branch, /^panda-dev-/);
   assert.deepEqual(observed, [42]);
+});
+
+test('reports a failed sandbox run instead of waiting for a pull request that never arrives', async () => {
+  let requestId = '';
+  const gh = async (method, endpoint, body) => {
+    if (endpoint === '/repos/oskip0906/portfolio') return { status: 200, json: { default_branch: 'main' } };
+    if (method === 'POST') {
+      requestId = body.inputs.request_id;
+      return { status: 204, json: {} };
+    }
+    if (endpoint.includes('/actions/workflows/')) {
+      return {
+        status: 200,
+        json: {
+          workflow_runs: [
+            { name: 'Development sandbox other', status: 'completed', conclusion: 'success', html_url: 'https://example.test/run/1' },
+            { name: `Development sandbox ${requestId}`, status: 'completed', conclusion: 'failure', html_url: 'https://example.test/run/2' },
+          ],
+        },
+      };
+    }
+    return { status: 200, json: [] };
+  };
+  const result = await runDevelopmentSandbox(
+    { repo: 'oskip0906/portfolio', instruction: 'Tidy the footer', model: 'openai/gpt-5.4-dev', config },
+    { gh, sleep: async () => {}, timeoutMs: 60_000 },
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.summary, /run failure before opening a pull request/);
+  assert.match(result.summary, /https:\/\/example\.test\/run\/2/);
+});
+
+test('keeps polling while the sandbox run is still in progress', async () => {
+  let polls = 0;
+  const gh = async (method, endpoint) => {
+    if (endpoint === '/repos/oskip0906/portfolio') return { status: 200, json: { default_branch: 'main' } };
+    if (method === 'POST') return { status: 204, json: {} };
+    if (endpoint.includes('/actions/workflows/')) {
+      polls++;
+      return { status: 200, json: { workflow_runs: [{ name: 'Development sandbox', status: 'in_progress', conclusion: null }] } };
+    }
+    return { status: 200, json: [] };
+  };
+  let clock = 0;
+  const result = await runDevelopmentSandbox(
+    { repo: 'oskip0906/portfolio', instruction: 'Tidy the footer', model: 'openai/gpt-5.4-dev', config },
+    { gh, sleep: async () => { clock += 5_000; }, now: () => clock, timeoutMs: 20_000 },
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.summary, /did not open a pull request before timing out/);
+  assert.equal(polls, 4);
 });

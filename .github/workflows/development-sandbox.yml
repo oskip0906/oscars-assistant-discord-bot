@@ -1,4 +1,5 @@
 name: Development sandbox
+run-name: Development sandbox ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
@@ -35,31 +36,70 @@ on:
         required: true
         type: boolean
 
-# The workflow itself only reads this control repo. PANDA_DEV_GITHUB_TOKEN is a
-# repository secret with access to the target repos; it is never exposed to the
-# OpenRouter request or checked out target files.
+# Development happens in a separate checkout of the target repository, never in
+# this one. PANDA_DEV_GITHUB_TOKEN is a repository secret with access to the
+# target repos; it is never exposed to the OpenRouter request or to the checked
+# out target files. When that secret is missing the job falls back to the
+# built-in GITHUB_TOKEN, which can only reach this repository — hence the write
+# permissions below.
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   develop:
     name: ${{ inputs.request_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 18
+    env:
+      # Empty secrets are falsy in expressions, so this resolves to the built-in
+      # token whenever the PAT has not been configured.
+      SANDBOX_TOKEN: ${{ secrets.PANDA_DEV_GITHUB_TOKEN || github.token }}
+      GH_TOKEN: ${{ secrets.PANDA_DEV_GITHUB_TOKEN || github.token }}
+      HAS_SANDBOX_PAT: ${{ secrets.PANDA_DEV_GITHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # Fail here, before the model call, when the job could never open a pull
+      # request. A late failure wastes an OpenRouter request and leaves Panda
+      # waiting for a PR that is never coming.
+      - name: Check sandbox credentials
+        env:
+          TARGET_REPO: ${{ inputs.target_repo }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ "$HAS_SANDBOX_PAT" != "true" ]; then
+            if [ "$TARGET_REPO" != "$GITHUB_REPOSITORY" ]; then
+              echo "::error::PANDA_DEV_GITHUB_TOKEN is not set in $GITHUB_REPOSITORY. Add it as a repository Actions secret (fine-grained PAT with Contents and Pull requests read/write on $TARGET_REPO) to develop repositories other than this one."
+              exit 1
+            fi
+            echo "::warning::PANDA_DEV_GITHUB_TOKEN is not set; using the built-in GITHUB_TOKEN. Pull requests it opens or merges do not trigger other workflows."
+          fi
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::error::OPENROUTER_API_KEY is not set as a repository Actions secret in $GITHUB_REPOSITORY."
+            exit 1
+          fi
+          if ! gh api "repos/$TARGET_REPO" --jq .full_name > /dev/null; then
+            echo "::error::The sandbox token cannot read $TARGET_REPO. Check that the repository exists and that the token grants it Contents and Pull requests access."
+            exit 1
+          fi
+          if [ "$(gh api "repos/$TARGET_REPO" --jq '.permissions.push // "unknown"')" = "false" ]; then
+            echo "::error::The sandbox token has read-only access to $TARGET_REPO and cannot push the development branch."
+            exit 1
+          fi
       - name: Create isolated target checkout
         env:
-          GH_TOKEN: ${{ secrets.PANDA_DEV_GITHUB_TOKEN }}
           TARGET_REPO: ${{ inputs.target_repo }}
           BASE: ${{ inputs.base }}
-        run: gh repo clone "$TARGET_REPO" target -- --branch "$BASE" --single-branch
+        run: |
+          # The helper reads the token from the environment at push time, so it
+          # is never written into .git/config or into a command line.
+          git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$SANDBOX_TOKEN"; }; f'
+          git clone --single-branch --branch "$BASE" "https://github.com/$TARGET_REPO.git" target
       - name: Develop, verify, and open pull request
         env:
-          GH_TOKEN: ${{ secrets.PANDA_DEV_GITHUB_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TARGET_REPO: ${{ inputs.target_repo }}
           BASE: ${{ inputs.base }}

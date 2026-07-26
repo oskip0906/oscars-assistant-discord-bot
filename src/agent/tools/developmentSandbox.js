@@ -50,7 +50,19 @@ async function defaultBranch(gh, repo) {
   return res.status === 200 ? res.json?.default_branch || 'main' : null;
 }
 
-async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onPullRequest = () => {} }) {
+// The workflow names its run after the request id, so a run that dies before it
+// can open a PR (a missing secret, a rejected push) is reported in seconds
+// instead of stalling the caller for the full timeout.
+async function failedRun(gh, sandboxRepo, workflow, requestId) {
+  const result = await gh('GET', `/repos/${sandboxRepo}/actions/workflows/${encodeURIComponent(workflow)}/runs?event=workflow_dispatch&per_page=20`);
+  if (result.status !== 200) return null;
+  const run = (result.json?.workflow_runs || []).find((candidate) =>
+    [candidate?.name, candidate?.display_title].some((value) => String(value || '').includes(requestId)),
+  );
+  return run && run.status === 'completed' && run.conclusion !== 'success' ? run : null;
+}
+
+async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onPullRequest = () => {}, sandboxRepo, workflow, requestId }) {
   const [owner] = repo.split('/');
   const deadline = now() + timeoutMs;
   let pr = null;
@@ -65,6 +77,12 @@ async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onP
       }
       if (pr.merged_at) return { ok: true, pr, merged: true };
       if (pr.state === 'closed') return { ok: false, pr, merged: false, detail: 'The pull request was closed without merging.' };
+    }
+    if (!pr) {
+      const failed = await failedRun(gh, sandboxRepo, workflow, requestId);
+      if (failed) {
+        return { ok: false, detail: `The remote development sandbox run ${failed.conclusion} before opening a pull request.\n${failed.html_url || ''}`.trim() };
+      }
     }
     await sleep(POLL_MS);
   }
@@ -109,7 +127,18 @@ export async function runDevelopmentSandbox(
     return { ok: false, summary: `❌ Could not start the remote development sandbox (HTTP ${dispatch.status}): ${responseText(dispatch.json)}` };
   }
 
-  const waited = await waitForPullRequest({ gh, repo: targetRepo, branch, timeoutMs, sleep, now, onPullRequest });
+  const waited = await waitForPullRequest({
+    gh,
+    repo: targetRepo,
+    branch,
+    timeoutMs,
+    sleep,
+    now,
+    onPullRequest,
+    sandboxRepo,
+    workflow: config.developmentSandboxWorkflow,
+    requestId,
+  });
   const url = waited.pr?.html_url ? `\n${waited.pr.html_url}` : '';
   if (!waited.ok) return { ok: false, summary: `⚠️ ${waited.detail || 'Development sandbox failed.'}${url}`, pr: waited.pr };
   return {

@@ -118,8 +118,14 @@ secrets** there:
 
 | Secret | Value |
 |---|---|
-| `OPENROUTER_API_KEY` | the key for the custom development model |
+| `OPENROUTER_API_KEY` | the key for the custom development model — **required** |
 | `PANDA_DEV_GITHUB_TOKEN` | a fine-grained PAT with **Contents: read/write** and **Pull requests: read/write** on every repo Panda may change |
+
+Without `PANDA_DEV_GITHUB_TOKEN` the workflow falls back to the built-in `GITHUB_TOKEN`, which
+reaches **only the repository the workflow runs in** — enough for self-fix, but pull requests it
+opens or merges do not trigger other workflows (an auto-merged self-fix will not rebuild the
+Docker image). Developing any other repository fails immediately with an error naming the missing
+secret, rather than after the model call.
 
 Set these bot environment values (the first usually matches Panda’s own repo):
 
@@ -135,8 +141,14 @@ it can dispatch and observe the workflow. `PANDA_DEV_GITHUB_TOKEN` needs access 
 target repo because the sandbox uses it only to clone, push its short-lived branch, and open
 the PR.
 Enable **Allow auto-merge** in that repository’s GitHub settings; branch protection can still
-require checks/reviews, and Panda will wait until GitHub reports the PR merged. For other repos,
+require checks/reviews, and Panda will wait until GitHub reports the PR merged. If auto-merge
+cannot be enabled the pull request still stands and waits for a manual merge. For other repos,
 Panda opens the PR and waits for your normal review/merge process instead of auto-merging.
+
+Before spending an OpenRouter request the workflow checks its own credentials and that the token
+can push to the target repo, so misconfiguration fails in seconds with a readable error. Panda
+watches the run as well as the pull request: if the run fails before opening one, it reports the
+conclusion and a link to the run instead of waiting out the 20-minute timeout.
 
 ### Start scripts
 
