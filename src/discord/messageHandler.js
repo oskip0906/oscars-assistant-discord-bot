@@ -110,12 +110,15 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         // The messages before the ping, always. `before` anchors on the trigger
         // itself, so this is the run-up to being addressed rather than "the last
         // ten messages", which on a busy channel is a different set entirely.
+        // The bot's own messages are excluded: seeing its own outputs in the
+        // history context leaks past replies into future prompts and can cause
+        // the model to treat its own words as instructions.
         const batchIds = new Set(messages.map((m) => m.id));
         let historyParts = [];
         try {
           const fetched = (await anchor.channel.messages?.fetch({ limit: HISTORY_LIMIT, before: messages[0].id })) ?? new Map();
           historyParts = [...fetched.values()]
-            .filter((m) => !batchIds.has(m.id))
+            .filter((m) => !batchIds.has(m.id) && m.author.id !== client.user.id)
             .reverse() // Discord returns newest-first; the stack wants oldest-first
             .map((m) => formatEnvelope(m));
         } catch (err) {
@@ -142,13 +145,13 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         const combined = [
           ...(historyParts.length
             ? [
-                `[HISTORY CONTEXT — the ${historyParts.length} message(s) before you were pinged, oldest first. Background only: do NOT reply to these, they are already said and done.]`,
+                `[HISTORY CONTEXT — the ${historyParts.length} message(s) before you were pinged, oldest first. This is background only and less important than the prompt below: do NOT reply to these, they are already said and done.]`,
                 ...historyParts,
                 '[END HISTORY CONTEXT]',
                 '',
               ]
             : []),
-          `[RESPOND TO THIS — ${triggerName} pinged you${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. Answer what is actually said here.]`,
+          `[RESPOND TO THIS — ${triggerName} pinged you${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This is your actual task. Answer what is actually said here.]`,
           turn,
         ].join('\n');
 
