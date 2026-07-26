@@ -66,6 +66,19 @@
 - `/usage` — Show how much money Panda has spent
 - `/model` — Show which AI model Panda is running on
 
+## The development sandbox
+
+`self_fix` and `/run_dev` never edit the running bot. They dispatch
+`.github/workflows/development-sandbox.yml`, which clones the target repository into a throwaway
+Actions runner and hands it to an **agent loop**: the model is given the file list and the tools
+`list_files`, `read_file`, `write_file`, and `delete_file`, and decides for itself what to open and
+what to change. It reads before it writes, and calls `finish` when the edit is done — a `finish`
+with nothing written is refused and it is told to do the work.
+
+The run then verifies its own change (`node --check`, `npm ci`, `npm test`), commits, pushes a
+`panda-dev-*` branch, and opens a PR. Every tool call is logged in the Actions run, so the PR
+comes with a record of exactly which files were read and written.
+
 ## CI/CD and secrets
 
 Every push to `main` builds a **Docker** image and publishes it to **Docker Hub** via **GitHub Actions** (`.github/workflows/docker.yml`). The full stack (bot + SearXNG) runs from `docker-compose.deploy.yml`.

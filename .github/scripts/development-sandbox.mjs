@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 // From the sandbox repository's own checkout, not the target's — this script and
 // the module are versioned together.
-import { buildSnapshot, FORBIDDEN as forbidden } from '../../src/agent/tools/repoSnapshot.js';
+import { runRepoAgent } from '../../src/agent/tools/repoAgent.js';
 
 const root = path.resolve(process.argv[2] || 'target');
 const env = process.env;
@@ -26,26 +26,6 @@ function trackedFiles() {
     .filter(Boolean);
 }
 
-// Models wrap their JSON in fences or a sentence often enough that a strict
-// parse throws away otherwise usable edit plans.
-function parseJson(content) {
-  const raw = String(content || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const start = raw.indexOf('{');
-    const end = raw.lastIndexOf('}');
-    if (start !== -1 && end > start) {
-      try {
-        return JSON.parse(raw.slice(start, end + 1));
-      } catch {
-        /* fall through to the shared error below */
-      }
-    }
-    throw new Error(`The development model did not return the required JSON edit plan. It replied:\n${raw.slice(0, 1000)}`);
-  }
-}
-
 // Some OpenRouter routes return content as an array of parts rather than a string.
 function messageContent(message) {
   if (typeof message?.content === 'string') return message.content;
@@ -53,16 +33,9 @@ function messageContent(message) {
   return '';
 }
 
-const SYSTEM_PROMPT = [
-  'You are an autonomous software engineer working in an isolated CI checkout.',
-  'Return only valid JSON with this shape: {"summary":"short summary", "description":"detailed explanation", "edits":[{"path":"relative/path", "content":"complete file contents or null to delete"}]}.',
-  'Make the smallest correct change for the approved task. Include complete contents for every changed file.',
-  'Never access or modify secrets, .env files, data, node_modules, .git, or .github. Do not make unrelated changes.',
-  'Describing the change is not doing it: an answer with an empty edits array ships nothing.',
-  'repository_files is the whole file, never an excerpt. omitted_files were left out of the snapshot — do not edit those blind; if the task truly needs one, return edits:[] and name it.',
-].join('\n');
-
-async function completion(messages) {
+// One turn of the agent loop. The model decides what to read and what to write;
+// this only carries the conversation to OpenRouter and back.
+async function callModel(messages, tools) {
   let response;
   try {
     response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -74,81 +47,16 @@ async function completion(messages) {
         'HTTP-Referer': `https://github.com/${env.TARGET_REPO}`,
         'X-Title': 'panda-bot-development-sandbox',
       },
-      body: JSON.stringify({ model: env.MODEL, temperature: 0.1, messages }),
+      body: JSON.stringify({ model: env.MODEL, temperature: 0.1, messages, tools, tool_choice: 'auto' }),
     });
   } catch (error) {
     throw new Error(`OpenRouter request failed: ${error.name === 'TimeoutError' ? `no response within ${MODEL_TIMEOUT_MS / 60_000} minutes` : error.message}`);
   }
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.error) throw new Error(`OpenRouter request failed: ${data.error?.message || `HTTP ${response.status}`}`);
-  const choice = data.choices?.[0];
-  if (!choice) throw new Error(`The development model \`${env.MODEL}\` returned no completion. OpenRouter replied: ${JSON.stringify(data).slice(0, 500)}`);
-  return messageContent(choice.message);
-}
-
-function hasEdits(plan) {
-  return Array.isArray(plan?.edits) && plan.edits.length > 0;
-}
-
-async function askModel(tracked) {
-  if (!env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not configured as a repository Actions secret.');
-  const { files, omitted } = buildSnapshot(root, tracked);
-  console.log(`::notice::Snapshot: ${files.length} file(s) in full${omitted.length ? `, ${omitted.length} omitted (${omitted.slice(0, 10).join(', ')}${omitted.length > 10 ? ', …' : ''})` : ''}.`);
-
-  const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: JSON.stringify({ task: env.INSTRUCTION, repository_files: files, omitted_files: omitted }) },
-  ];
-  const first = await completion(messages);
-  const plan = parseJson(first);
-  if (hasEdits(plan)) return { plan, omitted };
-
-  // A model that answers a change request with an explanation of the change has
-  // understood the task and simply not done it. Ask once more, with its own
-  // answer in front of it, before failing the run and making Oscar start over.
-  console.log('::notice::The model returned no edits; asking it once more to produce the file contents.');
-  messages.push({ role: 'assistant', content: first });
-  messages.push({
-    role: 'user',
-    content:
-      'That reply contained no edits, so nothing would change. If the files you named are in repository_files, reply again with the same JSON shape and the complete new contents of each one. Only keep edits empty if the task genuinely needs a file listed in omitted_files — then name that file.',
-  });
-  const retried = parseJson(await completion(messages));
-  return { plan: hasEdits(retried) ? retried : plan, omitted };
-}
-
-function validPath(file) {
-  return typeof file === 'string' && file.length <= 300 && !file.startsWith('/') && !file.includes('..') && !forbidden.test(file);
-}
-
-function applyEdits(plan, omitted = []) {
-  const edits = plan.edits;
-  if (!Array.isArray(edits) || !edits.length) {
-    throw new Error(
-      [
-        `The development model produced no safe edits, twice. It explained: ${plan.description || plan.summary || '(no explanation given)'}`,
-        omitted.length ? `Files left out of its snapshot: ${omitted.slice(0, 20).join(', ')}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-    );
-  }
-  const changed = [];
-  for (const edit of edits) {
-    if (!validPath(edit?.path) || (edit.content !== null && typeof edit.content !== 'string')) {
-      throw new Error(`Unsafe edit returned for ${String(edit?.path || '(unknown)')}.`);
-    }
-    const destination = path.resolve(root, edit.path);
-    if (!destination.startsWith(`${root}${path.sep}`)) throw new Error(`Path escapes checkout: ${edit.path}`);
-    if (edit.content === null) {
-      if (existsSync(destination)) rmSync(destination);
-    } else {
-      mkdirSync(path.dirname(destination), { recursive: true });
-      writeFileSync(destination, edit.content);
-    }
-    changed.push(edit.path);
-  }
-  return changed;
+  const message = data.choices?.[0]?.message;
+  if (!message) throw new Error(`The development model \`${env.MODEL}\` returned no completion. OpenRouter replied: ${JSON.stringify(data).slice(0, 500)}`);
+  return { content: messageContent(message), tool_calls: message.tool_calls };
 }
 
 function verify(changed) {
@@ -191,14 +99,19 @@ function detailedBody(plan, changed, checks) {
     '',
     '### Verification',
     ...checks.map((check) => `- ${check}`),
+    ...(plan.completed === false ? ['', '⚠️ The model hit its step limit before summarising; the edits it had written are included.'] : []),
     '',
-    `Model: \`${env.MODEL}\``,
+    `Model: \`${env.MODEL}\` (agent loop: it read and wrote files directly)`,
   ].join('\n');
 }
 
 const tracked = trackedFiles();
-const { plan, omitted } = await askModel(tracked);
-const changed = applyEdits(plan, omitted);
+if (!env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not configured as a repository Actions secret.');
+console.log(`::notice::Repository has ${tracked.length} tracked file(s). The model reads what it needs.`);
+
+const plan = await runRepoAgent({ instruction: env.INSTRUCTION, root, tracked, callModel });
+const changed = plan.changed;
+console.log(`::notice::${changed.length} file(s) changed: ${changed.join(', ')}`);
 const checks = verify(changed);
 const body = detailedBody(plan, changed, checks);
 // Kept outside the checkout so it can never be staged into the pull request.
