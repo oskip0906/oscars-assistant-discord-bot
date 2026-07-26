@@ -144,7 +144,7 @@ export function createInteractionHandler({ client, config, contextStore, player,
         approval.approved ? '✅ Development task approved. Starting the remote sandbox…' : '🚫 Development task cancelled.',
       );
       if (!state.submitApproval(interaction.user.id, approval.id, approval.approved)) {
-        // The 30s approval window closed while Discord was being answered.
+        // A newer request superseded this one while Discord was being answered.
         await interaction.message?.edit({ content: '⌛ This development approval expired before it could start.', components: [] }).catch(() => {});
       }
       return;
@@ -188,11 +188,26 @@ export function createInteractionHandler({ client, config, contextStore, player,
 
     // Tools return plain strings that can exceed Discord's 2000-char cap and
     // may contain bare URLs. Chunk + suppress link embeds like the chat path.
+    // A deferred interaction token dies 15 minutes in. /self_fix and /run_dev now
+    // wait on Oscar's approval button with no deadline, and the sandbox run takes
+    // minutes more, so the answer routinely arrives after the token is gone —
+    // post it in the channel rather than dropping it.
     const sendToolResult = async (text) => {
       const parts = chunkMessage(suppressLinkEmbeds(String(text)));
-      await interaction.editReply({ content: parts[0], allowedMentions: { parse: [] } });
-      for (let i = 1; i < parts.length; i++) {
-        await interaction.followUp({ content: parts[i], allowedMentions: { parse: [] } });
+      const channel = interaction.channel;
+      let live = true;
+      for (const [index, part] of parts.entries()) {
+        const payload = { content: part, allowedMentions: { parse: [] } };
+        if (live) {
+          try {
+            await (index === 0 ? interaction.editReply(payload) : interaction.followUp(payload));
+            continue;
+          } catch (err) {
+            if (err?.code !== 10062 && err?.code !== 50027 && err?.code !== 10015) throw err;
+            live = false;
+          }
+        }
+        await channel?.send(payload).catch(() => {});
       }
     };
 

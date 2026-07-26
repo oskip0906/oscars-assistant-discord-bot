@@ -38,9 +38,15 @@ export class SelfFixState {
 
   // Enter 'awaiting_confirmation' and expose a nonce-bound button id plus a
   // result promise. The status flips synchronously before the UI is sent, so a
-  // click cannot race the setup. Only a matching owner click or timeout settles
-  // the request; plain text never approves source changes.
-  beginApproval({ userId, timeoutMs = 30_000, id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}` } = {}) {
+  // click cannot race the setup. Only a matching owner click settles it: there
+  // is no deadline, because a request that expired while Oscar was reading it
+  // meant re-typing the whole instruction. Plain text never approves source
+  // changes. timeoutMs is opt-in and used only by tests.
+  beginApproval({ userId, timeoutMs = null, id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}` } = {}) {
+    // A newer request supersedes the older one. Without a deadline an abandoned
+    // approval would otherwise sit in 'awaiting_confirmation' forever, holding a
+    // caller on a promise nothing left alive can resolve.
+    if (this.pending) this.pending.resolve('cancel');
     this.status = 'awaiting_confirmation';
     this.notified = new Set();
     const result = new Promise((resolve) => {
@@ -51,8 +57,10 @@ export class SelfFixState {
         if (this.status === 'awaiting_confirmation') this.status = 'idle';
         resolve(outcome);
       };
-      timer = setTimeout(() => finish('timeout'), timeoutMs);
-      if (timer.unref) timer.unref();
+      if (timeoutMs) {
+        timer = setTimeout(() => finish('timeout'), timeoutMs);
+        if (timer.unref) timer.unref();
+      }
       this.pending = { userId, id, resolve: finish };
     });
     return { id, result };

@@ -5,7 +5,6 @@ import { getAIConfig } from '../../configManager.js';
 import { startDevRunLog } from '../../devRunLog.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
 
-const APPROVAL_TIMEOUT_MS = 30 * 1000;
 export const DEVELOPMENT_APPROVAL_PREFIX = 'panda:development-approval:';
 
 export const defs = [
@@ -38,14 +37,14 @@ export function parseApprovalButtonId(customId) {
 // All development tasks use this Discord-native gate. There is intentionally
 // no text fallback: changing source must be an explicit button interaction.
 export async function requestDevelopmentApproval({ instruction, invocation, state, model, label = 'Self-fix' }) {
-  const approval = state.beginApproval({ userId: config.ownerId, timeoutMs: APPROVAL_TIMEOUT_MS });
+  const approval = state.beginApproval({ userId: config.ownerId });
   const prompt = {
     content: [
       `🛠️ **${label} requested**`,
       `OpenRouter development model: \`${model}\``,
       `Task: ${String(instruction).replace(/\s+/g, ' ').slice(0, 800)}`,
       '',
-      `This will run only in an isolated GitHub Actions sandbox and open a pull request. Approve within ${APPROVAL_TIMEOUT_MS / 1000}s.`,
+      'This will run only in an isolated GitHub Actions sandbox and open a pull request. The buttons wait for you — take as long as you need.',
     ].join('\n'),
     components: [
       {
@@ -99,7 +98,7 @@ export async function selfFix(
 
   const outcome = await confirm({ instruction, invocation, state, model: devModel });
   if (outcome !== 'confirm') {
-    const why = outcome === 'cancel' ? 'you cancelled it' : `it was not approved within ${APPROVAL_TIMEOUT_MS / 1000}s`;
+    const why = outcome === 'cancel' ? 'you cancelled it' : 'the approval was superseded by a newer request';
     logFinish('aborted', { reason: why });
     return `🚫 Self-fix aborted — ${why}. Nothing was changed.`;
   }
