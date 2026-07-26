@@ -127,7 +127,7 @@ async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onP
 // sandbox. The bot process merely asks, observes, and (for its own repository)
 // restarts after the PR actually merges.
 export async function runDevelopmentSandbox(
-  { repo, instruction, model, base, autoMerge = false, selfFix = false, config, onPullRequest },
+  { repo, instruction, model, base, autoMerge = false, selfFix = false, config, onPullRequest, commitTitle },
   { gh = githubRequest(config.githubPat), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, timeoutMs = DEFAULT_TIMEOUT_MS, store = devRunStore } = {},
 ) {
   const targetRepo = cleanRepo(repo);
@@ -141,7 +141,8 @@ export async function runDevelopmentSandbox(
 
   const requestId = randomUUID().replace(/-/g, '').slice(0, 16);
   const branch = `panda-dev-${requestId}`;
-  const commitTitle = selfFix ? selfFixCommitTitle(instruction) : `🛠️ Development: ${shortTask(instruction)}`;
+  // Use the provided commit title, or fall back to the automatic one.
+  const commitTitle_ = commitTitle || (selfFix ? selfFixCommitTitle(instruction) : `🛠️ Development: ${shortTask(instruction)}`);
   const dispatch = await gh('POST', `/repos/${sandboxRepo}/actions/workflows/${encodeURIComponent(config.developmentSandboxWorkflow)}/dispatches`, {
     ref: config.developmentSandboxRef,
     inputs: {
@@ -151,7 +152,7 @@ export async function runDevelopmentSandbox(
       model: String(model),
       request_id: requestId,
       branch,
-      commit_title: commitTitle,
+      commit_title: commitTitle_,
       auto_merge: String(Boolean(autoMerge)),
       self_fix: String(Boolean(selfFix)),
     },

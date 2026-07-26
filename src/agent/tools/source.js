@@ -6,6 +6,7 @@ import { getAIConfig } from '../../configManager.js';
 import { startDevRunLog } from '../../devRunLog.js';
 import { ApprovalCard } from '../../discord/approvalCard.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
+import { chatCompletion } from '../openrouter.js';
 
 export const approvalCard = new ApprovalCard(config.dataDir);
 
@@ -97,6 +98,32 @@ export async function requestDevelopmentApproval({ instruction, invocation, stat
   return outcome;
 }
 
+// Ask the model to turn a raw instruction into a clean commit title and
+// description. Runs on the configured development model so we never send a
+// commit message composed from a lower-capability model.
+async function generateCommitMessage(instruction, { apiKey, model }) {
+  const messages = [
+    {
+      role: 'system',
+      content: `You are a developer writing a git commit message. Given a change instruction, produce a JSON object with exactly two fields:
+
+- "title": a single-line commit title that starts with "Self-fix: " and concisely describes the change (≤72 chars).
+- "description": a detailed, well-written paragraph (or paragraphs) that explains what changed and why, in clear language suitable for a commit body.
+
+Return ONLY the JSON object, no other text.`,
+    },
+    { role: 'user', content: `Instruction: ${instruction}` },
+  ];
+  const msg = await chatCompletion({ apiKey, model, messages });
+  const text = msg?.content?.trim();
+  if (!text) throw new Error('empty response');
+  // Strip markdown fences if present.
+  const json = text.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '');
+  const parsed = JSON.parse(json);
+  if (typeof parsed.title !== 'string' || typeof parsed.description !== 'string') throw new Error('invalid shape');
+  return { title: parsed.title, description: parsed.description };
+}
+
 export async function selfFix(
   { instruction },
   invocation,
@@ -141,14 +168,34 @@ export async function selfFix(
     ?.send(`🛠️ Approval received — running in the remote GitHub Actions sandbox with \`${devModel}\`. I will wait for the PR to merge before restarting.`)
     .catch(() => {});
 
+  // Generate a proper commit message so the instruction never appears verbatim in the commit.
+  let commitMessage = null;
+  let sandboxInstruction = instruction;
+  let commitTitle = null;
+  try {
+    commitMessage = await generateCommitMessage(instruction, {
+      apiKey: config.openrouterApiKey,
+      model: devModel,
+    });
+    // Instruct the sandbox to use this exact title/description for its commit.
+    sandboxInstruction = [
+      `Use the following commit title: \`${commitMessage.title}\` and commit description:\n\n\`\`\`\n${commitMessage.description}\n\`\`\`\n\nThe actual code change to implement:\n${instruction}`,
+    ].join('\n');
+    commitTitle = commitMessage.title;
+  } catch (err) {
+    // Model call failed; fall back to the original instruction.
+    console.error('[self_fix] commit message generation failed, using raw instruction:', err.message);
+  }
+
   try {
     const result = await runSandbox({
       repo: config.developmentSandboxRepo,
-      instruction,
+      instruction: sandboxInstruction,
       model: devModel,
       autoMerge: true,
       selfFix: true,
       config,
+      commitTitle,
     });
     if (!result.ok) {
       logFinish('failed', { pr: result.pr?.number, url: result.pr?.html_url, detail: result.summary });
