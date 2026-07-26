@@ -134,6 +134,11 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         // guessed wrong, replying to the room instead of to the person.
         const trigger = messages[0].author;
         const triggerName = messages[0].member?.displayName || trigger.displayName || trigger.username;
+        // What is remembered is the turn itself. The history block is scaffolding
+        // for this one reply — storing it wrote ten already-stored messages back
+        // into memory every turn, until the transcript was mostly duplicates of
+        // itself and the real conversation had been evicted to make room.
+        const turn = parts.join('\n');
         const combined = [
           ...(historyParts.length
             ? [
@@ -143,8 +148,8 @@ export function createMessageHandler({ client, config, contextStore, player, pri
                 '',
               ]
             : []),
-          `[RESPOND TO THIS — ${triggerName} pinged you${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This is the turn you are answering.]`,
-          ...parts,
+          `[RESPOND TO THIS — ${triggerName} pinged you${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. Answer what is actually said here.]`,
+          turn,
         ].join('\n');
 
         const invocation = {
@@ -166,7 +171,7 @@ export function createMessageHandler({ client, config, contextStore, player, pri
 
         let replyText;
         try {
-          replyText = await runAgentImpl(invocation, combined);
+          replyText = await runAgentImpl(invocation, combined, turn);
         } catch (err) {
           console.error('[panda] agent failed:', err);
           replyText = `⚠️ Something broke on my end: ${String(err.message || err).slice(0, 250)}`;

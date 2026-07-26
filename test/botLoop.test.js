@@ -39,7 +39,7 @@ function makeMessage({ id, authorId, bot = false, content = '', mentionsBot = fa
   return msg;
 }
 
-function harness() {
+function harness({ remembered = [] } = {}) {
   const calls = [];
   const handler = createMessageHandler({
     client: { user: { id: BOT } },
@@ -47,12 +47,13 @@ function harness() {
     contextStore: { get: () => [], append: () => {}, clear: () => {} },
     player: null,
     privateMode: { isOn: () => false },
-    runAgentImpl: async (invocation, input) => {
-      calls.push({ input, author: invocation.message.author.id });
+    runAgentImpl: async (invocation, input, rememberContent) => {
+      calls.push({ input, remembered: rememberContent, author: invocation.message.author.id });
+      remembered.push(rememberContent);
       return 'REPLY';
     },
   });
-  return { handler, calls };
+  return { handler, calls, remembered };
 }
 
 // Drives one full trigger through the 3s collection window.
@@ -143,6 +144,27 @@ test('the ping and the history around it are labelled separately', async () => {
     assert.ok(input.indexOf('whats it about') > input.indexOf('[RESPOND TO THIS'));
     // Anchored on the trigger, not "the last ten messages in the channel".
     assert.deepEqual(ping._fetchOptions, { limit: 10, before: 'p1' });
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('the history block is scaffolding for one reply, never written to memory', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const { handler, calls } = harness();
+    const history = [makeMessage({ id: 'h1', authorId: 'A', content: 'anyone seen Klaus?' })];
+    const ping = makeMessage({ id: 'p1', authorId: 'A', content: 'panda whats it about', mentionsBot: true, history });
+
+    await turn(handler, ping);
+
+    // Storing it wrote ten already-stored messages back into memory every turn,
+    // until the transcript was mostly duplicates and the model was reading its
+    // own "do NOT reply to these" blocks as prior turns.
+    assert.match(calls[0].input, /HISTORY CONTEXT/, 'the model still gets it for this reply');
+    assert.doesNotMatch(calls[0].remembered, /HISTORY CONTEXT/, 'memory keeps only the turn');
+    assert.doesNotMatch(calls[0].remembered, /anyone seen Klaus/);
+    assert.match(calls[0].remembered, /whats it about/);
   } finally {
     mock.timers.reset();
   }
