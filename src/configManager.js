@@ -5,9 +5,11 @@ import { config } from './config.js';
 //   - 'development'  — the model used for source-editing tasks (self_fix).
 //
 // The selection is seeded from config.js (which reads .env) and can be changed
-// at runtime via the setters below (e.g. the /set_dev_model slash command). It
-// is deliberately in-memory only, mirroring selfFixState: a restart re-seeds
-// from config, so a bad override can never persist across a reboot.
+// at runtime via the setters below. The setters only move the live value; the
+// /set_dev_model command additionally writes OPENROUTER_DEV_MODEL back to .env,
+// because self_fix ends in a restart and a development model that reset on every
+// reboot would silently send the next run to the default instead of the choice
+// Oscar made.
 const state = {
   conversationModel: config.defaultModelName,
   developmentModel: config.developmentModelName,

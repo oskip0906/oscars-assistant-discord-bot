@@ -45,6 +45,28 @@ test('a .env with no model line gets one appended', () => {
   assert.deepEqual(lines, ['DISCORD_TOKEN=super-secret', 'OPENROUTER_MODEL=openai/gpt-5']);
 });
 
+test('the development model is persisted under its own key, leaving the chat model alone', () => {
+  const config = scaffoldEnv();
+
+  const result = writeEnvModel(config, 'openai/gpt-5.4-dev', 'OPENROUTER_DEV_MODEL');
+
+  assert.equal(result.ok, true);
+  const lines = envLines(config);
+  // self_fix restarts the bot, so this line is what makes the choice survive.
+  assert.ok(lines.includes('OPENROUTER_DEV_MODEL=openai/gpt-5.4-dev'));
+  assert.ok(lines.includes('OPENROUTER_MODEL=google/gemini-2.5-flash'));
+});
+
+test('setting the development model twice replaces its line instead of stacking', () => {
+  const config = scaffoldEnv();
+
+  writeEnvModel(config, 'openai/gpt-5.4-dev', 'OPENROUTER_DEV_MODEL');
+  writeEnvModel(config, 'anthropic/claude-opus-5', 'OPENROUTER_DEV_MODEL');
+
+  const devLines = envLines(config).filter((line) => line.startsWith('OPENROUTER_DEV_MODEL='));
+  assert.deepEqual(devLines, ['OPENROUTER_DEV_MODEL=anthropic/claude-opus-5']);
+});
+
 test('a model id that could smuggle extra env lines is refused', () => {
   const config = scaffoldEnv();
 

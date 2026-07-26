@@ -205,4 +205,7 @@ an `owner/repo` target from repositories the configured GitHub token can write t
 same approval buttons as `self_fix`, then runs the remote sandbox and opens a PR. It **never
 auto-merges**; review and merge the PR manually. With no repo it targets Panda’s configured
 sandbox repository. `/set_dev_model` has the same live OpenRouter autocomplete dropdown as
-`/switch_model`, but changes only the development-task model.
+`/switch_model`, but changes only the development-task model. It applies immediately **and**
+writes `OPENROUTER_DEV_MODEL` to `.env`, so the choice survives the restart that ends every
+self-fix — no restart needed to use it. Unset, the development model falls back to whatever
+`OPENROUTER_MODEL` is running.

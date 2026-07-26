@@ -25,11 +25,16 @@ export const config = {
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
   model: process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
   // Dual model configuration: conversation vs. development. configManager seeds
-  // its mutable, in-memory selection from these and lets Oscar override the dev
-  // model at runtime via /set_dev_model.
+  // its selection from these; /set_dev_model overrides the development one and
+  // writes OPENROUTER_DEV_MODEL back here so the choice survives a restart.
+  //
+  // Both fall back to the model already running rather than to a placeholder id:
+  // a fallback OpenRouter does not actually serve fails the whole sandbox run at
+  // the model call, minutes after the request looked accepted.
   defaultModelName:
-    process.env.OPENROUTER_DEFAULT_MODEL || process.env.OPENROUTER_MODEL || 'google/gemini-1.5-flash-openrouter',
-  developmentModelName: process.env.OPENROUTER_DEV_MODEL || 'mistralai/mistral-7b-instruct-v0.1-openrouter',
+    process.env.OPENROUTER_DEFAULT_MODEL || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
+  developmentModelName:
+    process.env.OPENROUTER_DEV_MODEL || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
   ownerId: OWNER_ID,
   githubPat: process.env.GITHUB_PAT || '',
   vaultRepo: process.env.VAULT_REPO || 'oskip0906/oskip-vault',
