@@ -1,4 +1,5 @@
 import { EmbedBuilder } from 'discord.js';
+import { randomEmbedColor } from './colors.js';
 
 // Live usage straight from OpenRouter — no local tracking. The /key endpoint
 // reports spend for exactly the API key the bot runs on (shown as Panda's
@@ -19,7 +20,7 @@ export async function buildUsageEmbed(client, config) {
   const key = await fetchJson('https://openrouter.ai/api/v1/key', config);
 
   return new EmbedBuilder()
-    .setColor(0xb57edc)
+    .setColor(randomEmbedColor())
     .setTitle('💸 Usage & Spend')
     .setThumbnail(client.user.displayAvatarURL({ size: 256 }))
     .addFields({

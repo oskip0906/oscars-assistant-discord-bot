@@ -1,6 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
+import { randomEmbedColor } from '../discord/colors.js';
 
-const VIOLET = 0xb57edc;
 const num = (n) => Number(n || 0).toLocaleString('en-US');
 const cap = (s) => (s ? String(s).charAt(0).toUpperCase() + String(s).slice(1) : 'Unknown');
 const trunc = (s, n = 58) => {
@@ -25,7 +25,7 @@ export function nowPlayingEmbed(queue) {
   const bar = queue.node.createProgressBar({ length: 16, timecodes: true }) || '';
 
   const embed = new EmbedBuilder()
-    .setColor(VIOLET)
+    .setColor(randomEmbedColor())
     .setAuthor({ name: paused ? '⏸️ Paused' : '🎶 Now Playing' })
     .setTitle(trunc(t.title))
     .setDescription(`by **${t.author}**${bar ? `\n\n${bar}` : ''}\n\n🔗 ${t.url}`)
@@ -50,7 +50,7 @@ export function nowPlayingEmbed(queue) {
 // "Added to Queue" confirmation card for a newly-queued track.
 export function addedEmbed(track, position) {
   const embed = new EmbedBuilder()
-    .setColor(VIOLET)
+    .setColor(randomEmbedColor())
     .setAuthor({ name: '➕ Added to Queue' })
     .setTitle(trunc(track.title))
     .setDescription(`by **${track.author}**\n\n🔗 ${track.url}`)
@@ -81,7 +81,7 @@ export function queueEmbed(queue) {
     : '';
 
   const embed = new EmbedBuilder()
-    .setColor(VIOLET)
+    .setColor(randomEmbedColor())
     .setTitle('🎶 Queue')
     .setDescription(nowLine + (listed.length ? `**Up Next**\n${listed.join('\n')}` : '_Nothing queued — add more with `/play`._'))
     .setFooter({

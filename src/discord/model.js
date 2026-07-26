@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EmbedBuilder } from 'discord.js';
+import { randomEmbedColor } from './colors.js';
 
 // The model the RUNNING process uses is config.model (loaded from .env at
 // startup). Re-read .env live so we can flag an edited-but-not-applied value.
@@ -150,7 +151,7 @@ export function buildModelEmbed(client, config) {
   const pendingChange = envModel && envModel !== config.model;
 
   return new EmbedBuilder()
-    .setColor(0xb57edc)
+    .setColor(randomEmbedColor())
     .setTitle('🧠 Model')
     .setThumbnail(client.user.displayAvatarURL({ size: 256 }))
     .addFields({
