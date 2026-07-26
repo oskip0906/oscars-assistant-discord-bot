@@ -2,7 +2,6 @@ import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
 import { config, validateConfig } from './config.js';
 import { ContextStore } from './agent/contextStore.js';
 import { PrivateMode } from './privateMode.js';
-import { ToggledResponses } from './toggledResponses.js';
 import { createPlayer } from './music/player.js';
 import { createMessageHandler } from './discord/messageHandler.js';
 import { commandDefs, createInteractionHandler } from './discord/commands.js';
@@ -26,7 +25,6 @@ async function boot(intents) {
   const contextStore = new ContextStore(config.contextDir);
   const privateMode = new PrivateMode(config.dataDir);
   if (privateMode.isOn()) console.log('[panda] Private mode is ON (restored from flag file)');
-  const toggledResponses = new ToggledResponses(config.dataDir);
 
   let player = null;
   try {
@@ -69,8 +67,8 @@ async function boot(intents) {
   client.on(Events.GuildCreate, (guild) => {
     guild.commands.set(commandDefs).catch(() => {});
   });
-  client.on(Events.MessageCreate, createMessageHandler({ client, config, contextStore, player, privateMode, toggledResponses }));
-  client.on(Events.InteractionCreate, createInteractionHandler({ client, config, contextStore, player, privateMode, toggledResponses }));
+  client.on(Events.MessageCreate, createMessageHandler({ client, config, contextStore, player, privateMode }));
+  client.on(Events.InteractionCreate, createInteractionHandler({ client, config, contextStore, player, privateMode }));
   client.on(Events.Error, (err) => console.error('[panda] client error:', err));
 
   try {

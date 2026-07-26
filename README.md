@@ -58,7 +58,6 @@
 - `/set_model <model>` — Switch Panda to another OpenRouter model and restart
 - `/set_rule <rule>` — Set a rule that Panda always follows
 - `/private on|off|status` — Turn private mode on, off, or check status
-- `/toggle_response <user_id>` — Toggle whether Panda responds to a specific user
 - `/github` — Call the GitHub API (writes/private repos are owner only)
 
 ### 📖 Info

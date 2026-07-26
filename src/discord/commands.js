@@ -81,12 +81,6 @@ export const commandDefs = [
         .setDescription('Target owner/repo; defaults to Panda’s own repository'),
     ),
   new SlashCommandBuilder()
-    .setName('toggle_response')
-    .setDescription('Toggle whether Panda responds to a given user id (owner only)')
-    .addStringOption((o) =>
-      o.setName('user_id').setDescription('The Discord user id to toggle responses for').setRequired(true),
-    ),
-  new SlashCommandBuilder()
     .setName('private')
     .setDescription('Private mode: Panda only responds to Oscar (owner only)')
     .addStringOption((o) =>
@@ -124,7 +118,7 @@ async function answerApproval(interaction, content) {
   }
 }
 
-export function createInteractionHandler({ client, config, contextStore, player, privateMode, toggledResponses, state = selfFixState }) {
+export function createInteractionHandler({ client, config, contextStore, player, privateMode, state = selfFixState }) {
   return async (interaction) => {
     if (interaction.isButton?.()) {
       const approval = parseApprovalButtonId(interaction.customId);
@@ -261,27 +255,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
               ? '🔒 Private mode **ON** — I’ll only respond to you now; everyone else gets turned away.'
               : '🔓 Private mode **OFF** — I’m back to talking with everyone.',
           flags: MessageFlags.Ephemeral,
-        });
-      }
-
-      if (name === 'toggle_response') {
-        if (!isOwner) {
-          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
-        }
-        const userId = interaction.options.getString('user_id', true).trim();
-        if (!/^\d{5,25}$/.test(userId)) {
-          return await interaction.reply({
-            content: '⚠️ `user_id` must be a numeric Discord user id.',
-            flags: MessageFlags.Ephemeral,
-          });
-        }
-        const nowIgnored = toggledResponses.toggle(userId);
-        return await interaction.reply({
-          content: nowIgnored
-            ? `🔇 I’ll now **ignore** messages from <@${userId}> (id \`${userId}\`).`
-            : `🔊 I’ll **respond** to <@${userId}> (id \`${userId}\`) again.`,
-          flags: MessageFlags.Ephemeral,
-          allowedMentions: { parse: [] },
         });
       }
 
