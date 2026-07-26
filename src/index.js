@@ -6,6 +6,10 @@ import { ToggledResponses } from './toggledResponses.js';
 import { createPlayer } from './music/player.js';
 import { createMessageHandler } from './discord/messageHandler.js';
 import { commandDefs, createInteractionHandler } from './discord/commands.js';
+import { approvalCard } from './agent/tools/source.js';
+import { devRunStore, githubRequest } from './agent/tools/developmentSandbox.js';
+import { resolveInterruptedRun } from './devRunStore.js';
+import { dmOwner } from './discord/notify.js';
 
 validateConfig();
 
@@ -46,6 +50,20 @@ async function boot(intents) {
       }
     }
     console.log(`[panda] Registered ${commandDefs.length} slash commands in ${registered} guild(s)`);
+
+    // Nothing from before the restart is left dangling: an approval card that
+    // can no longer be honoured loses its buttons, and a development run that
+    // was still in flight gets the finish line and the DM its process never
+    // lived to send. A self-fix ends in a restart, so this is the normal path
+    // for reporting one — not an edge case.
+    await approvalCard.retireStale(readyClient).catch(() => {});
+    await resolveInterruptedRun({
+      store: devRunStore,
+      gh: githubRequest(config.githubPat),
+      client: readyClient,
+      ownerId: config.ownerId,
+      notify: dmOwner,
+    }).catch((err) => console.error('[panda] could not resolve the interrupted run:', err.message));
   });
 
   client.on(Events.GuildCreate, (guild) => {

@@ -87,8 +87,9 @@ test('a newer request supersedes an approval left unanswered', async () => {
   const second = s.beginApproval({ userId: 'OWNER', id: 'two' });
 
   // Without this the abandoned request would hold the state forever, and its
-  // caller would wait on a promise nothing left alive could resolve.
-  assert.equal(await first.result, 'cancel');
+  // caller would wait on a promise nothing left alive could resolve. It settles
+  // as 'superseded', distinct from Oscar pressing Cancel.
+  assert.equal(await first.result, 'superseded');
   assert.equal(s.matchesPendingApproval('OWNER', 'one'), false);
   assert.equal(s.matchesPendingApproval('OWNER', 'two'), true);
 

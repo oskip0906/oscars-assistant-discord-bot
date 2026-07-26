@@ -172,6 +172,14 @@ watches the run as well as the pull request: if the run fails before opening one
 conclusion, the step it stopped at, and a link to the run instead of waiting out the 20-minute
 timeout.
 
+**Restarts do not swallow a run.** Approval state is in memory and a self-fix ends by restarting
+the bot, so the process that started a run is often not the one alive when it lands. Two records
+under `data/` close that gap: the pending approval card is retired on the next boot (buttons
+removed, reason given) instead of sitting there looking clickable, and an in-flight run is looked
+up on boot so a pull request that merged during the restart still gets its finish line and a DM.
+A click on a card from a previous boot says exactly that — nothing "expires", because nothing has
+a deadline.
+
 Every `self_fix` and `/run_dev` request also brackets itself in the bot's stdout log, so an
 approval that was never given and a run that died in the sandbox both leave a trace:
 
