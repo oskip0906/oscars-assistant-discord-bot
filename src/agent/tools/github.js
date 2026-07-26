@@ -45,7 +45,7 @@ export const defs = [
     function: {
       name: 'create_pr',
       description:
-        'OWNER ONLY. Request a source change on any permitted GitHub repository. Panda first presents Oscar with Discord approval buttons. After approval, the configured OpenRouter development model works only in an isolated GitHub Actions sandbox, verifies the change, and opens a pull request. It waits for a merge; auto-merge is enabled only for Panda’s own repository.',
+        'OWNER ONLY. Request a source change on any permitted GitHub repository. Panda first presents Oscar with Discord approval buttons. After approval, the configured OpenRouter development model works only in an isolated GitHub Actions sandbox, verifies the change, and opens a pull request. It returns as soon as the pull request is open — Oscar reviews and merges it himself. Only self_fix waits for a merge.',
       parameters: {
         type: 'object',
         properties: {
@@ -231,7 +231,7 @@ export async function createPr(
     });
     // /run_dev never auto-merges, so an open pull request is the successful
     // outcome here — only a run that produced no pull request at all failed.
-    const outcomeName = result.ok ? 'merged' : result.pr ? 'pull-request-open' : 'failed';
+    const outcomeName = result.merged ? 'merged' : result.pr ? 'pull-request-open' : 'failed';
     logFinish(outcomeName, { pr: result.pr?.number, url: result.pr?.html_url, detail: result.summary });
     return result.summary;
   } catch (err) {
