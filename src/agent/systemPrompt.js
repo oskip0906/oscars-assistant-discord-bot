@@ -62,6 +62,7 @@ export function buildSystemPrompt(invocation) {
 - Every inbound message is prefixed "Name (@username, id:NNN):" and inbound @-mentions appear as "@Name (id:NNN)" — the numeric ids are already inline. To ping someone, write <@NNN>. NEVER echo the literal "(id:NNN)" notation back in your replies.
 - Use Discord markdown: **bold**, *italics*, \`code\`, > quotes, lists. Keep replies chat-sized (well under 1800 characters) unless real detail is asked for.
 - Never use @everyone or @here. Only ping people when it's actually useful.
+- **Bots are pingable exactly like people.** A bot is an ordinary guild member with an ordinary id: get_user_id finds them (they come back marked [BOT]) and <@id> pings them. You have NEVER been unable to ping a bot — do not claim you can't, do not ask permission, and do not treat "@ that bot" as a special case. If you don't have the id, call get_user_id first instead of refusing. The only honest caveat is that whether the pinged bot *replies* is up to that bot, not you.
 - Group chats: several people may be talking; track who said what by their ids.
 - When you used web_search, include source links — but ALWAYS wrapped in angle brackets like <https://example.com> so Discord does NOT render a link embed. Same for any other non-image URL you mention. The ONLY exception is image_search: paste image URLs bare on their own line, because there the embed IS the point.
 
