@@ -21,10 +21,12 @@ export function readEnvModel(config) {
 // assignment and quietly rewrite a secret on the next boot.
 const SAFE_MODEL_ID = /^[A-Za-z0-9._\-/:]+$/;
 
-// Point OPENROUTER_MODEL at `model`, leaving the rest of .env byte-identical.
-// The running process keeps using the old model until it restarts — which is
-// exactly what /switch_model does next. Never throws.
-export function writeEnvModel(config, model) {
+// Point `key` (OPENROUTER_MODEL, or OPENROUTER_DEV_MODEL for /set_dev_model) at
+// `model`, leaving the rest of .env byte-identical. For the conversation model
+// the running process keeps using the old value until it restarts — which is
+// exactly what /switch_model does next; the development model is applied live
+// and persisted here only so a restart re-seeds the same choice. Never throws.
+export function writeEnvModel(config, model, key = 'OPENROUTER_MODEL') {
   const value = String(model ?? '').trim();
   if (!value || !SAFE_MODEL_ID.test(value)) {
     return { ok: false, error: `\`${value.slice(0, 80) || '(empty)'}\` is not a valid model id.` };
@@ -34,15 +36,15 @@ export function writeEnvModel(config, model) {
   try {
     const raw = fs.readFileSync(file, 'utf8');
     const lines = raw.split('\n');
-    const index = lines.findIndex((l) => l.trim().startsWith('OPENROUTER_MODEL='));
+    const index = lines.findIndex((l) => l.trim().startsWith(`${key}=`));
     if (index === -1) {
       // Keep a trailing newline if the file had one, rather than gluing the new
       // assignment onto the last line.
       if (lines[lines.length - 1] !== '') lines.push('');
-      lines[lines.length - 1] = `OPENROUTER_MODEL=${value}`;
+      lines[lines.length - 1] = `${key}=${value}`;
       lines.push('');
     } else {
-      lines[index] = `OPENROUTER_MODEL=${value}`;
+      lines[index] = `${key}=${value}`;
     }
     // Write via a temp file + rename so a crash mid-write can't leave Oscar
     // with a truncated .env and a bot that won't boot.

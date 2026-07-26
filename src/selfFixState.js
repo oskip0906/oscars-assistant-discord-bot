@@ -58,12 +58,20 @@ export class SelfFixState {
     return { id, result };
   }
 
+  // Non-consuming twin of submitApproval. Discord gives 3 seconds to answer a
+  // button click, and consuming the approval resumes the development run ahead
+  // of that answer — so the click is checked with this, answered, and only then
+  // submitted.
+  matchesPendingApproval(userId, id) {
+    if (this.status !== 'awaiting_confirmation' || !this.pending) return false;
+    if (this.pending.userId && this.pending.userId !== userId) return false;
+    return this.pending.id === id;
+  }
+
   // Consume one Discord approval button click. Returns false for old buttons,
   // other users, and any state other than the active approval.
   submitApproval(userId, id, approved) {
-    if (this.status !== 'awaiting_confirmation' || !this.pending) return false;
-    if (this.pending.userId && this.pending.userId !== userId) return false;
-    if (this.pending.id !== id) return false;
+    if (!this.matchesPendingApproval(userId, id)) return false;
     this.pending.resolve(approved ? 'confirm' : 'cancel');
     return true;
   }

@@ -1,7 +1,7 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { buildMenuEmbed } from './menu.js';
 import { buildUsageEmbed } from './usage.js';
-import { buildModelEmbed, switchModel, modelChoices } from './model.js';
+import { buildModelEmbed, switchModel, modelChoices, writeEnvModel } from './model.js';
 import { chunkMessage } from './chunk.js';
 import { suppressLinkEmbeds } from './messageHandler.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
@@ -105,22 +105,49 @@ export const commandDefs = [
     ),
 ].map((b) => b.toJSON());
 
-export function createInteractionHandler({ client, config, contextStore, player, privateMode, toggledResponses }) {
+// Answering a button click has a 3-second budget, after which the interaction
+// token is dead and every reply on it throws 10062 "Unknown interaction". That
+// throw used to escape the handler and surface as a client error while the click
+// itself was perfectly good, so fall back to editing the message with the bot
+// token, which has neither the 3-second budget nor the 15-minute expiry.
+async function answerApproval(interaction, content) {
+  try {
+    await interaction.update({ content, components: [] });
+  } catch (err) {
+    if (err?.code !== 10062 && err?.code !== 40060) {
+      console.error('[panda] could not answer a development approval:', err.message);
+    }
+    await interaction.message?.edit({ content, components: [] }).catch(() => {});
+  }
+}
+
+export function createInteractionHandler({ client, config, contextStore, player, privateMode, toggledResponses, state = selfFixState }) {
   return async (interaction) => {
     if (interaction.isButton?.()) {
       const approval = parseApprovalButtonId(interaction.customId);
       if (!approval) return;
       if (interaction.user.id !== config.ownerId) {
-        return await interaction.reply({ content: '⛔ Only Oscar can approve development work.', flags: MessageFlags.Ephemeral });
+        return await interaction
+          .reply({ content: '⛔ Only Oscar can approve development work.', flags: MessageFlags.Ephemeral })
+          .catch(() => {});
       }
-      const consumed = selfFixState.submitApproval(interaction.user.id, approval.id, approval.approved);
-      if (!consumed) {
-        return await interaction.reply({ content: '⌛ This development approval has expired.', flags: MessageFlags.Ephemeral });
+      if (!state.matchesPendingApproval(interaction.user.id, approval.id)) {
+        return await interaction
+          .reply({ content: '⌛ This development approval has expired.', flags: MessageFlags.Ephemeral })
+          .catch(() => {});
       }
-      return await interaction.update({
-        content: approval.approved ? '✅ Development task approved. Starting the remote sandbox…' : '🚫 Development task cancelled.',
-        components: [],
-      });
+      // Answer before consuming. submitApproval resolves the promise the
+      // development run is waiting on, and that run resumes — issuing its own
+      // OpenRouter and GitHub calls — ahead of this reply reaching Discord.
+      await answerApproval(
+        interaction,
+        approval.approved ? '✅ Development task approved. Starting the remote sandbox…' : '🚫 Development task cancelled.',
+      );
+      if (!state.submitApproval(interaction.user.id, approval.id, approval.approved)) {
+        // The 30s approval window closed while Discord was being answered.
+        await interaction.message?.edit({ content: '⌛ This development approval expired before it could start.', components: [] }).catch(() => {});
+      }
+      return;
     }
 
     // Autocomplete is a separate interaction type with a 3s budget and no
@@ -273,8 +300,17 @@ export function createInteractionHandler({ client, config, contextStore, player,
           });
         }
         const applied = setDevelopmentModel(model);
+        // Persisted as well as applied: self_fix restarts the bot, so a choice
+        // that lived only in memory was lost exactly when the next development
+        // run needed it, silently falling back to the default.
+        const written = writeEnvModel(config, applied, 'OPENROUTER_DEV_MODEL');
         return await interaction.reply({
-          content: `🛠️ Development-task model set to \`${applied}\`. self_fix will use it after Discord button approval from now on.`,
+          content: [
+            `🛠️ Development-task model set to \`${applied}\`. self_fix and /run_dev use it from now on.`,
+            written.ok ? '' : `⚠️ It is live, but I could not save it — a restart will lose it. ${written.error}`,
+          ]
+            .filter(Boolean)
+            .join('\n'),
           flags: MessageFlags.Ephemeral,
           allowedMentions: { parse: [] },
         });
