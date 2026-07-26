@@ -2,7 +2,7 @@
 
 Oscar's Discord AI agent, built from scratch with Node.js + discord.js v14 and an OpenRouter tool-calling loop. It has per-server memory, music playback, web/image search, GitHub vault integration, self-fixing source code, private mode, and emoji reactions.
 
-![Panda Bot Screenshot](https://media.discordapp.net/attachments/1528264572010627212/1530464934054334604/Screenshot_2026-07-25_at_2.41.10_AM.png?ex=6a65ac0a&is=6a645a8a&hm=f8f8c5ab8187f7ebd9f38aad61ed663bfe115a9a1fe4c5da2448875879fd2a84&=&format=webp&quality=lossless&width=856&height=632)
+![Screenshot of Panda-bot](assets/Panda_Screenshot.png)
 
 ## What it can do
 
