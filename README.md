@@ -155,6 +155,14 @@ happen, so the sandbox merges the pull request directly instead — it has alrea
 run's own `node --check`, `npm ci`, and `npm test`. For other repos, Panda opens the PR and
 waits for your normal review/merge process instead of auto-merging.
 
+The model is sent a snapshot of the target's tracked files, built by
+[`repoSnapshot.js`](src/agent/tools/repoSnapshot.js): source first, then manifests and docs, then
+tests, up to ~600k characters. Files are included **whole or not at all** — the model is asked to
+reply with complete file contents, which it cannot do for a file it was shown half of — and
+anything left out (a lockfile, a blob, an overflow) is named to the model in `omitted_files` so a
+task it cannot complete comes back as "I need X" rather than a wrong guess. A reply carrying no
+edits is challenged once before the run fails.
+
 Before spending an OpenRouter request the workflow checks its own credentials and that the token
 can push to the target repo, so misconfiguration fails in seconds with a readable error. Panda
 watches the run as well as the pull request: if the run fails before opening one, it reports the
