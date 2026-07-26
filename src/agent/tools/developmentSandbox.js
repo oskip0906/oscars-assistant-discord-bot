@@ -62,6 +62,20 @@ async function failedRun(gh, sandboxRepo, workflow, requestId) {
   return run && run.status === 'completed' && run.conclusion !== 'success' ? run : null;
 }
 
+// "The run failed" is not something Oscar can act on from Discord. The step
+// name is: a missing secret dies in "Check sandbox credentials", a rejected
+// push in "Develop, verify, and open pull request".
+async function failedStep(gh, sandboxRepo, runId) {
+  if (!runId) return null;
+  const result = await gh('GET', `/repos/${sandboxRepo}/actions/runs/${runId}/jobs?per_page=20`);
+  if (result.status !== 200) return null;
+  for (const job of result.json?.jobs || []) {
+    const step = (job.steps || []).find((candidate) => candidate?.conclusion && !['success', 'skipped'].includes(candidate.conclusion));
+    if (step?.name) return step.name;
+  }
+  return null;
+}
+
 async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onPullRequest = () => {}, sandboxRepo, workflow, requestId }) {
   const [owner] = repo.split('/');
   const deadline = now() + timeoutMs;
@@ -81,7 +95,17 @@ async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onP
     if (!pr) {
       const failed = await failedRun(gh, sandboxRepo, workflow, requestId);
       if (failed) {
-        return { ok: false, detail: `The remote development sandbox run ${failed.conclusion} before opening a pull request.\n${failed.html_url || ''}`.trim() };
+        const step = await failedStep(gh, sandboxRepo, failed.id);
+        return {
+          ok: false,
+          detail: [
+            `The remote development sandbox run ${failed.conclusion} before opening a pull request.`,
+            step ? `It stopped at the "${step}" step.` : '',
+            failed.html_url || '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        };
       }
     }
     await sleep(POLL_MS);

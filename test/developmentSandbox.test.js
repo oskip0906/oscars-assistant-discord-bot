@@ -58,8 +58,24 @@ test('reports a failed sandbox run instead of waiting for a pull request that ne
         status: 200,
         json: {
           workflow_runs: [
-            { name: 'Development sandbox other', status: 'completed', conclusion: 'success', html_url: 'https://example.test/run/1' },
-            { name: `Development sandbox ${requestId}`, status: 'completed', conclusion: 'failure', html_url: 'https://example.test/run/2' },
+            { id: 1, name: 'Development sandbox other', status: 'completed', conclusion: 'success', html_url: 'https://example.test/run/1' },
+            { id: 2, name: `Development sandbox ${requestId}`, status: 'completed', conclusion: 'failure', html_url: 'https://example.test/run/2' },
+          ],
+        },
+      };
+    }
+    if (endpoint.includes('/actions/runs/2/jobs')) {
+      return {
+        status: 200,
+        json: {
+          jobs: [
+            {
+              steps: [
+                { name: 'Run actions/checkout@v4', conclusion: 'success' },
+                { name: 'Check sandbox credentials', conclusion: 'failure' },
+                { name: 'Create isolated target checkout', conclusion: 'skipped' },
+              ],
+            },
           ],
         },
       };
@@ -72,6 +88,8 @@ test('reports a failed sandbox run instead of waiting for a pull request that ne
   );
   assert.equal(result.ok, false);
   assert.match(result.summary, /run failure before opening a pull request/);
+  // The step name is what turns "it failed" into something Oscar can fix.
+  assert.match(result.summary, /stopped at the "Check sandbox credentials" step/);
   assert.match(result.summary, /https:\/\/example\.test\/run\/2/);
 });
 
