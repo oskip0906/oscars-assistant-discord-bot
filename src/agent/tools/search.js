@@ -315,7 +315,7 @@ export async function imageSearch({ query, count }, invocation) {
       results = await searxngImages(query, invocation.config);
       store(key, results);
     } catch (err) {
-      return `Image search failed for "${query}": ${String(err.message || err).slice(0, 120)}`;
+      return `Image search backend (SearXNG) is unreachable — check SEARXNG_URL and that the "google images" engine is enabled. (${err.message})`;
     }
   }
 
