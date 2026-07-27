@@ -1,4 +1,6 @@
 import { search, searchImages, SafeSearchType } from 'duck-duck-scrape';
+import { EmbedBuilder } from 'discord.js';
+import { randomEmbedColor } from '../../discord/colors.js';
 
 export const defs = [
   {
@@ -38,7 +40,7 @@ export const defs = [
     function: {
       name: 'image_search',
       description:
-        'Search for images. Returns numbered results with bold titles, bare image URLs (own line — Discord embeds them), and source page links in <>. Use these results verbatim in your reply.',
+        'Search for images. Returns numbered results with bold titles, image URLs, and source page links in <>. Use these results verbatim in your reply. (When used as a slash command the results render as Discord embeds with a coloured left strip.)',
       parameters: {
         type: 'object',
         properties: {
@@ -267,45 +269,7 @@ async function searxngImages(query, config) {
   return results;
 }
 
-// --- Image search banner --------------------------------------------------
-
-// A curated palette of pleasant, distinct colors for the image-search result
-// container banner. Each entry pairs a hex colour with its closest ANSI SGR
-// foreground code so the banner renders with real colour inside a ```ansi
-// code block.
-const BANNER_PALETTE = [
-  { hex: '#5865F2', ansi: '34' }, // blue (Discord blurple)
-  { hex: '#57F287', ansi: '32' }, // green
-  { hex: '#FEE75C', ansi: '33' }, // yellow
-  { hex: '#EB459E', ansi: '35' }, // magenta
-  { hex: '#ED4245', ansi: '31' }, // red
-  { hex: '#E67E22', ansi: '33' }, // orange → yellow ANSI
-  { hex: '#9B59B6', ansi: '35' }, // purple → magenta ANSI
-  { hex: '#1ABC9C', ansi: '36' }, // teal → cyan
-];
-
-function randomBannerColor() {
-  return BANNER_PALETTE[Math.floor(Math.random() * BANNER_PALETTE.length)];
-}
-
-const ESC = '\x1b';
-
-function buildImageBanner() {
-  const c = randomBannerColor();
-  const label = '  📷 IMAGE SEARCH  ';
-  const sideBar = '━'.repeat(28);
-  const topLine = sideBar + label + sideBar;
-  const thinStrip = '▔'.repeat(topLine.length);
-
-  return (
-    '```ansi\n' +
-    `${ESC}[0;${c.ansi};1m${topLine}${ESC}[0m\n` +
-    `${ESC}[0;${c.ansi}m${thinStrip}${ESC}[0m\n` +
-    '```'
-  );
-}
-
-// --- Image search tool ----------------------------------------------------
+// --- Image search --------------------------------------------------------
 
 export async function imageSearch({ query, count }, invocation) {
   const n = clampCount(count, 3, 5);
@@ -328,16 +292,37 @@ export async function imageSearch({ query, count }, invocation) {
     }
   }
 
-  const banner = buildImageBanner();
+  const items = results.slice(0, n);
 
-  const cards = results
-    .slice(0, n)
+  // Build one Discord embed per result, following the menu.js pattern:
+  // randomEmbedColor() provides the left coloured strip; setImage() embeds
+  // the image natively large and clickable; the title sits on top as a
+  // description; setURL() makes the title a clickable link to the source.
+  const embeds = items.map((r) => {
+    const embed = new EmbedBuilder()
+      .setColor(randomEmbedColor())
+      .setTitle(r.title || 'Image');
+    if (r.image) embed.setImage(r.image);
+    if (r.source) {
+      embed.setURL(r.source);
+      try {
+        embed.setFooter({ text: new URL(r.source).hostname });
+      } catch {
+        embed.setFooter({ text: r.source });
+      }
+    }
+    return embed;
+  });
+
+  // Plain-text representation for the model (the agent path feeds tool
+  // results into the model, which needs readable text to work with).
+  const text = items
     .map((r, i) => {
-      const lines = [`**${i + 1}. ${r.title}**`, r.image];
+      const lines = [`${i + 1}. **${r.title}**`, r.image];
       if (r.source) lines.push(`*Source:* <${r.source}>`);
       return lines.join('\n');
     })
     .join('\n\n');
 
-  return `${banner}\n${cards}`;
+  return { embeds, text };
 }
