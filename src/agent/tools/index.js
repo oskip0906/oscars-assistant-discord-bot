@@ -43,6 +43,11 @@ export async function executeTool(name, args, invocation) {
   }
   try {
     const result = await fn(args || {}, invocation);
+    // Tools may return a { text, embeds } object — feed the model the text
+    // portion and let the caller (slash-command path) use the embeds directly.
+    if (result && typeof result === 'object' && result.text !== undefined) {
+      return String(result.text);
+    }
     return typeof result === 'string' ? result : JSON.stringify(result);
   } catch (err) {
     return `Tool ${name} failed: ${String(err.message || err).slice(0, 500)}`;

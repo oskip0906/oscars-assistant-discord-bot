@@ -342,10 +342,22 @@ export function createInteractionHandler({ client, config, contextStore, player,
       }
 
       if (name === 'image_search') {
-        return await runTool(imageSearch, {
-          query: interaction.options.getString('query', true),
-          count: undefined,
-        });
+        await interaction.deferReply();
+        const result = await imageSearch(
+          {
+            query: interaction.options.getString('query', true),
+            count: undefined,
+          },
+          buildInvocation(),
+        );
+        // imageSearch returns { embeds, text } — send the embeds directly
+        // like /menu does, falling back to the text representation.
+        if (result && typeof result === 'object' && result.embeds?.length) {
+          await interaction.editReply({ embeds: result.embeds });
+        } else {
+          await sendToolResult(result?.text ?? result);
+        }
+        return;
       }
 
       if (name === 'vault_fetch') {
