@@ -6,6 +6,11 @@ import path from 'node:path';
 // still *known* even once its exact wording is gone.
 const MAX_MESSAGES = 40;
 
+// How many unique user prompts we accumulate before the model compacts them
+// into the summary. Every prompt is saved directly; only 1 in 10 eviction cycles
+// triggers a model call.
+const PROMPT_COMPACT_THRESHOLD = 10;
+
 // Split a transcript so the kept part fits in `max` messages and starts on a
 // role:'user' boundary — otherwise an assistant tool_calls message can survive
 // without its tool results (or vice versa) and the API rejects the history.
@@ -48,11 +53,11 @@ export class ContextStore {
   // record with an empty summary rather than throwing the conversation away.
   record(key) {
     if (!this.cache.has(key)) {
-      let record = { summary: '', messages: [] };
+      let record = { summary: '', messages: [], pendingPrompts: [] };
       try {
         const raw = JSON.parse(fs.readFileSync(this.fileFor(key), 'utf8'));
-        if (Array.isArray(raw)) record = { summary: '', messages: raw };
-        else if (raw && Array.isArray(raw.messages)) record = { summary: String(raw.summary || ''), messages: raw.messages };
+        if (Array.isArray(raw)) record = { summary: '', messages: raw, pendingPrompts: [] };
+        else if (raw && Array.isArray(raw.messages)) record = { summary: String(raw.summary || ''), messages: raw.messages, pendingPrompts: Array.isArray(raw.pendingPrompts) ? raw.pendingPrompts : [] };
       } catch {
         /* no file yet, or unreadable — start clean */
       }
@@ -85,6 +90,31 @@ export class ContextStore {
     return evicted;
   }
 
+  // Accumulate a unique user prompt directly, without a model call.  Returns
+  // true when the threshold is met and the caller should compact.
+  addPrompt(key, content) {
+    const record = this.record(key);
+    const clean = String(content).replace(/\s+/g, ' ').trim();
+    if (!clean) return false;
+    if (record.pendingPrompts.includes(clean)) return false;
+    record.pendingPrompts.push(clean);
+    this.persist(key);
+    return record.pendingPrompts.length >= PROMPT_COMPACT_THRESHOLD;
+  }
+
+  promptsPending(key) {
+    return this.record(key).pendingPrompts.length;
+  }
+
+  // Consume all pending prompts (for compaction) and return them.
+  consumePrompts(key) {
+    const record = this.record(key);
+    const prompts = record.pendingPrompts.slice();
+    record.pendingPrompts = [];
+    this.persist(key);
+    return prompts;
+  }
+
   persist(key) {
     try {
       fs.writeFileSync(this.fileFor(key), JSON.stringify(this.record(key), null, 2));
@@ -94,7 +124,7 @@ export class ContextStore {
   }
 
   clear(key) {
-    this.cache.set(key, { summary: '', messages: [] });
+    this.cache.set(key, { summary: '', messages: [], pendingPrompts: [] });
     fs.rmSync(this.fileFor(key), { force: true });
   }
 

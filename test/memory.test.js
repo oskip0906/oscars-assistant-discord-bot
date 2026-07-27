@@ -75,7 +75,44 @@ test('appending past the window returns the overflow to be summarised', () => {
   assert.equal(store.get('guild1')[0].content, 'question 10', 'and the window starts where the evictions stopped');
 });
 
-test('a summary folds the old memory and the aged-out messages together', async () => {
+test('pending prompts are stored and consumed correctly', () => {
+  const store = new ContextStore(dir());
+
+  // First prompt: added and no compaction triggered.
+  assert.equal(store.addPrompt('guild1', 'hello there'), false);
+  assert.equal(store.promptsPending('guild1'), 1);
+
+  // Duplicate prompt is silently ignored.
+  assert.equal(store.addPrompt('guild1', 'hello there'), false);
+  assert.equal(store.promptsPending('guild1'), 1);
+
+  // Whitespace-only prompts are ignored.
+  assert.equal(store.addPrompt('guild1', '   '), false);
+  assert.equal(store.promptsPending('guild1'), 1);
+
+  // Adding 8 more unique prompts (total 9) still no compaction.
+  for (let i = 0; i < 8; i++) {
+    assert.equal(store.addPrompt('guild1', `prompt ${i}`), false);
+  }
+  assert.equal(store.promptsPending('guild1'), 9);
+
+  // The 10th unique prompt triggers compaction.
+  assert.equal(store.addPrompt('guild1', 'the tenth prompt'), true);
+  assert.equal(store.promptsPending('guild1'), 10);
+
+  // Consuming drains the queue.
+  const consumed = store.consumePrompts('guild1');
+  assert.equal(consumed.length, 10);
+  assert.equal(store.promptsPending('guild1'), 0);
+
+  // Persistence survives process restart.
+  store.addPrompt('guild1', 'after restart');
+  const reopened = new ContextStore(store.dir);
+  assert.equal(reopened.promptsPending('guild1'), 1);
+  assert.equal(reopened.consumePrompts('guild1')[0], 'after restart');
+});
+
+test('a summary folds the old memory and pending prompts together', async () => {
   let seen = null;
   const chat = async ({ messages }) => {
     seen = messages[1].content;
@@ -84,39 +121,39 @@ test('a summary folds the old memory and the aged-out messages together', async 
 
   const summary = await foldIntoSummary({
     previous: 'Oscar runs Panda.',
-    evicted: [
-      { role: 'user', content: 'oscar: i want logs for every self fix' },
-      { role: 'assistant', content: 'Got it — start and finish lines.' },
-    ],
+    pendingPrompts: ['oscar: i want logs for every self fix', 'oscar: also add dark mode'],
     apiKey: 'k',
     model: 'm',
     chat,
   });
 
   assert.match(seen, /Current memory:\nOscar runs Panda\./);
-  assert.match(seen, /THEM: oscar: i want logs/);
-  assert.match(seen, /PANDA: Got it/);
+  assert.match(seen, /oscar: i want logs/);
+  assert.match(seen, /oscar: also add dark mode/);
   assert.match(summary, /logs for every self-fix/);
 });
 
-test('nothing worth remembering leaves the memory untouched', async () => {
+test('empty prompts list leaves memory untouched', async () => {
   let called = false;
   const summary = await foldIntoSummary({
     previous: 'Oscar runs Panda.',
-    evicted: [{ role: 'tool', tool_call_id: 'x', content: 'HTTP 200' }],
+    pendingPrompts: [],
     chat: async () => {
       called = true;
       return { content: 'should not happen' };
     },
   });
 
-  assert.equal(called, false, 'tool traffic alone is not worth a model call');
+  assert.equal(called, false, 'no prompts means no model call');
   assert.equal(summary, 'Oscar runs Panda.');
 });
 
 test('a failed summarisation never takes the turn down with it', async () => {
   const store = new ContextStore(dir());
   store.append('guild1', turn(1));
+
+  // Seed 9 prompts so we are one short of the threshold.
+  for (let i = 0; i < 9; i++) store.addPrompt('guild1', `prompt ${i}`);
 
   await rememberEvicted({
     store,
@@ -128,5 +165,43 @@ test('a failed summarisation never takes the turn down with it', async () => {
     },
   });
 
+  // The 10th prompt triggered compaction, but the model call failed — the
+  // summary stays untouched and the prompts were already consumed.
   assert.equal(store.summary('guild1'), '', 'the summary is simply not updated');
+  assert.equal(store.promptsPending('guild1'), 0, 'prompts were consumed before the model call');
+});
+
+test('do not trigger compaction until 10 unique prompts', async () => {
+  const store = new ContextStore(dir());
+  store.append('guild1', turn(1));
+
+  let callCount = 0;
+  const chat = async () => {
+    callCount++;
+    return { content: 'compacted summary' };
+  };
+
+  // 9 calls, none should trigger compaction.
+  for (let i = 0; i < 9; i++) {
+    await rememberEvicted({
+      store,
+      key: 'guild1',
+      evicted: [{ role: 'user', content: `prompt ${i}` }, { role: 'assistant', content: `reply ${i}` }],
+      config: { openrouterApiKey: 'k', model: 'm' },
+      chat,
+    });
+  }
+  assert.equal(callCount, 0, 'no model calls for the first 9 prompts');
+  assert.equal(store.promptsPending('guild1'), 9);
+
+  // 10th call triggers compaction.
+  await rememberEvicted({
+    store,
+    key: 'guild1',
+    evicted: [{ role: 'user', content: 'prompt 9' }],
+    config: { openrouterApiKey: 'k', model: 'm' },
+    chat,
+  });
+  assert.equal(callCount, 1, 'only the 10th prompt triggers a model call');
+  assert.equal(store.promptsPending('guild1'), 0);
 });
