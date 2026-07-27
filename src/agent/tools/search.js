@@ -1,4 +1,4 @@
-import { search, searchImages, SafeSearchType } from 'duck-duck-scrape';
+import { search, SafeSearchType } from 'duck-duck-scrape';
 import { EmbedBuilder } from 'discord.js';
 import { randomEmbedColor } from '../../discord/colors.js';
 
@@ -40,7 +40,7 @@ export const defs = [
     function: {
       name: 'image_search',
       description:
-        'Search for images. Returns numbered results with bold titles, image URLs, and source page links in <>. Use these results verbatim in your reply. (When used as a slash command the results render as Discord embeds with a coloured left strip.)',
+        'Search Google Images for pictures and return numbered results with bold titles, full-size image URLs, and source page links.',
       parameters: {
         type: 'object',
         properties: {
@@ -94,6 +94,19 @@ async function fetchWithRetry(url, opts = {}, { retries = 2, timeoutMs = 30000 }
     }
   }
   throw lastErr ?? new Error('request failed');
+}
+
+// Quick HEAD check to validate an image URL is actually reachable.
+async function headOk(url, timeoutMs = 5000) {
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    const res = await fetch(url, { method: 'HEAD', signal: ac.signal });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 const jinaHeaders = (config) => (config.jinaApiKey ? { Authorization: `Bearer ${config.jinaApiKey}` } : {});
@@ -257,38 +270,52 @@ export async function webFetch({ url, max_chars }, invocation) {
   return `# ${payload.title}\n<${payload.url}>\n\n${body}${payload.content.length > cap ? '\n…(truncated)' : ''}`;
 }
 
+// --- Image search (Google Images via SearXNG) ---------------------------
+
+// Google-realistic desktop headers so the upstream Google engine sees a
+// normal browser request through SearXNG.
+const googleUA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const googleHeaders = {
+  'Accept': 'application/json',
+  'User-Agent': googleUA,
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
 async function searxngImages(query, config) {
-  const url = `${config.searxngUrl}/search?q=${encodeURIComponent(query)}&format=json&categories=images&safesearch=1`;
-  const res = await fetchWithRetry(url, { headers: { Accept: 'application/json' } }, { retries: 1, timeoutMs: 20000 });
+  const url = `${config.searxngUrl}/search?q=${encodeURIComponent(query)}&format=json&categories=images&engines=google_images&safesearch=1`;
+  const res = await fetchWithRetry(url, { headers: googleHeaders }, { retries: 1, timeoutMs: 20000 });
   if (!res.ok) throw new Error(`SearXNG HTTP ${res.status}`);
   const data = await res.json();
-  const results = (data.results || [])
-    .filter((r) => r.img_src)
-    .map((r) => ({ title: r.title || 'image', image: r.img_src, source: r.url || '' }));
-  if (!results.length) throw new Error('SearXNG: no images');
+  const raw = (data.results || []).filter((r) => r.img_src);
+  if (!raw.length) throw new Error('SearXNG: no images');
+
+  // Validate image URLs with parallel HEAD checks; drop any that are
+  // unreachable and fall through to the next result.
+  const checks = await Promise.allSettled(
+    raw.map(async (r) => {
+      if (await headOk(r.img_src)) {
+        return { title: r.title || 'image', image: r.img_src, source: r.url || '' };
+      }
+      return null;
+    }),
+  );
+  const results = checks
+    .filter((c) => c.status === 'fulfilled' && c.value !== null)
+    .map((c) => c.value);
+  if (!results.length) throw new Error('SearXNG: all image URLs unreachable');
   return results;
 }
-
-// --- Image search --------------------------------------------------------
 
 export async function imageSearch({ query, count }, invocation) {
   const n = clampCount(count, 3, 5);
   const key = `img:${query}`;
   let results = cached(key);
   if (!results) {
-    // Primary: self-hosted SearXNG (no rate limit); fall back to DDG images.
     try {
       results = await searxngImages(query, invocation.config);
       store(key, results);
-    } catch {
-      try {
-        const res = await searchImages(query, { safeSearch: SafeSearchType.MODERATE });
-        if (res.noResults || !res.results?.length) return `No images found for "${query}".`;
-        results = res.results.map((r) => ({ title: r.title || 'image', image: r.image, source: r.url || '' }));
-        store(key, results);
-      } catch (err) {
-        return `Image search failed for "${query}": ${String(err.message || err).slice(0, 120)}`;
-      }
+    } catch (err) {
+      return `Image search failed for "${query}": ${String(err.message || err).slice(0, 120)}`;
     }
   }
 

@@ -16,6 +16,8 @@ search:
 engines:
   - name: wikipedia
     disabled: false
+  - name: google images
+    disabled: false
 
 ui:
   static_use_hash: true
