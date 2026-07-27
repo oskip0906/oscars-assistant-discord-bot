@@ -267,6 +267,46 @@ async function searxngImages(query, config) {
   return results;
 }
 
+// --- Image search banner --------------------------------------------------
+
+// A curated palette of pleasant, distinct colors for the image-search result
+// container banner. Each entry pairs a hex colour with its closest ANSI SGR
+// foreground code so the banner renders with real colour inside a ```ansi
+// code block.
+const BANNER_PALETTE = [
+  { hex: '#5865F2', ansi: '34' }, // blue (Discord blurple)
+  { hex: '#57F287', ansi: '32' }, // green
+  { hex: '#FEE75C', ansi: '33' }, // yellow
+  { hex: '#EB459E', ansi: '35' }, // magenta
+  { hex: '#ED4245', ansi: '31' }, // red
+  { hex: '#E67E22', ansi: '33' }, // orange → yellow ANSI
+  { hex: '#9B59B6', ansi: '35' }, // purple → magenta ANSI
+  { hex: '#1ABC9C', ansi: '36' }, // teal → cyan
+];
+
+function randomBannerColor() {
+  return BANNER_PALETTE[Math.floor(Math.random() * BANNER_PALETTE.length)];
+}
+
+const ESC = '\x1b';
+
+function buildImageBanner() {
+  const c = randomBannerColor();
+  const label = '  📷 IMAGE SEARCH  ';
+  const sideBar = '━'.repeat(28);
+  const topLine = sideBar + label + sideBar;
+  const thinStrip = '▔'.repeat(topLine.length);
+
+  return (
+    '```ansi\n' +
+    `${ESC}[0;${c.ansi};1m${topLine}${ESC}[0m\n` +
+    `${ESC}[0;${c.ansi}m${thinStrip}${ESC}[0m\n` +
+    '```'
+  );
+}
+
+// --- Image search tool ----------------------------------------------------
+
 export async function imageSearch({ query, count }, invocation) {
   const n = clampCount(count, 3, 5);
   const key = `img:${query}`;
@@ -287,7 +327,10 @@ export async function imageSearch({ query, count }, invocation) {
       }
     }
   }
-  return results
+
+  const banner = buildImageBanner();
+
+  const cards = results
     .slice(0, n)
     .map((r, i) => {
       const lines = [`**${i + 1}. ${r.title}**`, r.image];
@@ -295,4 +338,6 @@ export async function imageSearch({ query, count }, invocation) {
       return lines.join('\n');
     })
     .join('\n\n');
+
+  return `${banner}\n${cards}`;
 }
