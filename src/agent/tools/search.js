@@ -6,7 +6,7 @@ export const defs = [
     function: {
       name: 'web_search',
       description:
-        'Search the web for current information. Returns numbered titles, URLs, and snippets. Include the relevant links in your reply when you use results.',
+        'Search the web for current information. Returns numbered titles, URLs, and snippets. Always include the relevant links (wrapped in <>) in your reply — cite sources inline or at the end.',
       parameters: {
         type: 'object',
         properties: {
@@ -38,7 +38,7 @@ export const defs = [
     function: {
       name: 'image_search',
       description:
-        'Search for images. Returns direct image URLs — paste them bare in your reply (own line) so Discord embeds the pictures.',
+        'Search for images. Returns numbered results with bold titles, bare image URLs (own line — Discord embeds them), and source page links in <>. Use these results verbatim in your reply.',
       parameters: {
         type: 'object',
         properties: {
@@ -262,7 +262,7 @@ async function searxngImages(query, config) {
   const data = await res.json();
   const results = (data.results || [])
     .filter((r) => r.img_src)
-    .map((r) => ({ title: r.title || 'image', image: r.img_src }));
+    .map((r) => ({ title: r.title || 'image', image: r.img_src, source: r.url || '' }));
   if (!results.length) throw new Error('SearXNG: no images');
   return results;
 }
@@ -280,7 +280,7 @@ export async function imageSearch({ query, count }, invocation) {
       try {
         const res = await searchImages(query, { safeSearch: SafeSearchType.MODERATE });
         if (res.noResults || !res.results?.length) return `No images found for "${query}".`;
-        results = res.results.map((r) => ({ title: r.title || 'image', image: r.image }));
+        results = res.results.map((r) => ({ title: r.title || 'image', image: r.image, source: r.url || '' }));
         store(key, results);
       } catch (err) {
         return `Image search failed for "${query}": ${String(err.message || err).slice(0, 120)}`;
@@ -289,6 +289,10 @@ export async function imageSearch({ query, count }, invocation) {
   }
   return results
     .slice(0, n)
-    .map((r, i) => `${i + 1}. ${r.title}\n${r.image}`)
+    .map((r, i) => {
+      const lines = [`**${i + 1}. ${r.title}**`, r.image];
+      if (r.source) lines.push(`*Source:* <${r.source}>`);
+      return lines.join('\n');
+    })
     .join('\n\n');
 }
