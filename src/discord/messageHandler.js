@@ -170,6 +170,9 @@ export function createMessageHandler({ client, config, contextStore, player, pri
           requestRestart: false,
           reacted: false,
           batchedCount: messages.length,
+          // Collect any Discord embeds produced by tool calls (e.g. image_search)
+          // so they can be sent alongside the text reply.
+          embeds: [],
         };
 
         let replyText;
@@ -178,6 +181,16 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         } catch (err) {
           console.error('[panda] agent failed:', err);
           replyText = `⚠️ Something broke on my end: ${String(err.message || err).slice(0, 250)}`;
+        }
+
+        // Send any embeds the tools produced (e.g. from image_search). These go
+        // before the text reply so the images appear above the fold.
+        if (invocation.embeds.length) {
+          try {
+            await anchor.channel.send({ embeds: invocation.embeds });
+          } catch (err) {
+            console.error('[panda] failed to send image embeds:', err);
+          }
         }
 
         // A response is MANDATORY (reaction or text — never none). If the model

@@ -44,8 +44,12 @@ export async function executeTool(name, args, invocation) {
   try {
     const result = await fn(args || {}, invocation);
     // Tools may return a { text, embeds } object — feed the model the text
-    // portion and let the caller (slash-command path) use the embeds directly.
+    // portion and stash any embeds on the invocation so the caller (chat path)
+    // can send them alongside the reply, matching the slash-command path.
     if (result && typeof result === 'object' && result.text !== undefined) {
+      if (result.embeds?.length && Array.isArray(invocation.embeds)) {
+        invocation.embeds.push(...result.embeds);
+      }
       return String(result.text);
     }
     return typeof result === 'string' ? result : JSON.stringify(result);
