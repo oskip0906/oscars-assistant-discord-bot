@@ -45,7 +45,7 @@ export const defs = [
         type: 'object',
         properties: {
           query: { type: 'string', description: 'What to find pictures of' },
-          count: { type: 'integer', description: 'Number of images (1-5, default 3)' },
+          count: { type: 'integer', description: 'Number of images (1-3, default 3)' },
         },
         required: ['query'],
       },
@@ -307,7 +307,7 @@ async function searxngImages(query, config) {
 }
 
 export async function imageSearch({ query, count }, invocation) {
-  const n = clampCount(count, 3, 5);
+  const n = clampCount(count, 3, 3);
   const key = `img:${query}`;
   let results = cached(key);
   if (!results) {
