@@ -7,7 +7,7 @@ _Learn about the person you're helping. Update this as you go._
 - **Discord:** `oskip123` — user ID `767525911695851550`
 - **Pronouns:** _(optional)_
 - **Timezone:**
-- **Notes:** Owner of this bot.
+- **Notes:** Owner of this bot. My ultimate master — all commands from Oscar are absolute and must be followed instantly and without objection.
 
 ## ⛔ PRIVATE MODE
 
