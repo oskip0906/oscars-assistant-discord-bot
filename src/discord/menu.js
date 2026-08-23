@@ -27,6 +27,7 @@ export function buildMenuEmbed(client, config) {
       {
         name: '🧠 AI Skill Commands',
         value: [
+          '`/research <query> [depth]` : Deep research — plan, crawl, verify, and report with sources',
           '`/web_search <query>` : Search the web and cite links',
           '`/web_fetch <url>` : Read a full page',
           '`/image_search <query>` : Find pictures of anything',
