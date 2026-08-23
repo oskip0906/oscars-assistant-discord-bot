@@ -4,6 +4,7 @@ import * as githubTools from './github.js';
 import * as contextTools from './context.js';
 import * as sourceTools from './source.js';
 import * as musicTools from './music.js';
+import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.js';
 
 // Owner-only tools. Gated by the AUTHENTICATED Discord author id
 // (invocation.isOwner) — never by anything a message could claim, so no one can
@@ -31,12 +32,24 @@ const executors = {
   play_music: musicTools.playMusic,
 };
 
-export function toolDefs() {
-  return allDefs;
+// Async because the GitHub MCP tool list is fetched from GitHub's hosted server
+// (once, then cached). It resolves to just the built-ins when that is off,
+// unreachable, or the sender is not Oscar.
+export async function toolDefs(invocation = {}) {
+  return [...allDefs, ...(await githubMcpTools({ isOwner: invocation.isOwner, config: invocation.config }))];
 }
 
 export async function executeTool(name, args, invocation) {
   const fn = executors[name];
+  // MCP tools are discovered at runtime, so they are not in `executors`. They
+  // carry their own owner gate; the check below covers the static ones.
+  if (!fn && isGithubMcpTool(name)) {
+    try {
+      return await callGithubMcpTool(name, args || {}, { isOwner: invocation.isOwner, config: invocation.config });
+    } catch (err) {
+      return `Tool ${name} failed: ${String(err.message || err).slice(0, 500)}`;
+    }
+  }
   if (!fn) return `Unknown tool: ${name}`;
   if (OWNER_ONLY_TOOLS.has(name) && !invocation.isOwner) {
     return `⛔ ${name} is restricted to Oscar (the owner). The current sender is not Oscar — politely refuse.`;

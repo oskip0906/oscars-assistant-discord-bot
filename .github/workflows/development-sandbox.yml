@@ -109,4 +109,10 @@ jobs:
           COMMIT_TITLE: ${{ inputs.commit_title }}
           AUTO_MERGE: ${{ inputs.auto_merge }}
           SELF_FIX: ${{ inputs.self_fix }}
+          # GitHub's hosted MCP server needs a user PAT; the Actions GITHUB_TOKEN
+          # is not accepted there. Absent, the sandbox runs with file tools only.
+          PANDA_MCP_PAT: ${{ secrets.PANDA_MCP_PAT }}
+          # Remote writes bypass node --check, npm test, and the FORBIDDEN path
+          # guard, so they stay off unless the repository variable says otherwise.
+          SANDBOX_MCP_WRITE: ${{ vars.SANDBOX_MCP_WRITE }}
         run: node .github/scripts/development-sandbox.mjs target

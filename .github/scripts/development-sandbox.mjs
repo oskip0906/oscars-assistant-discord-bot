@@ -4,6 +4,7 @@ import path from 'node:path';
 // From the sandbox repository's own checkout, not the target's — this script and
 // the module are versioned together.
 import { runRepoAgent } from '../../src/agent/tools/repoAgent.js';
+import { McpClient, toOpenRouterTools } from '../../src/agent/mcp.js';
 
 const root = path.resolve(process.argv[2] || 'target');
 const env = process.env;
@@ -102,14 +103,51 @@ function detailedBody(plan, changed, checks) {
     ...(plan.completed === false ? ['', '⚠️ The model hit its step limit before summarising; the edits it had written are included.'] : []),
     '',
     `Model: \`${env.MODEL}\` (agent loop: it read and wrote files directly)`,
+    ...(env.PANDA_MCP_PAT ? [`GitHub MCP: ${env.SANDBOX_MCP_WRITE === 'true' ? 'read/write' : 'read-only'} (orientation only; every edit above was written and verified in the checkout)`] : []),
   ].join('\n');
+}
+
+// GitHub's hosted MCP server, for orientation only: search_code and history are
+// things this agent otherwise cannot do at all, and it burns steps reading files
+// one at a time to compensate. The edits still happen in the checkout — see the
+// system prompt and the finish gate in repoAgent.js.
+//
+// Read-only by default. Remote writes would land outside the checkout, so they
+// skip node --check, npm test, the FORBIDDEN path guard, and the pull request
+// itself; SANDBOX_MCP_WRITE=true opts into that with eyes open.
+//
+// api.githubcopilot.com does not accept the Actions GITHUB_TOKEN, so this needs
+// PANDA_MCP_PAT. Without it the sandbox simply runs as it did before.
+async function githubMcp() {
+  const token = env.PANDA_MCP_PAT;
+  if (!token) {
+    console.log('::notice::PANDA_MCP_PAT is not set — running with the file tools only.');
+    return { extraTools: [], callExtraTool: null };
+  }
+  const write = env.SANDBOX_MCP_WRITE === 'true';
+  const client = new McpClient({
+    url: write ? 'https://api.githubcopilot.com/mcp/' : 'https://api.githubcopilot.com/mcp/readonly',
+    headers: { Authorization: `Bearer ${token}` },
+    name: 'panda-bot-development-sandbox',
+  });
+  try {
+    const tools = await client.listTools();
+    console.log(`::notice::GitHub MCP ${write ? '(read/write)' : '(read-only)'}: ${tools.length} tool(s) available.`);
+    return { extraTools: toOpenRouterTools(tools), callExtraTool: (name, args) => client.callTool(name, args) };
+  } catch (error) {
+    // A development run is expensive and already approved; losing the extra
+    // tools is worth far less than losing the run.
+    console.log(`::warning::GitHub MCP unavailable, continuing with the file tools only: ${error.message}`);
+    return { extraTools: [], callExtraTool: null };
+  }
 }
 
 const tracked = trackedFiles();
 if (!env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not configured as a repository Actions secret.');
 console.log(`::notice::Repository has ${tracked.length} tracked file(s). The model reads what it needs.`);
 
-const plan = await runRepoAgent({ instruction: env.INSTRUCTION, root, tracked, callModel });
+const { extraTools, callExtraTool } = await githubMcp();
+const plan = await runRepoAgent({ instruction: env.INSTRUCTION, root, tracked, callModel, extraTools, callExtraTool });
 const changed = plan.changed;
 console.log(`::notice::${changed.length} file(s) changed: ${changed.join(', ')}`);
 const checks = verify(changed);

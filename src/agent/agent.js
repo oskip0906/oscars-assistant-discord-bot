@@ -32,7 +32,7 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
       apiKey: config.openrouterApiKey,
       model: config.model,
       messages,
-      tools: toolDefs(),
+      tools: await toolDefs(invocation),
     });
 
     const assistant = { role: 'assistant', content: msg.content ?? '' };

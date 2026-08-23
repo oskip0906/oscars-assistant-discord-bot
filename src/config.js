@@ -38,6 +38,11 @@ export const config = {
   ownerId: OWNER_ID,
   githubPat: process.env.GITHUB_PAT || '',
   vaultRepo: process.env.VAULT_REPO || 'oskip0906/oskip-vault',
+  // GitHub's hosted MCP server, read-only path. Owner-gated at the tool list, so
+  // a guest never sees these and never spends tokens on them. Off automatically
+  // when GITHUB_PAT is unset; GITHUB_MCP_ENABLED=false turns it off explicitly.
+  githubMcpEnabled: bool(process.env.GITHUB_MCP_ENABLED, true),
+  githubMcpReadOnlyUrl: process.env.GITHUB_MCP_URL || 'https://api.githubcopilot.com/mcp/readonly',
   // The sandbox workflow lives in this control repository. It is deliberately
   // separate from the bot's checkout: development work never edits the live
   // deployment filesystem.

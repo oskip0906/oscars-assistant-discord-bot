@@ -27,6 +27,10 @@ export const SYSTEM_PROMPT = [
   '- Never touch secrets, .env files, data/, node_modules, .git, or .github.',
   '- Call finish only once the change is complete. Describing a change instead of writing it ships nothing.',
   '- If the task genuinely cannot be done safely, call finish and explain why in the description.',
+  '',
+  'You may also have GitHub tools (search_code, get_commit, list_pull_requests and similar). They query GitHub and are for ORIENTATION only — finding where something lives, reading history, checking how a past change was made.',
+  '- The change itself must be made with write_file / delete_file in the checkout. Only edits written there are verified and shipped; anything you do through a GitHub tool is invisible to the build and will not reach the pull request.',
+  '- Prefer read_file over a GitHub tool for a file in this checkout: read_file sees your own uncommitted edits, GitHub does not.',
 ].join('\n');
 
 export const REPO_AGENT_TOOLS = [
@@ -195,7 +199,8 @@ const preview = (value, limit = 80) => String(value ?? '').replace(/\s+/g, ' ').
 // Drives the model through the checkout: it reads what it wants, writes what it
 // decides to change, and says when it is done. Replaces asking for the whole
 // repository up front and hoping one reply contains every finished file.
-export async function runRepoAgent({ instruction, root, tracked = [], callModel, log = console.log, maxSteps = DEFAULT_MAX_STEPS }) {
+export async function runRepoAgent({ instruction, root, tracked = [], callModel, log = console.log, maxSteps = DEFAULT_MAX_STEPS, extraTools = [], callExtraTool = null }) {
+  const extraNames = new Set(extraTools.map((tool) => tool?.function?.name).filter(Boolean));
   const workspace = createWorkspace(path.resolve(root), tracked);
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -213,7 +218,7 @@ export async function runRepoAgent({ instruction, root, tracked = [], callModel,
   let idleReplies = 0;
 
   for (let step = 0; step < maxSteps && !done; step++) {
-    const message = await callModel(messages, REPO_AGENT_TOOLS);
+    const message = await callModel(messages, extraTools.length ? [...REPO_AGENT_TOOLS, ...extraTools] : REPO_AGENT_TOOLS);
     const assistant = { role: 'assistant', content: message?.content ?? '' };
     if (message?.tool_calls?.length) assistant.tool_calls = message.tool_calls;
     messages.push(assistant);
@@ -259,6 +264,16 @@ export async function runRepoAgent({ instruction, root, tracked = [], callModel,
           result = 'Finished.';
           log(`[sandbox] step ${step + 1}: finish — ${preview(done.summary)}`);
         }
+      } else if (callExtraTool && extraNames.has(name)) {
+        // Deliberately not recorded as a change: these reach GitHub, not the
+        // checkout, so an edit made through one is never verified, never staged,
+        // and must never let `finish` through. See the finish branch above.
+        try {
+          result = await callExtraTool(name, args);
+        } catch (err) {
+          result = `${name} failed: ${String(err.message || err).slice(0, 500)}`;
+        }
+        log(`[sandbox] step ${step + 1}: ${name} (${String(result).length} chars)`);
       } else {
         result = `Unknown tool "${name}". Available: list_files, read_file, write_file, delete_file, finish.`;
         log(`[sandbox] step ${step + 1}: unknown tool ${name}`);
