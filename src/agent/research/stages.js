@@ -19,7 +19,9 @@ export async function planQuestions({ query, count, config }) {
       '- "query" is a short web search query (3-8 words) likely to answer it.',
       '- If the research question names specific things (organizations, people, products, places), every one of them MUST appear by name in at least one sub-question, and in that entry search query too. Never drop one.',
       '- When several named things are being compared, give each its own entry rather than one generic entry that names none of them.',
+      '- If the question lists topics to cover (cost, requirements, process, timeline...), every listed topic MUST be covered by some entry.',
       '- Otherwise cover different angles, and never repeat the same angle in two entries.',
+      '- Each "question" is used verbatim as a section heading, so write it to read well as one: specific, self-contained, under 80 characters.',
     ].join('\n'),
     isValid: (v) =>
       Array.isArray(v?.subQuestions) &&
@@ -80,25 +82,27 @@ export function verifyClaims(rawClaims, body) {
     .map((c) => ({ text: String(c.text).trim(), quote: String(c.quote).trim() }));
 }
 
-export async function synthesizeSection({ question, claims, config }) {
-  const value = await askJson({
+export async function synthesizeSection({ query, question, claims, config, ask = askJson }) {
+  const value = await ask({
     config,
     system: 'You write one short section of a research report using ONLY the claims given. Reply with ONLY a JSON object.',
     user: [
-      `Sub-question: ${question}`,
+      `The reader's original question: ${query}`,
+      `This section covers one part of it: ${question}`,
       '',
       'Claims:',
       claims.map((c) => `${c.id}: ${c.text}`).join('\n'),
       '',
-      'Return: {"heading":"...","facts":["...","..."],"body":"..."}',
-      '- "heading" is a short title, at most 6 words.',
-      '- "facts" is 2-3 very short scannable lines, each under 55 characters, no trailing punctuation.',
-      '- "body" is 2-4 sentences answering the sub-question.',
+      'Return: {"facts":["...","..."],"body":"..."}',
+      '- "facts" is 2-3 very short scannable lines, each under 60 characters, no trailing punctuation.',
+      '- "body" is 3-5 sentences answering this section, written so it also serves the original question.',
+      '- Name the thing each statement is about (the organization, product, place) instead of "the program" or "it". A reader must never have to guess which one a sentence means.',
       '- In "body", write the claim id in square brackets right after each statement it supports, like: Queries are mixed with other traffic [c3].',
       '- Every sentence in "body" needs at least one claim id.',
       '- Use ONLY the claims above. Add nothing from your own knowledge, and never write a URL.',
+      '- Do not mention the research process, the claims, or what was unavailable. Just report what is known.',
     ].join('\n'),
-    isValid: (v) => isText(v?.heading) && isText(v?.body),
+    isValid: (v) => isText(v?.body),
   });
 
   // Degraded but honest: the verified claims themselves, each still carrying
@@ -107,7 +111,6 @@ export async function synthesizeSection({ question, claims, config }) {
   if (!value) {
     const used = claims.slice(0, 4);
     return {
-      heading: question,
       facts: used.slice(0, 2).map((c) => c.text),
       body: used.map((c) => `${c.text} [${c.id}]`).join(' '),
       degraded: true,
@@ -115,37 +118,53 @@ export async function synthesizeSection({ question, claims, config }) {
   }
 
   return {
-    heading: value.heading.trim(),
     facts: (Array.isArray(value.facts) ? value.facts : []).filter(isText).slice(0, 3).map((f) => f.trim()),
     body: value.body.trim(),
     degraded: false,
   };
 }
 
-export async function summarize({ query, claims, config }) {
-  const value = await askJson({
+// The last stage, and the only one that sees the report whole. It runs AFTER
+// the sections rather than beside them so it answers what was asked from
+// finished, claim-grounded prose instead of from a truncated dump of claims —
+// which is the difference between "here is what we found" and an answer.
+export async function answerQuestion({ query, sections, unanswered = [], config, ask = askJson }) {
+  const value = await ask({
     config,
-    system: 'You write the opening summary of a research report using ONLY the claims given. Reply with ONLY a JSON object.',
+    system: 'You answer a research question using ONLY the report sections given. Reply with ONLY a JSON object.',
     user: [
-      `Research question: ${query}`,
+      `The question to answer: ${query}`,
       '',
-      'Claims:',
-      claims.map((c) => `${c.id}: ${c.text}`).join('\n'),
+      'Verified report sections:',
+      sections.map((s) => `### ${s.question}\n${s.body}`).join('\n\n'),
       '',
-      'Return: {"facts":["...","..."],"summary":"..."}',
-      '- "facts" is 2-3 very short scannable lines, each under 55 characters, no trailing punctuation.',
-      '- "summary" is 2-4 sentences directly answering the research question.',
-      '- In "summary", write the claim id in square brackets right after each statement it supports, like: It is open source [c2].',
-      '- Use ONLY the claims above. Add nothing from your own knowledge, and never write a URL.',
-      '- If the claims do not answer the question, say so plainly.',
+      unanswered.length ? `No sources were found for: ${unanswered.join(' | ')}` : 'Every angle returned findings.',
+      '',
+      'Return: {"facts":["...","..."],"answer":"..."}',
+      '- "facts" is 3-4 very short scannable lines, each under 60 characters, no trailing punctuation.',
+      '- "answer" is 4-8 sentences answering the question above directly and completely.',
+      '- Address every part the question asks about. If it names several things, say something about each of them by name.',
+      '- If the sections are missing something the question asked for, say which in one short clause — then move on. Never fill the hole from your own knowledge.',
+      '- Keep the [c1] style claim ids on any statement you carry over from a section. Never write a URL.',
+      '- Write for the reader, not about the run: no "the available claims", no "the sources say", no mention of sections or research.',
     ].join('\n'),
-    isValid: (v) => isText(v?.summary),
+    isValid: (v) => isText(v?.answer),
   });
-  if (!value) return { facts: [], summary: '' };
+
+  // A failed answer stage must not behead the report: the opening sentence of
+  // each section, markers intact, is a plain but true answer.
+  if (!value) return { answer: sections.map(firstSentence).filter(Boolean).join(' '), facts: [] };
+
   return {
-    facts: (Array.isArray(value.facts) ? value.facts : []).filter(isText).slice(0, 3).map((f) => f.trim()),
-    summary: value.summary.trim(),
+    facts: (Array.isArray(value.facts) ? value.facts : []).filter(isText).slice(0, 4).map((f) => f.trim()),
+    answer: value.answer.trim(),
   };
+}
+
+function firstSentence(section) {
+  const body = String(section?.body || '').trim();
+  const end = body.search(/(?<=[.!?])\s/);
+  return end === -1 ? body : body.slice(0, end + 1).trim();
 }
 
 // The one adaptive decision in the pipeline, and deliberately the narrowest:

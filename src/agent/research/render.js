@@ -1,5 +1,6 @@
-// Renders a finished run as Discord messages — one per section, so a section
-// is never split across two messages and never shares one with its neighbour.
+// Renders a finished run as ONE document. Splitting it into Discord-sized
+// messages is chunk.js's job and nobody else's — a renderer that also decides
+// message boundaries produces six thin messages where two full ones belong.
 //
 // Two hard rules shape the layout:
 //   1. A URL inside a code block is not clickable. So the ```css boxes hold
@@ -10,7 +11,8 @@
 //      from the source the claim actually came from. An id the run never
 //      produced resolves to nothing and disappears.
 
-const FACT_LIMIT = 55;
+const FACT_LIMIT = 60;
+const HEADING_LIMIT = 84;
 
 // Model text is dropped next to fenced blocks, so a stray fence of its own
 // would end a box early and spill the rest of the report as plain text.
@@ -65,75 +67,45 @@ export function linkify(text, claims, sources) {
     .trim();
 }
 
-// Discord's ceiling is 2000. The gap is headroom for the footer, which is
-// appended to the last message after fitting.
-const MESSAGE_LIMIT = 1800;
+// Returns the whole report as one string. The caller chunks it.
+export function renderReport(report) {
+  const { query, depth, answer, answerFacts = [], sections, sources, claims, unanswered = [], stats } = report;
 
-// One section, one message — that is the whole point of returning an array, so
-// a section that would overflow gets its prose cut back at a sentence boundary
-// rather than spilling into a second message. Sections are 2-4 sentences by
-// construction, so this is a safety net, not a routine path.
-function fit(text, limit = MESSAGE_LIMIT) {
-  if (text.length <= limit) return text;
-  const head = text.slice(0, limit - 1);
-  // Never cut inside a masked link: back up to before the last '(' that has no
-  // matching ')' after it.
-  const openLink = head.lastIndexOf('](');
-  const safeEnd = openLink !== -1 && head.indexOf(')', openLink) === -1 ? openLink : head.length;
-  const body = head.slice(0, safeEnd);
-  const sentence = Math.max(body.lastIndexOf('. '), body.lastIndexOf('.\n'));
-  return `${(sentence > limit * 0.5 ? body.slice(0, sentence + 1) : body).trimEnd()}…`;
-}
+  const parts = [`🔬 **${trim(query, 240)}**`];
 
-// Returns an array of messages: the header/summary, then exactly one message
-// per section. The caller sends them in order.
-export function renderMessages(report) {
-  const { query, depth, summary, summaryFacts = [], sections, sources, claims, unanswered, stats } = report;
-
-  const footer = [
-    `-# \`${depth}\` · ${stats.pages} sources · ${stats.claims} verified claims · ${seconds(stats.elapsedMs)}`,
-    // Gaps are reported as a count, not as a box listing our own failed
-    // sub-questions — the decomposition is an implementation detail, and a
-    // scolding block about it is not what anyone asked to read.
-    unanswered.length ? ` · ${unanswered.length} angle(s) found nothing` : '',
-  ].join('');
-
-  if (!sections.length) {
-    return [
-      [
-        `🔬 **${trim(query, 240)}**`,
-        box([
-          '[ No verified findings ]',
-          'Every source failed to load or answered nothing',
-          `/* ${stats.pages} page(s) read, ${stats.searchErrors} search failure(s) */`,
-        ]),
-        footer,
-      ].join('\n\n'),
-    ];
-  }
-
-  const messages = [];
-
-  const head = [`🔬 **${trim(query, 240)}**`];
-  if (summary) {
-    head.push(box(['[ Summary ]', ...summaryFacts.map((f) => `• ${trim(f, FACT_LIMIT)}`)]));
-    head.push(linkify(summary, claims, sources));
-  }
-  messages.push(fit(head.join('\n\n')));
-
-  for (const [i, section] of sections.entries()) {
-    const message = [
+  if (answer) {
+    parts.push(box(['[ Answer ]', ...answerFacts.map((f) => `• ${trim(f, FACT_LIMIT)}`)]));
+    parts.push(linkify(answer, claims, sources));
+  } else {
+    parts.push(
       box([
-        `[ ${i + 1}. ${trim(section.heading, 60)} ]`,
+        '[ No verified findings ]',
+        'Every source failed to load or answered nothing',
+        `/* ${stats.pages} page(s) read, ${stats.searchErrors} search failure(s) */`,
+      ]),
+    );
+  }
+
+  sections.forEach((section, i) => {
+    parts.push(
+      box([
+        `[ ${i + 1}. ${trim(section.question, HEADING_LIMIT)} ]`,
         ...(section.facts || []).map((f) => `• ${trim(f, FACT_LIMIT)}`),
       ]),
-      linkify(section.body, claims, sources),
-    ].join('\n\n');
-    messages.push(fit(message));
+    );
+    parts.push(linkify(section.body, claims, sources));
+  });
+
+  // A named gap is worth more than a count: a reader who asked about three
+  // universities needs to see which one the run came back empty on, not infer
+  // it from a section that quietly covers two.
+  if (unanswered.length) {
+    parts.push(box(['[ Found nothing on ]', ...unanswered.map((q) => `• ${trim(q, HEADING_LIMIT)}`)]));
   }
 
-  // The footer rides along with the last section rather than costing a message
-  // of its own.
-  messages[messages.length - 1] += `\n\n${footer}`;
-  return messages;
+  parts.push(
+    `-# \`${depth}\` · ${stats.pages} sources · ${stats.claims} verified claims · ${seconds(stats.elapsedMs)}`,
+  );
+
+  return parts.filter(Boolean).join('\n\n');
 }

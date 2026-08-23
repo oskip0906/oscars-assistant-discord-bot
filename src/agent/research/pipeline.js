@@ -1,4 +1,4 @@
-import { planQuestions, extractClaims, synthesizeSection, summarize, gapQueries } from './stages.js';
+import { planQuestions, extractClaims, synthesizeSection, answerQuestion, gapQueries } from './stages.js';
 import { pool, searchAll, selectSources, fetchPage } from './gather.js';
 
 // The three tiers differ in width (how many sub-questions and results) and in
@@ -130,8 +130,8 @@ export async function runResearch({ query, depth = 'normal', config, onProgress 
     return {
       query,
       depth: resolveDepth(depth),
-      summary: '',
-      summaryFacts: [],
+      answer: '',
+      answerFacts: [],
       sections: [],
       sources,
       claims,
@@ -157,29 +157,34 @@ export async function runResearch({ query, depth = 'normal', config, onProgress 
     sectionClaims.set(question.id, kept);
   }
 
-  // Everything the report needs, written at once: each section only ever sees
-  // its own sub-question's claims, which keeps the job narrow enough for a weak
-  // model and makes the whole synthesis stage one round-trip wide.
+  // Sections first, in parallel: each one only ever sees its own
+  // sub-question's claims, which keeps the job narrow enough for a weak model.
   notify('🧠 Writing the report…');
   const answered = subQuestions.filter((q) => sectionClaims.get(q.id).length > 0);
-  const [overview, ...sections] = await Promise.all([
-    summarize({ query, claims: claims.slice(0, 40), config }),
-    ...answered.map(async (q) => ({
+  const sections = await Promise.all(
+    answered.map(async (q) => ({
       questionId: q.id,
       question: q.question,
-      ...(await synthesizeSection({ question: q.question, claims: sectionClaims.get(q.id), config })),
+      ...(await synthesizeSection({ query, question: q.question, claims: sectionClaims.get(q.id), config })),
     })),
-  ]);
+  );
+
+  const unanswered = subQuestions.filter((q) => claimsFor(q.id).length === 0).map((q) => q.question);
+
+  // Then the answer, from the finished sections rather than beside them. It
+  // costs one extra round-trip and buys the only thing the reader asked for:
+  // an answer to the question they actually typed.
+  const head = await answerQuestion({ query, sections, unanswered, config });
 
   return {
     query,
     depth: resolveDepth(depth),
-    summary: overview.summary,
-    summaryFacts: overview.facts,
+    answer: head.answer,
+    answerFacts: head.facts,
     sections,
     sources,
     claims,
-    unanswered: subQuestions.filter((q) => claimsFor(q.id).length === 0).map((q) => q.question),
+    unanswered,
     stats: { pages: sources.length, claims: claims.length, searchErrors, elapsedMs: Date.now() - started },
   };
 }
