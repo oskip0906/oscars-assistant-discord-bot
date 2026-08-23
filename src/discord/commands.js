@@ -13,6 +13,8 @@ import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
 import { setDevelopmentModel } from '../configManager.js';
 import { clearPersonaCache } from '../agent/systemPrompt.js';
+import { runResearch } from '../agent/research/pipeline.js';
+import { renderReport } from '../agent/research/render.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -63,6 +65,20 @@ export const commandDefs = [
     .setName('vault_fetch')
     .setDescription("Read Oscar's knowledge vault")
     .addStringOption((o) => o.setName('query').setDescription('What to look for in the vault')),
+  new SlashCommandBuilder()
+    .setName('research')
+    .setDescription('Deep research: plan, crawl, verify, and report with sources')
+    .addStringOption((o) => o.setName('query').setDescription('What to research').setRequired(true))
+    .addStringOption((o) =>
+      o
+        .setName('depth')
+        .setDescription('How hard to dig (default: normal)')
+        .addChoices(
+          { name: 'quick', value: 'quick' },
+          { name: 'normal', value: 'normal' },
+          { name: 'deep', value: 'deep' },
+        ),
+    ),
   new SlashCommandBuilder()
     .setName('github')
     .setDescription('Call the GitHub API (writes/private repos are owner only)')
@@ -326,6 +342,30 @@ export function createInteractionHandler({ client, config, contextStore, player,
       }
 
       // --- Tool slash commands (work in servers and DMs) ---------------
+
+      if (name === 'research') {
+        await interaction.deferReply();
+        const depth = interaction.options.getString('depth') || 'normal';
+
+        // A deep run is minutes long. Editing the deferred reply as each stage
+        // lands is the difference between "working" and "hung" — throttled,
+        // because Discord rate-limits edits far below the rate stages finish.
+        let lastEdit = 0;
+        const onProgress = (text) => {
+          const now = Date.now();
+          if (now - lastEdit < 2000) return;
+          lastEdit = now;
+          interaction.editReply({ content: `🔬 ${text}` }).catch(() => {});
+        };
+
+        const report = await runResearch({
+          query: interaction.options.getString('query', true),
+          depth,
+          config,
+          onProgress,
+        });
+        return await sendToolResult(renderReport(report));
+      }
 
       if (name === 'web_search') {
         return await runTool(webSearch, {
