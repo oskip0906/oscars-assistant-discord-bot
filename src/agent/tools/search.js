@@ -202,68 +202,82 @@ async function ddgDirectSearch(query) {
 
 // --- Tools --------------------------------------------------------------
 
+// Structured search: the provider chain and cache, without the model-facing
+// formatting. webSearch renders this; deep research consumes it directly.
+export async function searchResults(query, count, config) {
+  const key = `search:${query}`;
+  const hit = cached(key);
+  if (hit) return hit.slice(0, count);
+
+  const providers = [];
+  if (config.searxngUrl) providers.push(['searxng', () => searxngSearch(query, count, config)]);
+  if (config.braveApiKey) providers.push(['brave', () => braveSearch(query, count, config.braveApiKey)]);
+  providers.push(['jina/ddg', () => jinaDdgSearch(query, config)]);
+  providers.push(['ddg-direct', () => ddgDirectSearch(query)]);
+
+  const errors = [];
+  for (const [name, run] of providers) {
+    try {
+      const results = await run();
+      if (results?.length) return store(key, results).slice(0, count);
+    } catch (err) {
+      errors.push(`${name}: ${String(err.message || err).slice(0, 80)}`);
+    }
+  }
+  throw new Error(`all providers failed (${errors.join(' | ')})`);
+}
+
 export async function webSearch({ query, count }, invocation) {
   const n = clampCount(count, 5, 8);
-  const key = `search:${query}`;
-  let results = cached(key);
-
-  if (!results) {
-    const providers = [];
-    if (invocation.config.searxngUrl) providers.push(['searxng', () => searxngSearch(query, n, invocation.config)]);
-    if (invocation.config.braveApiKey) providers.push(['brave', () => braveSearch(query, n, invocation.config.braveApiKey)]);
-    providers.push(['jina/ddg', () => jinaDdgSearch(query, invocation.config)]);
-    providers.push(['ddg-direct', () => ddgDirectSearch(query)]);
-
-    const errors = [];
-    for (const [name, run] of providers) {
-      try {
-        results = await run();
-        if (results?.length) {
-          store(key, results);
-          break;
-        }
-      } catch (err) {
-        errors.push(`${name}: ${String(err.message || err).slice(0, 80)}`);
-        results = null;
-      }
-    }
-    if (!results?.length) {
-      return `No web results for "${query}" (all providers failed: ${errors.join(' | ')}).`;
-    }
+  let results;
+  try {
+    results = await searchResults(query, n, invocation.config);
+  } catch (err) {
+    return `No web results for "${query}" (${err.message}).`;
   }
 
   // URLs are wrapped in <> — Discord's embed-suppression syntax. Keep them
   // wrapped when citing links in replies.
   return results
-    .slice(0, n)
     .map((r, i) => `${i + 1}. ${r.title}\n<${r.url}>${r.snippet ? `\n${r.snippet}` : ''}`)
     .join('\n\n');
+}
+
+// Structured page fetch: returns { title, url, content } or throws with a
+// human-readable reason. webFetch renders this; research consumes it directly.
+export async function fetchPage(url, config) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) throw new Error('not an http(s) URL');
+  const key = `fetch:${target}`;
+  const hit = cached(key);
+  if (hit) return hit;
+
+  const res = await fetchWithRetry(`https://r.jina.ai/${target}`, {
+    headers: { Accept: 'application/json', 'X-Retain-Images': 'none', ...jinaHeaders(config) },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const payload = {
+    title: data?.data?.title || target,
+    url: data?.data?.url || target,
+    content: data?.data?.content || '',
+  };
+  if (!payload.content) throw new Error('no readable content');
+  return store(key, payload);
 }
 
 export async function webFetch({ url, max_chars }, invocation) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) return 'Provide a full URL starting with http:// or https://';
   const cap = clampCount(max_chars, 6000, 20000);
-  const key = `fetch:${target}`;
-  let payload = cached(key);
-
-  if (!payload) {
-    try {
-      const res = await fetchWithRetry(`https://r.jina.ai/${target}`, {
-        headers: { Accept: 'application/json', 'X-Retain-Images': 'none', ...jinaHeaders(invocation.config) },
-      });
-      if (!res.ok) return `Couldn't fetch that page (HTTP ${res.status}).`;
-      const data = await res.json();
-      payload = {
-        title: data?.data?.title || target,
-        url: data?.data?.url || target,
-        content: data?.data?.content || '',
-      };
-      if (!payload.content) return `Fetched ${target} but it had no readable content.`;
-      store(key, payload);
-    } catch (err) {
-      return `Failed to fetch ${target}: ${String(err.message || err).slice(0, 150)}`;
-    }
+  let payload;
+  try {
+    payload = await fetchPage(target, invocation.config);
+  } catch (err) {
+    const reason = String(err.message || err);
+    if (/^HTTP /.test(reason)) return `Couldn't fetch that page (${reason}).`;
+    if (reason === 'no readable content') return `Fetched ${target} but it had no readable content.`;
+    return `Failed to fetch ${target}: ${reason.slice(0, 150)}`;
   }
 
   const body = payload.content.slice(0, cap);
