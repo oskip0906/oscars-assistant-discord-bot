@@ -13,6 +13,12 @@
 # node is, and the pull happens strictly between those.
 cd "$(dirname "$0")" || exit 1
 
+# Search needs a private SearXNG on loopback, and a fresh checkout has neither
+# the container nor its (gitignored) settings.yml. Run before either branch so a
+# crash-restart revives it too. Costs one health probe when it is already up,
+# and never fails the boot — see scripts/ensure-searxng.sh.
+[ -x scripts/ensure-searxng.sh ] && ./scripts/ensure-searxng.sh
+
 if [ -n "$PANDA_SUPERVISED" ]; then
   node src/index.js
   exit $?
