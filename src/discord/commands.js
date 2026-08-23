@@ -14,7 +14,7 @@ import { selfFixState } from '../selfFixState.js';
 import { setDevelopmentModel } from '../configManager.js';
 import { clearPersonaCache } from '../agent/systemPrompt.js';
 import { runResearch } from '../agent/research/pipeline.js';
-import { renderReport } from '../agent/research/render.js';
+import { renderMessages } from '../agent/research/render.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -215,7 +215,12 @@ export function createInteractionHandler({ client, config, contextStore, player,
     // minutes more, so the answer routinely arrives after the token is gone —
     // post it in the channel rather than dropping it.
     const sendToolResult = async (text) => {
-      const parts = chunkMessage(suppressLinkEmbeds(String(text)));
+      // An array means the caller already decided the message boundaries
+      // (research sends one message per section); only split a part that is
+      // too long on its own.
+      const parts = (Array.isArray(text) ? text : [text]).flatMap((piece) =>
+        chunkMessage(suppressLinkEmbeds(String(piece))),
+      );
       const channel = interaction.channel;
       let live = true;
       for (const [index, part] of parts.entries()) {
@@ -364,7 +369,7 @@ export function createInteractionHandler({ client, config, contextStore, player,
           config,
           onProgress,
         });
-        return await sendToolResult(renderReport(report));
+        return await sendToolResult(renderMessages(report));
       }
 
       if (name === 'web_search') {

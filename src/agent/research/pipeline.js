@@ -95,9 +95,16 @@ export async function runResearch({ query, depth = 'normal', config, onProgress 
 
   const claimsFor = (id) => claims.filter((c) => c.questionId === id);
 
-  for (let round = 0; round < tier.gapRounds; round++) {
+  // A sub-question that found nothing always gets one more try, at every depth:
+  // the usual cause is a bad search query, not an unanswerable question, and a
+  // silent hole in the report is the worst possible outcome. `deep` keeps its
+  // extra rounds for questions that are merely thin.
+  const rescueRounds = Math.max(1, tier.gapRounds);
+  for (let round = 0; round < rescueRounds; round++) {
     if (outOfTime() || sources.length >= tier.maxPages) break;
-    const unanswered = subQuestions.filter((q) => claimsFor(q.id).length < ANSWERED);
+    // First pass rescues the empty ones; deeper rounds also top up the thin.
+    const threshold = round === 0 && !tier.gapRounds ? 1 : ANSWERED;
+    const unanswered = subQuestions.filter((q) => claimsFor(q.id).length < threshold);
     if (!unanswered.length) break;
 
     notify(`🕳️ Gap round ${round + 1}: ${unanswered.length} question(s) still thin…`);

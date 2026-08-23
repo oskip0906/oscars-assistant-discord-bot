@@ -17,7 +17,9 @@ export async function planQuestions({ query, count, config }) {
       `Return: {"subQuestions":[{"question":"...","query":"..."}]} with exactly ${count} entries.`,
       '- "question" is one specific factual sub-question worth answering on its own.',
       '- "query" is a short web search query (3-8 words) likely to answer it.',
-      '- Cover different angles. Never repeat the same angle in two entries.',
+      '- If the research question names specific things (organizations, people, products, places), every one of them MUST appear by name in at least one sub-question, and in that entry search query too. Never drop one.',
+      '- When several named things are being compared, give each its own entry rather than one generic entry that names none of them.',
+      '- Otherwise cover different angles, and never repeat the same angle in two entries.',
     ].join('\n'),
     isValid: (v) =>
       Array.isArray(v?.subQuestions) &&
