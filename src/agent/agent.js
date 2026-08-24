@@ -15,7 +15,7 @@ const TOOL_RESULT_CAP = 12000;
 // messages back into memory. Six turns of that filled the transcript with
 // duplicates of itself, evicted the real conversation, and left the model
 // reading its own "do NOT reply to these" blocks as if they were prior turns.
-export async function runAgent(invocation, userContent, rememberContent = userContent) {
+export async function runAgent(invocation, userContent, rememberContent = userContent, { chat = chatCompletion } = {}) {
   const { contextStore, config, contextKey } = invocation;
   const history = contextStore.get(contextKey);
   const summary = contextStore.summary?.(contextKey) || '';
@@ -27,8 +27,14 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
   ];
   const newMessages = [{ role: 'user', content: rememberContent }];
 
+  // A turn that dies at the model call used to vanish from history entirely:
+  // the model had seen the question, memory had not, and the next turn had no
+  // idea what was just asked. newMessages is always balanced here — tool
+  // results are pushed in the same iteration as the assistant message that
+  // requested them — so whatever it holds is valid history to store.
+  try {
   for (let iteration = 0; iteration < config.maxToolIterations; iteration++) {
-    const msg = await chatCompletion({
+    const msg = await chat({
       apiKey: config.openrouterApiKey,
       model: config.model,
       messages,
@@ -69,6 +75,10 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
 
   persist(invocation, newMessages);
   return '⚠️ I hit my tool-use limit before finishing that. Progress is saved — tell me to continue.';
+  } catch (err) {
+    persist(invocation, newMessages);
+    throw err;
+  }
 }
 
 function persist(invocation, newMessages) {

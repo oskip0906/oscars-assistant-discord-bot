@@ -1,35 +1,64 @@
 import { chatCompletion } from './openrouter.js';
 
-// Memory now only stores user prompts instead of the entire message history.
-// Prompts are saved directly, and once 10 unique prompts have accumulated the
-// model compacts them into the running summary — so only 1 in every 10
-// eviction cycles triggers a model call.
+// Long-term memory holds EXCHANGES, not prompts. Storing only what people asked
+// meant the summary preserved every question and none of the answers: a fact
+// Panda established, a link it found, a decision it made all fell out of memory
+// the moment they left the verbatim window.
+//
+// Exchanges accumulate for free; only once COMPACT_THRESHOLD of them have piled
+// up does the model get called to fold them in — roughly 1 eviction cycle in 10.
 
 const MAX_SUMMARY_CHARS = 1500;
 
 const SYSTEM_PROMPT = [
   'You maintain the long-term memory of a Discord conversation.',
-  'You are given the current memory and a list of user prompts that have accumulated since the last compaction.',
+  'You are given the current memory and the exchanges that have accumulated since the last compaction, each as a question (Q) and the answer that was given (A).',
   'Return the updated memory as plain prose. Return ONLY the memory text.',
   '',
   'Keep: who the people are and what they care about, decisions made, facts established, preferences stated, tasks that are still open, and anything the bot promised to do.',
+  'Answers matter as much as questions — what was established is usually the part worth remembering.',
   'Drop: greetings, thanks, goodbyes, acknowledgements, and any exchange where nothing was decided or learned. Two bots being polite to each other is not memory.',
   `Stay under ${MAX_SUMMARY_CHARS} characters. When it would run over, drop the oldest and least consequential details rather than truncating mid-sentence.`,
 ].join('\n');
 
-// Extract unique user prompt texts from evicted messages.
-function collectPrompts(messages) {
-  return messages
-    .filter((m) => m.role === 'user' && m.content)
-    .map((m) => String(m.content).replace(/\s+/g, ' ').trim())
-    .filter((line) => line.length > 0);
+const squash = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+// One entry per user message, paired with the reply it actually got. The LAST
+// assistant message before the next user turn is the real answer; the earlier
+// ones are tool-call narration ("let me look that up") and are not worth
+// remembering. Tool results never enter memory: they are raw page text, and
+// whatever mattered in them is already in the answer.
+export function collectExchanges(messages) {
+  const exchanges = [];
+  for (let i = 0; i < (messages?.length || 0); i++) {
+    if (messages[i]?.role !== 'user') continue;
+    const question = squash(messages[i].content);
+    if (!question) continue;
+
+    let answer = '';
+    for (let j = i + 1; j < messages.length && messages[j]?.role !== 'user'; j++) {
+      if (messages[j]?.role === 'assistant' && squash(messages[j].content)) answer = squash(messages[j].content);
+    }
+    // A question that never got an answer is still worth keeping — it is
+    // usually the one thing left open.
+    exchanges.push(answer ? `Q: ${question}\nA: ${answer}` : `Q: ${question}`);
+  }
+  return exchanges;
 }
 
-export async function foldIntoSummary({ previous = '', pendingPrompts = [], apiKey, model, chat = chatCompletion }) {
-  if (!pendingPrompts.length) return previous;
+// The prompt promises not to truncate mid-sentence, so the code must not either.
+function fitSummary(text) {
+  const clean = String(text || '').trim();
+  if (clean.length <= MAX_SUMMARY_CHARS) return clean;
+  const head = clean.slice(0, MAX_SUMMARY_CHARS);
+  const end = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '));
+  return (end > MAX_SUMMARY_CHARS * 0.5 ? head.slice(0, end + 1) : `${head.trimEnd()}…`).trim();
+}
 
-  const promptList = pendingPrompts.map((p, i) => `${i + 1}. ${p}`).join('\n');
+export async function foldIntoSummary({ previous = '', pending = [], apiKey, model, chat = chatCompletion }) {
+  if (!pending.length) return previous;
 
+  const list = pending.map((entry, i) => `${i + 1}. ${entry}`).join('\n');
   const message = await chat({
     apiKey,
     model,
@@ -37,38 +66,66 @@ export async function foldIntoSummary({ previous = '', pendingPrompts = [], apiK
       { role: 'system', content: SYSTEM_PROMPT },
       {
         role: 'user',
-        content: [previous ? `Current memory:\n${previous}` : 'Current memory: (empty)', '', 'User prompts since last compaction:', promptList].join('\n'),
+        content: [
+          previous ? `Current memory:\n${previous}` : 'Current memory: (empty)',
+          '',
+          'Exchanges since last compaction:',
+          list,
+        ].join('\n'),
       },
     ],
   });
   const updated = String(message?.content || '').trim();
-  return updated ? updated.slice(0, MAX_SUMMARY_CHARS) : previous;
+  return updated ? fitSummary(updated) : previous;
 }
 
-// Accumulate prompts from evicted messages directly.  Only when 10 unique
-// prompts have been collected do we call the model to compact them into the
-// summary — 1 in 10 times.
+// One compaction at a time per context. rememberEvicted is deliberately not
+// awaited by the caller (the reply must not wait on a summary), so without this
+// two turns evicting in quick succession both read the same `previous`, both
+// fold, and the second write silently discards the first batch entirely.
+// Same shape as enqueueContext in messageHandler.js.
+const compactions = new Map();
+function serialize(key, task) {
+  const next = (compactions.get(key) || Promise.resolve()).then(task, task);
+  compactions.set(
+    key,
+    next.finally(() => {
+      if (compactions.get(key) === next) compactions.delete(key);
+    }),
+  );
+  return next;
+}
+
 export function rememberEvicted({ store, key, evicted, config, chat = chatCompletion }) {
-  if (!evicted?.length || !store?.addPrompt || !store?.consumePrompts || !config?.openrouterApiKey) return Promise.resolve();
+  if (!evicted?.length || !store?.addPending || !store?.consumePending || !config?.openrouterApiKey) return Promise.resolve();
 
-  // Save each unique user prompt directly.  addPrompt returns true when the
-  // threshold is met.
   let shouldCompact = false;
-  for (const prompt of collectPrompts(evicted)) {
-    if (store.addPrompt(key, prompt)) shouldCompact = true;
+  for (const exchange of collectExchanges(evicted)) {
+    if (store.addPending(key, exchange)) shouldCompact = true;
   }
-
   if (!shouldCompact) return Promise.resolve();
 
-  const pendingPrompts = store.consumePrompts(key);
-  if (!pendingPrompts.length) return Promise.resolve();
-
-  return foldIntoSummary({ previous: store.summary?.(key) || '', pendingPrompts, apiKey: config.openrouterApiKey, model: config.model, chat })
-    .then((summary) => {
+  // Read, fold and write all inside the queue, so `previous` is whatever the
+  // previous compaction actually wrote.
+  return serialize(key, async () => {
+    const pending = store.consumePending(key);
+    if (!pending.length) return;
+    try {
+      const summary = await foldIntoSummary({
+        previous: store.summary?.(key) || '',
+        pending,
+        apiKey: config.openrouterApiKey,
+        model: config.model,
+        chat,
+      });
       if (summary && summary !== store.summary?.(key)) {
         store.setSummary(key, summary);
-        console.log(`[panda] memory for ${key}: compacted ${pendingPrompts.length} user prompts into a ${summary.length}-char summary`);
+        console.log(`[panda] memory for ${key}: compacted ${pending.length} exchange(s) into a ${summary.length}-char summary`);
       }
-    })
-    .catch((err) => console.error('[panda] memory summarisation failed:', err.message));
+    } catch (err) {
+      // Put them back rather than dropping them on a transient API failure.
+      store.restorePending?.(key, pending);
+      console.error('[panda] memory summarisation failed:', err.message);
+    }
+  });
 }

@@ -6,10 +6,9 @@ import path from 'node:path';
 // still *known* even once its exact wording is gone.
 const MAX_MESSAGES = 40;
 
-// How many unique user prompts we accumulate before the model compacts them
-// into the summary. Every prompt is saved directly; only 1 in 10 eviction cycles
-// triggers a model call.
-const PROMPT_COMPACT_THRESHOLD = 10;
+// How many unique exchanges accumulate before the model compacts them into the
+// summary. Each is stored for free; only 1 eviction cycle in 10 costs a call.
+const COMPACT_THRESHOLD = 10;
 
 // Split a transcript so the kept part fits in `max` messages and starts on a
 // role:'user' boundary — otherwise an assistant tool_calls message can survive
@@ -19,7 +18,12 @@ export function splitAtBoundary(messages, max = MAX_MESSAGES) {
   if (messages.length <= max) return { kept: messages, evicted: [] };
   let i = messages.length - max;
   while (i < messages.length && messages[i].role !== 'user') i++;
-  if (i >= messages.length) return { kept: [], evicted: messages }; // no clean boundary in range
+  // No user message in range. Returning kept:[] here threw the whole
+  // conversation away — which a couple of tool-heavy turns back to back can
+  // trigger. Keep everything instead and let the window overshoot until the
+  // next user turn gives us a clean cut; every turn starts with one, so the
+  // overshoot lasts exactly one turn.
+  if (i >= messages.length) return { kept: messages, evicted: [] };
   return { kept: messages.slice(i), evicted: messages.slice(0, i) };
 }
 
@@ -53,11 +57,18 @@ export class ContextStore {
   // record with an empty summary rather than throwing the conversation away.
   record(key) {
     if (!this.cache.has(key)) {
-      let record = { summary: '', messages: [], pendingPrompts: [] };
+      let record = { summary: '', messages: [], pending: [] };
       try {
         const raw = JSON.parse(fs.readFileSync(this.fileFor(key), 'utf8'));
-        if (Array.isArray(raw)) record = { summary: '', messages: raw, pendingPrompts: [] };
-        else if (raw && Array.isArray(raw.messages)) record = { summary: String(raw.summary || ''), messages: raw.messages, pendingPrompts: Array.isArray(raw.pendingPrompts) ? raw.pendingPrompts : [] };
+        if (Array.isArray(raw)) record = { summary: '', messages: raw, pending: [] };
+        else if (raw && Array.isArray(raw.messages))
+          record = {
+            summary: String(raw.summary || ''),
+            messages: raw.messages,
+            // `pendingPrompts` is the pre-exchange field name; carry it over so
+            // an existing file keeps what it had accumulated.
+            pending: Array.isArray(raw.pending) ? raw.pending : Array.isArray(raw.pendingPrompts) ? raw.pendingPrompts : [],
+          };
       } catch {
         /* no file yet, or unreadable — start clean */
       }
@@ -90,29 +101,35 @@ export class ContextStore {
     return evicted;
   }
 
-  // Accumulate a unique user prompt directly, without a model call.  Returns
-  // true when the threshold is met and the caller should compact.
-  addPrompt(key, content) {
+  // Accumulate one unique exchange, no model call. Returns true when the
+  // threshold is met and the caller should compact.
+  addPending(key, entry) {
     const record = this.record(key);
-    const clean = String(content).replace(/\s+/g, ' ').trim();
-    if (!clean) return false;
-    if (record.pendingPrompts.includes(clean)) return false;
-    record.pendingPrompts.push(clean);
+    const clean = String(entry ?? '').trim();
+    if (!clean || record.pending.includes(clean)) return false;
+    record.pending.push(clean);
     this.persist(key);
-    return record.pendingPrompts.length >= PROMPT_COMPACT_THRESHOLD;
+    return record.pending.length >= COMPACT_THRESHOLD;
   }
 
-  promptsPending(key) {
-    return this.record(key).pendingPrompts.length;
+  pendingCount(key) {
+    return this.record(key).pending.length;
   }
 
-  // Consume all pending prompts (for compaction) and return them.
-  consumePrompts(key) {
+  consumePending(key) {
     const record = this.record(key);
-    const prompts = record.pendingPrompts.slice();
-    record.pendingPrompts = [];
+    const pending = record.pending.slice();
+    record.pending = [];
     this.persist(key);
-    return prompts;
+    return pending;
+  }
+
+  // Compaction failed; put them back at the front so they are folded in next
+  // time rather than lost to a transient API error.
+  restorePending(key, entries) {
+    const record = this.record(key);
+    record.pending = [...entries.filter((e) => !record.pending.includes(e)), ...record.pending];
+    this.persist(key);
   }
 
   persist(key) {
@@ -124,7 +141,7 @@ export class ContextStore {
   }
 
   clear(key) {
-    this.cache.set(key, { summary: '', messages: [], pendingPrompts: [] });
+    this.cache.set(key, { summary: '', messages: [], pending: [] });
     fs.rmSync(this.fileFor(key), { force: true });
   }
 
