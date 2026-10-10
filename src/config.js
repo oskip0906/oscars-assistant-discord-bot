@@ -69,6 +69,17 @@ export const config = {
   supabaseKey: process.env.SUPABASE_SECRET_KEY || '',
 };
 
+// The bot's secrets only ever go into auth headers; none is put in front of the
+// model or into a message. redactSecrets guarantees it at both boundaries anyway,
+// so no bug, error message or tool output can hand one to whoever asks.
+export function redactSecrets(text) {
+  let out = String(text ?? '');
+  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.supabaseKey]) {
+    if (secret && secret.length >= 8) out = out.split(secret).join('[redacted]');
+  }
+  return out;
+}
+
 export function validateConfig() {
   const missing = [];
   if (!config.discordToken) missing.push('DISCORD_TOKEN');

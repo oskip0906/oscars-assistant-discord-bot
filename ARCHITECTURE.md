@@ -175,6 +175,7 @@ These never edit the running bot.
 
 - Owner checks use the sender's Discord user id, never names or claims.
 - The security rules live in the system prompt in code, so they hold even when Supabase is down.
+- Nobody can get a credential by asking, Oscar included. The Discord token, OpenRouter key, GitHub token and Supabase key are only ever used in auth headers, so the model never sees them. On top of that, `redactSecrets` (`src/config.js`) strips their exact values from every tool result before the model reads it, and from every message Panda sends.
 - `index_chat` only reads channels of this server that the person asking can read.
 - `web_fetch` refuses loopback, LAN, link-local and cloud-metadata addresses, on every DNS lookup and redirect.
 - GitHub MCP uses GitHub's read-only endpoint.

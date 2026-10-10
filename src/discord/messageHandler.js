@@ -7,6 +7,7 @@ import { decide } from '../agent/jev.js';
 import { saveMessages } from '../agent/historyStore.js';
 import { attachmentParts, gifPreviews } from './attachments.js';
 import { modelInputs } from './model.js';
+import { redactSecrets } from '../config.js';
 
 // Fixed-window input debounce with a per-channel queue.
 //
@@ -209,7 +210,7 @@ export function createMessageHandler({ client, config, player, privateMode, self
 
         const sent = [];
         if (replyText.trim()) {
-          replyText = suppressLinkEmbeds(replyText);
+          replyText = suppressLinkEmbeds(redactSecrets(replyText));
           const parts = chunkMessage(replyText);
           let first = true;
           for (const chunk of parts) {

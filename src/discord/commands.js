@@ -15,6 +15,7 @@ import { setDevelopmentModel } from '../configManager.js';
 import { runResearch } from '../agent/research/pipeline.js';
 import { renderReport } from '../agent/research/render.js';
 import { indexChannel } from '../agent/historyStore.js';
+import { redactSecrets } from '../config.js';
 import { setRule } from '../agent/tools/rules.js';
 
 export const commandDefs = [
@@ -212,7 +213,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       // An array means the caller already decided the message boundaries;
       // only split a part that is too long on its own.
       const parts = (Array.isArray(text) ? text : [text]).flatMap((piece) =>
-        chunkMessage(suppressLinkEmbeds(String(piece))),
+        chunkMessage(suppressLinkEmbeds(redactSecrets(piece))),
       );
       const channel = interaction.channel;
       let live = true;
@@ -493,7 +494,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
     } catch (err) {
       if (err?.code === 10062 || err?.code === 40060) return;
       console.error('[panda] interaction failed:', err);
-      const payload = { content: `⚠️ ${String(err.message || err).slice(0, 250)}` };
+      const payload = { content: `⚠️ ${redactSecrets(err.message || err).slice(0, 250)}` };
       try {
         if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
         else await interaction.reply(payload);

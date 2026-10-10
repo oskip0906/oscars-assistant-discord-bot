@@ -92,3 +92,23 @@ test('does nothing when SEARXNG_URL is not a loopback address', () => {
   assert.equal(result.status, 0);
   assert.ok(!existsSync(path.join(dirs.root, 'docker.log')), 'the deploy container has no docker socket and its own searxng service');
 });
+
+test('run.sh brings SearXNG up even when the script has no executable bit', () => {
+  // git stored ensure-searxng.sh as 100644, so a `-x` guard skipped it on every boot.
+  const root = mkdtempSync(path.join(tmpdir(), 'panda-run-'));
+  mkdirSync(path.join(root, 'scripts'));
+  copyFileSync(path.join(REPO, 'run.sh'), path.join(root, 'run.sh'));
+  writeFileSync(path.join(root, 'scripts', 'ensure-searxng.sh'), 'touch "$(dirname "$0")/../ran"\n');
+  chmodSync(path.join(root, 'scripts', 'ensure-searxng.sh'), 0o644);
+  const bin = path.join(root, 'bin');
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, 'node'), '#!/bin/bash\nexit 0\n'); // stands in for the bot
+  chmodSync(path.join(bin, 'node'), 0o755);
+
+  const result = spawnSync('bash', [path.join(root, 'run.sh')], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, PANDA_SUPERVISED: '1' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(existsSync(path.join(root, 'ran')), 'ensure-searxng.sh must run on boot');
+});

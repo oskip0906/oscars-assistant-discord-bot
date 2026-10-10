@@ -2,6 +2,7 @@ import { chatCompletion } from './openrouter.js';
 import { buildSystemPrompt } from './systemPrompt.js';
 import { toolDefs, executeTool, OWNER_ONLY_TOOLS } from './tools/index.js';
 import { decide } from './jev.js';
+import { redactSecrets } from '../config.js';
 
 const TOOL_RESULT_CAP = 12000;
 const PICK_THRESHOLD = 0.8;
@@ -99,7 +100,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
       const toolMsg = {
         role: 'tool',
         tool_call_id: call.id,
-        content: String(result).slice(0, TOOL_RESULT_CAP),
+        content: redactSecrets(result).slice(0, TOOL_RESULT_CAP),
       };
       messages.push(toolMsg);
     }

@@ -103,3 +103,31 @@ test('saysNothing only matches text without letters or digits', () => {
   assert.ok(!saysNothing('ok'));
   assert.ok(!saysNothing('4'));
 });
+
+test("the bot's secrets never reach the model or a message, however they leak", async () => {
+  const { config, redactSecrets } = await import('../src/config.js');
+  const saved = { ...config };
+  Object.assign(config, { discordToken: 'MTIz.discord.token', openrouterApiKey: 'sk-or-v1-abcdef', githubPat: 'ghp_abcdefgh', supabaseKey: 'sb_secret_abcdefgh' });
+  try {
+    assert.equal(
+      redactSecrets('key sk-or-v1-abcdef, pat ghp_abcdefgh, db sb_secret_abcdefgh, bot MTIz.discord.token'),
+      'key [redacted], pat [redacted], db [redacted], bot [redacted]',
+    );
+    // A tool whose output contains a secret: the model only ever sees it redacted.
+    const seen = [];
+    const leaky = { content: '', tool_calls: [{ id: 't', function: { name: 'get_message_sender', arguments: '{}' } }] };
+    const invocation = {
+      contextKey: 'g',
+      config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', maxToolIterations: 4, ownerId: '1' },
+      message: { channel: { name: 'general' }, author: { id: '2', username: 'sk-or-v1-abcdef' } },
+      isOwner: false,
+    };
+    const replies = [leaky, { content: 'done' }];
+    await runAgent(invocation, 'q', 'q', { chat: async ({ messages }) => (seen.push(...messages), replies.shift()), decideImpl: async () => null });
+    const toolResult = seen.find((m) => m.role === 'tool').content;
+    assert.match(toolResult, /\[redacted\]/);
+    assert.ok(!toolResult.includes('sk-or-v1-abcdef'));
+  } finally {
+    Object.assign(config, saved);
+  }
+});
