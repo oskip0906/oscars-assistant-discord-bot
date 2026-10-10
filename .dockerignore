@@ -8,6 +8,6 @@ searxng
 test
 docs
 *.md
-!README.md
+!ARCHITECTURE.md
 .DS_Store
 npm-debug.log*

@@ -9,7 +9,7 @@ const README = '# Bot\nintro\n\n## Memory\nforty messages\n\n## Music\nplays son
 
 function invocationWith(readme) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'about-'));
-  if (readme !== undefined) fs.writeFileSync(path.join(projectRoot, 'README.md'), readme);
+  if (readme !== undefined) fs.writeFileSync(path.join(projectRoot, 'ARCHITECTURE.md'), readme);
   return { config: { projectRoot } };
 }
 
