@@ -77,6 +77,28 @@ test('a failed lookup tells the model to carry on instead of throwing', async ()
       assert.match(out, /unavailable right now — answer without it/);
     },
   );
-  const unconfigured = await fetchHistory({}, { config: {}, message: { guildId: 'g1', channelId: 'c1' } });
+  const unconfigured = await fetchHistory({ query: 'x' }, { config: {}, message: { guildId: 'g1', channelId: 'c1' } });
   assert.match(unconfigured, /unavailable/);
+});
+
+test('no query reads a range of the channel from Discord, oldest first, own replies marked', async () => {
+  // 250 messages, newest first like Discord; ids count down from 250.
+  const all = Array.from({ length: 250 }, (_, i) => {
+    const n = 250 - i;
+    return { id: String(n), content: `m${n}`, author: { id: n % 2 ? 'me' : 'u', username: 'x' } };
+  });
+  const channel = {
+    messages: {
+      fetch: async ({ limit, before }) => {
+        const page = all.filter((m) => Number(m.id) < Number(before)).slice(0, limit);
+        return Object.assign(new Map(page.map((m) => [m.id, m])), { last: () => page.at(-1) });
+      },
+    },
+  };
+  const message = { id: '251', guildId: 'g1', channelId: 'c1', channel };
+  const out = await fetchHistory({ skip: 95, count: 10 }, { config: {}, message, client: { user: { id: 'me' } } });
+  const lines = out.split('\n').slice(1);
+  assert.equal(lines.length, 10);
+  assert.match(lines[0], /: m146$/);
+  assert.match(lines[9], /^\(you\) .*: m155$/);
 });

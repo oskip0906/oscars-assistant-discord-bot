@@ -2,11 +2,10 @@ import { chatCompletion } from './openrouter.js';
 
 // Long-term memory holds EXCHANGES, not prompts. Storing only what people asked
 // meant the summary preserved every question and none of the answers: a fact
-// Panda established, a link it found, a decision it made all fell out of memory
-// the moment they left the verbatim window.
+// Panda established, a link it found, a decision it made all fell out of memory.
 //
-// Exchanges accumulate for free; only once COMPACT_THRESHOLD of them have piled
-// up does the model get called to fold them in — roughly 1 eviction cycle in 10.
+// Every turn adds its exchange for free; only once COMPACT_THRESHOLD of them have
+// piled up does the model get called to fold them in — roughly 1 turn in 10.
 
 const MAX_SUMMARY_CHARS = 1500;
 
@@ -79,9 +78,9 @@ export async function foldIntoSummary({ previous = '', pending = [], apiKey, mod
   return updated ? fitSummary(updated) : previous;
 }
 
-// One compaction at a time per context. rememberEvicted is deliberately not
+// One compaction at a time per context. rememberTurn is deliberately not
 // awaited by the caller (the reply must not wait on a summary), so without this
-// two turns evicting in quick succession both read the same `previous`, both
+// two turns finishing in quick succession both read the same `previous`, both
 // fold, and the second write silently discards the first batch entirely.
 // Same shape as enqueueContext in messageHandler.js.
 const compactions = new Map();
@@ -96,11 +95,11 @@ function serialize(key, task) {
   return next;
 }
 
-export function rememberEvicted({ store, key, evicted, config, chat = chatCompletion }) {
-  if (!evicted?.length || !store?.addPending || !store?.consumePending || !config?.openrouterApiKey) return Promise.resolve();
+export function rememberTurn({ store, key, messages, config, chat = chatCompletion }) {
+  if (!messages?.length || !store?.addPending || !store?.consumePending || !config?.openrouterApiKey) return Promise.resolve();
 
   let shouldCompact = false;
-  for (const exchange of collectExchanges(evicted)) {
+  for (const exchange of collectExchanges(messages)) {
     if (store.addPending(key, exchange)) shouldCompact = true;
   }
   if (!shouldCompact) return Promise.resolve();

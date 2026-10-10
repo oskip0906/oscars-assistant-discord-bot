@@ -1,6 +1,6 @@
 # How Panda works
 
-The detailed design of panda-bot: how a message becomes a reply, memory, models, tools, research, the development sandbox, safety, and deployment. For a quick overview and setup, see the [README](README.md).
+The detailed design of panda-bot: how a message becomes a reply, memory, models, tools, research, the development sandbox, safety, and deployment. For a quick overview, see the [README](README.md).
 
 Panda answers questions about itself from this file: its `how_i_work` tool reads it. If you change how the bot works, update this file too.
 
@@ -18,16 +18,16 @@ The flow lives in `src/discord/messageHandler.js` and `src/agent/agent.js`.
 **2. Batching (the 3-second window).**
 People often send a thought as three quick messages. The first trigger opens a **3-second batch** for that sender. Everything they send in those 3 seconds joins the batch, with or without a ping, and the timer does **not** reset. Another person's trigger during that time opens their own batch behind it.
 - Each channel has a **FIFO queue** of batches, processed one at a time in arrival order. A queue holds at most **5** waiting batches; more triggers are dropped as spam.
-- All channels of one server share one memory, so batches are also **serialized per server**. Two channels can never write the transcript at the same time.
+- All channels of one server share one memory, so batches are also **serialized per server**. Two channels can never write the memory at the same time.
 - The reply goes to the **last** message of the batch, and the model is told it is one combined turn.
 
 **3. Building the prompt.**
 - **System prompt** (`src/agent/systemPrompt.js`): tone, Discord formatting rules, the react-or-reply rules, tool routing, security rules, and the persona files in `context/` (`IDENTITY.md`, `SOUL.md`, `USER.md`, plus any `context/memory/*.md`).
 - **Long-term summary** of this server, if there is one.
-- **Transcript**: the last ~40 stored messages of this server.
 - **The new turn**, in two labelled blocks:
-  - `[HISTORY CONTEXT]`: the **10 channel messages before the trigger** (Panda's own messages excluded), marked as background only.
+  - `[HISTORY CONTEXT]`: the **10 channel messages before the trigger**, with Panda's own replies marked `(you)`, as background only.
   - `[RESPOND TO THIS]`: the batch itself. This is the task.
+- **No stored transcript.** Those 10 messages are all the conversation the model starts with. It decides for itself whether that is enough; when the turn leans on something earlier ("as I said", "that one", a thread that started before), it calls `fetch_history` to read as far back as it needs.
 - Every message is written as `Name (@username, id:NNN): text`, with mentions as `@Name (id:NNN)`. The model always knows exactly who said what and can ping anyone with `<@id>` without a lookup.
 - **Attachments** (`src/discord/attachments.js`) go to the model for this turn only:
   - Images, if the chat model accepts images (checked against OpenRouter's catalog), up to 5 MB.
@@ -47,44 +47,39 @@ The model is called with all tools. Each tool call it makes is executed and the 
 - The batch and Panda's reply are then saved to the message database. This happens after the reply is sent, so a slow database never delays it.
 
 **6. Bot-to-bot loops.**
-Two polite bots never stop on their own, so:
-- Panda answers another bot at most **3 times in a row** per channel, then stays quiet until a human speaks.
+A conversation with another bot runs for as long as the bots keep it going. It ends on a sign-off:
 - When a bot signs off ("bye!", "have a great day"), Panda reacts 👋 and stops instead of replying. Jev decides what counts as a sign-off; a regex is the fallback.
+- After that, Panda ignores bots in that channel until a human speaks, so a "you too!" doesn't restart it.
 
 ## Memory and context
 
-Each server has its own memory, shared by all its channels and isolated from other servers. There are three layers, plus the persona files.
+Each server has its own memory, shared by all its channels and isolated from other servers. There are two stored layers, plus the persona files. There is no verbatim transcript: each turn sees the last 10 channel messages, and the model reads further back with `fetch_history` when it needs to.
 
-**1. Transcript (verbatim, short-term).**
-Stored at `data/context/<serverId>.json` (`src/agent/contextStore.js`).
-- Keeps the last **40 messages** word for word: user turns, Panda's answers, and tool calls with their results.
-- Older messages are cut at a user-turn boundary, so a tool call is never separated from its result (the API rejects that).
-- Only the turn itself is stored, never the `[HISTORY CONTEXT]` block. Storing it once filled the transcript with copies of itself. Old transcripts that still contain it are cleaned when loaded.
-- Attachments are stored as their URL only.
-- If the model call fails mid-turn, the question is still saved, so the next turn knows what was asked.
-
-**2. Summary (compressed, long-term).**
-Built in `src/agent/memory.js`.
-- Messages that fall out of the 40-message window become **exchanges**: each question paired with the final answer Panda gave. Tool results and "let me look that up" messages are dropped; whatever mattered is already in the answer.
+**1. Summary (compressed, long-term).**
+Stored at `data/context/<serverId>.json` (`src/agent/contextStore.js`), built in `src/agent/memory.js`.
+- Every turn becomes an **exchange**: the question paired with the final answer Panda gave. Tool results and "let me look that up" messages are dropped; whatever mattered is already in the answer. Only the turn itself is used, never the `[HISTORY CONTEXT]` block.
+- If the model call fails mid-turn, the question is still kept.
 - Exchanges collect for free. Once **10** have piled up, the conversation model folds them into a summary of at most **1,500 characters**: who people are, decisions, facts, preferences, open tasks, promises. Greetings and bot pleasantries are dropped.
 - The summary goes into every prompt as *"What you remember about this server"*.
 - Summarising runs after the reply is sent, one at a time per server. If it fails, the exchanges are kept for next time.
 
-**3. Message database (searchable, unlimited).**
+**2. Message database (searchable, unlimited).**
 Supabase Postgres (`src/agent/historyStore.js`, schema in `supabase/discord_history.sql`). Optional: without `SUPABASE_URL` and `SUPABASE_SECRET_KEY`, nothing is stored and the bot works the same otherwise.
 - Every message in a batch, and every message Panda sends, is saved with its message id as the key. Saving a message twice just updates it.
 - `/index_chat` (Oscar) saves a channel's entire history.
-- The `fetch_history` tool searches it when someone refers to an older conversation ("what did we decide about the trip?"):
-  - Messages in one channel are grouped into **conversations**, split at gaps over 30 minutes.
-  - A keyword query (Postgres full-text search) returns the 3 best-matching conversations: 20 messages before each hit and 10 after.
-  - No query returns the 3 most recent conversations.
-  - `author` keeps only conversations where that person spoke (name contains, any case). Searching a name as a keyword finds only other people mentioning them, so "what did X say" needs `author`.
-  - Scope is this channel (default) or the whole server.
+- The `fetch_history` tool has two modes:
+  - **Range** (no `query` or `author`, channel scope): reads this channel straight from Discord, counting back from the message being answered. `count` messages (default 30, max 100) after skipping the `skip` most recent (max 500). Panda's own replies are marked. Works without the database.
+  - **Search** (`query` and/or `author`, or server scope) searches the database when someone refers to an older conversation ("what did we decide about the trip?"):
+    - Messages in one channel are grouped into **conversations**, split at gaps over 30 minutes.
+    - A keyword query (Postgres full-text search) returns the 3 best-matching conversations: 20 messages before each hit and 10 after.
+    - Server scope with no query returns the 3 most recent conversations.
+    - `author` keeps only conversations where that person spoke (name contains, any case). Searching a name as a keyword finds only other people mentioning them, so "what did X say" needs `author`.
+    - Scope is this channel (default) or the whole server.
 - The table has row-level security on and no policies, so only the bot's secret key can read or write it.
 
 **Persona files.** `context/IDENTITY.md`, `SOUL.md` and `USER.md` set who Panda is, how it treats Oscar, and what may be shared about him. They are read once at startup.
 
-**Forgetting.** `/clear` or the `clear_context` tool wipes this server's transcript and summary. `/clearall` or `clear_all_context` wipes every server. Both are Oscar only. The database is not touched by either.
+**Forgetting.** `/clear` or the `clear_context` tool wipes this server's summary. `/clearall` or `clear_all_context` wipes every server. Both are Oscar only. The database is not touched by either.
 
 ## Models: OpenRouter and Jev
 
@@ -118,7 +113,7 @@ Jev is called only for messages that already mention Panda, and the 10 before th
 | `web_search` | Search the web via SearXNG; results cached 10 min |
 | `web_fetch` | Read a public page as text |
 | `image_search` | Google Images via SearXNG, max 3 results, shown as embeds |
-| `fetch_history` | Search older conversations in the message database, by keyword and/or author |
+| `fetch_history` | Read further back in this channel (a range of messages), or search older conversations in the message database by keyword and/or author |
 | `how_i_work` | Read this file to answer questions about Panda itself |
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |
 | GitHub MCP tools | Read-only GitHub: files, code search, commits, PRs, issues, workflow runs (**Oscar only**) |
@@ -242,7 +237,7 @@ npm start
 
 Every push to `main` builds a **Docker** image and publishes it to **Docker Hub** (`.github/workflows/docker.yml`) as `<username>/oscars-assistant-discord-bot`, tagged `latest` and with the commit SHA. Required repo secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
 
-`docker-compose.deploy.yml` runs the bot and SearXNG together. Mount a volume on `/app/data` so transcripts, summaries and the private-mode flag survive restarts. The sandbox workflow needs the `OPENROUTER_API_KEY` Actions secret. Two more are optional:
+`docker-compose.deploy.yml` runs the bot and SearXNG together. Mount a volume on `/app/data` so summaries and the private-mode flag survive restarts. The sandbox workflow needs the `OPENROUTER_API_KEY` Actions secret. Two more are optional:
 - `PANDA_DEV_GITHUB_TOKEN`: lets it push to repos other than this one. Without it, the workflow's own token is used.
 - `PANDA_MCP_PAT`: gives the sandbox agent the GitHub MCP tools.
 
@@ -252,7 +247,7 @@ Every push to `main` builds a **Docker** image and publishes it to **Docker Hub*
 src/index.js              boot, intents, slash-command registration
 src/discord/              message handler (batching), slash commands, embeds, chunking
 src/agent/agent.js        the tool-calling loop and Jev triage
-src/agent/contextStore.js transcript + summary storage
+src/agent/contextStore.js summary storage
 src/agent/memory.js       exchanges → summary compaction
 src/agent/historyStore.js Supabase message database
 src/agent/jev.js          Jev decision calls

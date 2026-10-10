@@ -1,7 +1,7 @@
 import { chatCompletion } from './openrouter.js';
 import { buildSystemPrompt } from './systemPrompt.js';
 import { toolDefs, executeTool } from './tools/index.js';
-import { rememberEvicted } from './memory.js';
+import { rememberTurn } from './memory.js';
 import { decide } from './jev.js';
 
 const TOOL_RESULT_CAP = 12000;
@@ -13,36 +13,31 @@ const clip = (v, n = 200) => {
 };
 const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
 
-// The agent loop: system + memory + per-server history + new envelope → model →
+// The agent loop: system + memory summary + new envelope → model →
 // execute tool calls → repeat until plain text (or iteration cap). Returns reply
 // text, or null when Panda was only mentioned and Jev decided it should stay out.
 //
+// There is no stored transcript: the turn carries the last few channel
+// messages, and the model calls fetch_history when it needs more.
+//
 // `rememberContent` is what goes into long-term memory, and it is deliberately
-// not `userContent`: the turn is sent with a block of recent channel history for
-// context, and storing that too meant every turn wrote ten already-stored
-// messages back into memory. Six turns of that filled the transcript with
-// duplicates of itself, evicted the real conversation, and left the model
-// reading its own "do NOT reply to these" blocks as if they were prior turns.
+// not `userContent`: the history block is scaffolding for this one reply, and
+// summarising it would fold the same messages in over and over.
 export async function runAgent(invocation, userContent, rememberContent = userContent, { chat = chatCompletion, decideImpl = decide } = {}) {
   const { contextStore, config, contextKey } = invocation;
-  const history = contextStore.get(contextKey);
   const summary = contextStore.summary?.(contextKey) || '';
   const messages = [
     { role: 'system', content: buildSystemPrompt(invocation) },
     ...(summary ? [{ role: 'system', content: `## What you remember about this server\n${summary}` }] : []),
-    ...history,
     { role: 'user', content: userContent },
   ];
   const newMessages = [{ role: 'user', content: rememberContent }];
   const who = invocation.message?.author?.username ?? '?';
   const turnStart = Date.now();
-  log(contextKey, `turn start from @${who} (model ${config.model}, ${history.length} history msgs): ${clip(rememberContent, 150)}`);
+  log(contextKey, `turn start from @${who} (model ${config.model}): ${clip(rememberContent, 150)}`);
 
-  // A turn that dies at the model call used to vanish from history entirely:
-  // the model had seen the question, memory had not, and the next turn had no
-  // idea what was just asked. newMessages is always balanced here — tool
-  // results are pushed in the same iteration as the assistant message that
-  // requested them — so whatever it holds is valid history to store.
+  // A turn that dies at the model call is still remembered: the question is
+  // usually the one thing left open.
   try {
   const tools = await toolDefs(invocation);
   // A ping or reply goes straight to the model. A mention-only turn asks Jev
@@ -109,7 +104,7 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
 
   log(contextKey, `hit tool-use limit (${config.maxToolIterations}) after ${Date.now() - turnStart}ms`);
   persist(invocation, newMessages);
-  return '⚠️ I hit my tool-use limit before finishing that. Progress is saved — tell me to continue.';
+  return '⚠️ I hit my tool-use limit before finishing that. Ask again, maybe a narrower version.';
   } catch (err) {
     log(contextKey, `turn failed after ${Date.now() - turnStart}ms: ${err.message || err}`);
     persist(invocation, newMessages);
@@ -150,8 +145,7 @@ async function triage(tools, message, invocation, decideImpl) {
 
 function persist(invocation, newMessages) {
   if (invocation.contextCleared) return;
-  const evicted = invocation.contextStore.append(invocation.contextKey, newMessages);
   // Summarising costs a model call, so it happens after the reply is on its way
   // rather than in front of it.
-  rememberEvicted({ store: invocation.contextStore, key: invocation.contextKey, evicted, config: invocation.config });
+  rememberTurn({ store: invocation.contextStore, key: invocation.contextKey, messages: newMessages, config: invocation.config });
 }

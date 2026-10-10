@@ -94,7 +94,7 @@ test('a mention-only turn Jev turns down, or cannot judge, gets no model call an
     const calls = await turn(answers, { mayDecline: true });
     assert.equal(calls.reply, null);
     assert.equal(calls.length, 0);
-    assert.deepEqual(calls.invocation.contextStore.get('g'), []);
+    assert.equal(calls.invocation.contextStore.pendingCount('g'), 0);
   }
 });
 

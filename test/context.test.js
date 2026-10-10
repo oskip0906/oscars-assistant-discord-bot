@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ContextStore, splitAtBoundary } from '../src/agent/contextStore.js';
-import { collectExchanges, foldIntoSummary, rememberEvicted } from '../src/agent/memory.js';
+import { ContextStore } from '../src/agent/contextStore.js';
+import { collectExchanges, foldIntoSummary, rememberTurn } from '../src/agent/memory.js';
 import { runAgent } from '../src/agent/agent.js';
 
 const store = () => new ContextStore(mkdtempSync(path.join(tmpdir(), 'panda-ctx-')));
@@ -38,20 +38,7 @@ test('pairs each question with the final reply, not the intermediate tool narrat
   assert.match(only, /A: Argentina won in 2022\./);
 });
 
-// --- the verbatim window --------------------------------------------------
-
-test('never wipes the transcript when the tail has no user message to cut on', () => {
-  const messages = [
-    { role: 'user', content: 'go' },
-    ...Array.from({ length: 60 }, (_, i) =>
-      i % 2 ? { role: 'tool', tool_call_id: 't', content: 'r' } : { role: 'assistant', content: 'a' },
-    ),
-  ];
-
-  const { kept, evicted } = splitAtBoundary(messages, 40);
-  assert.ok(kept.length > 0, 'the whole conversation must not vanish because no clean boundary was in range');
-  assert.equal(evicted.length, 0);
-});
+// --- the store file ------------------------------------------------------
 
 test('carries over what an older file accumulated under the previous field name', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'panda-ctx-'));
@@ -85,8 +72,8 @@ test('does not lose exchanges when two compactions overlap', async () => {
     ]).flat();
 
   await Promise.all([
-    rememberEvicted({ store: s, key: 'g', evicted: turn(1), config, chat }),
-    rememberEvicted({ store: s, key: 'g', evicted: turn(2), config, chat }),
+    rememberTurn({ store: s, key: 'g', messages: turn(1), config, chat }),
+    rememberTurn({ store: s, key: 'g', messages: turn(2), config, chat }),
   ]);
 
   assert.equal(s.summary('g'), 'saw:20', 'every exchange must reach a fold; a racing write drops a whole batch');
@@ -126,7 +113,5 @@ test('still remembers the question when the model call fails mid-turn', async ()
     }),
   );
 
-  const kept = s.get('g');
-  assert.equal(kept.length, 1, 'the user turn must survive a failed reply');
-  assert.equal(kept[0].content, 'what the user actually said');
+  assert.deepEqual(s.consumePending('g'), ['Q: what the user actually said'], 'the user turn must survive a failed reply');
 });

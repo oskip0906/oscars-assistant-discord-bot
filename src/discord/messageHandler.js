@@ -24,21 +24,13 @@ const WINDOW_MS = 3000;
 const MAX_QUEUE = 5;
 
 // The messages before the ping, always fetched and always labelled as
-// background. Previously this was conditional on the trigger looking ambiguous,
-// which meant a turn that *seemed* self-contained was answered with no idea what
-// the channel had been talking about.
+// background. This is the only history a turn starts with; when it is not
+// enough, the model reads further back with fetch_history.
 const HISTORY_LIMIT = 10;
 
-// Two bots that are both polite never stop. Each of slopbot's messages pinged
-// Panda, so Panda answered, so slopbot answered — nine rounds of "sounds good!"
-// with nothing being said. A conversation with another bot gets this many turns
-// to reach a point before Panda stops feeding it; any human message in the
-// channel clears the count, because a human being present means it is a real
-// conversation again.
-const MAX_BOT_EXCHANGES = 3;
-
-// Sign-offs. When another bot says one of these there is nothing left to answer:
-// a wave costs one reaction and ends the exchange, where a reply restarts it.
+// Sign-offs. A conversation with another bot runs as long as it has something to
+// say; it ends when the other bot says one of these. A wave costs one reaction
+// and ends the exchange, where a reply restarts it.
 const FAREWELL_RE =
   /\b(bye|goodbye|good ?night|see ?ya|see you( later| around)?|cya|later(s)?|take care|farewell|catch you later|have a (great|good|nice|wonderful) (day|one|night|evening)|you too|talk (to you )?later|ttyl|peace out|signing off|i'?m (all set|good)|standing by)\b/i;
 
@@ -91,7 +83,7 @@ export function suppressLinkEmbeds(text) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Cross-channel serialization per context (guild / DM) so two channels of one
-// guild can't race the stored transcript.
+// guild can't race the stored memory.
 const contextQueues = new Map();
 function enqueueContext(key, task) {
   const prev = contextQueues.get(key) || Promise.resolve();
@@ -110,9 +102,9 @@ export function createMessageHandler({ client, config, contextStore, player, pri
   // Batch = { claimantId, messages: Message[], closed: boolean, collected: Promise }
   const channels = new Map();
 
-  // channelId -> consecutive turns answered for bots with no human in between.
+  // Channels where a bot signed off; Panda ignores bots there until a human speaks.
   // Kept outside `channels`, which is torn down as soon as its queue drains.
-  const botExchanges = new Map();
+  const signedOff = new Set();
 
   // direct = pinged, replied to, or DMed; otherwise Panda was only mentioned and may stay out.
   function makeBatch(message, direct) {
@@ -145,17 +137,16 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         // The messages before the ping, always. `before` anchors on the trigger
         // itself, so this is the run-up to being addressed rather than "the last
         // ten messages", which on a busy channel is a different set entirely.
-        // The bot's own messages are excluded: seeing its own outputs in the
-        // history context leaks past replies into future prompts and can cause
-        // the model to treat its own words as instructions.
+        // Panda's own messages are kept and marked, since there is no stored
+        // transcript: this is how it sees what it said a minute ago.
         const batchIds = new Set(messages.map((m) => m.id));
         let historyParts = [];
         try {
           const fetched = (await anchor.channel.messages?.fetch({ limit: HISTORY_LIMIT, before: messages[0].id })) ?? new Map();
           historyParts = [...fetched.values()]
-            .filter((m) => !batchIds.has(m.id) && m.author.id !== client.user.id)
+            .filter((m) => !batchIds.has(m.id))
             .reverse() // Discord returns newest-first; the stack wants oldest-first
-            .map((m) => formatEnvelope(m));
+            .map((m) => `${m.author.id === client.user.id ? '(you) ' : ''}${formatEnvelope(m)}`);
         } catch (err) {
           console.error('[panda] history fetch failed:', err);
         }
@@ -176,14 +167,13 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         const trigger = messages[0].author;
         const triggerName = messages[0].member?.displayName || trigger.displayName || trigger.username;
         // What is remembered is the turn itself. The history block is scaffolding
-        // for this one reply — storing it wrote ten already-stored messages back
-        // into memory every turn, until the transcript was mostly duplicates of
-        // itself and the real conversation had been evicted to make room.
+        // for this one reply; summarising it would fold the same messages in again
+        // every turn.
         const turn = parts.join('\n');
         const combined = [
           ...(historyParts.length
             ? [
-                `[HISTORY CONTEXT — the ${historyParts.length} message(s) before you were pinged, oldest first. This is background only and less important than the prompt below: do NOT reply to these, they are already said and done.]`,
+                `[HISTORY CONTEXT — the ${historyParts.length} message(s) before you were pinged, oldest first. Lines marked (you) are your own replies. This is background only and less important than the prompt below: do NOT reply to these, they are already said and done. Need more? Call fetch_history.]`,
                 ...historyParts,
                 '[END HISTORY CONTEXT]',
                 '',
@@ -322,8 +312,8 @@ export function createMessageHandler({ client, config, contextStore, player, pri
       const channelId = message.channelId;
 
       // Any human speaking in the channel — to the bot or not — means this is a
-      // live conversation again, so the bot-loop budget resets.
-      if (!message.author.bot) botExchanges.delete(channelId);
+      // live conversation again, so Panda will talk to bots there again.
+      if (!message.author.bot) signedOff.delete(channelId);
 
       // A sender with a still-collecting batch in this channel gets everything
       // they say folded into it (no mention needed, timer NOT reset).
@@ -351,26 +341,16 @@ export function createMessageHandler({ client, config, contextStore, player, pri
       const direct = isDM || mentioned || repliedToBot;
       if (!direct && !mentionsPanda(message.content, config)) return;
 
-      // Bot-to-bot: end it deliberately rather than trading pleasantries until
-      // one of us is rate-limited. A sign-off gets a wave and nothing else, and
-      // an exchange that keeps going without ever reaching a point is dropped
-      // once the budget runs out. Both paths stay silent from then on until a
-      // human speaks, which clears the count above.
+      // Bot-to-bot: keep going as long as the other bot does, and end it on its
+      // sign-off with a wave instead of a reply. Silent toward bots from then on
+      // until a human speaks, so its "you too!" doesn't start it again.
       if (message.author.bot) {
-        const spent = botExchanges.get(channelId) || 0;
+        if (signedOff.has(channelId)) return;
         if (await signsOff(message.content, client.user.id, config, decideImpl)) {
-          botExchanges.set(channelId, MAX_BOT_EXCHANGES);
-          if (spent < MAX_BOT_EXCHANGES) await message.react('👋').catch(() => {});
+          signedOff.add(channelId);
+          await message.react('👋').catch(() => {});
           return;
         }
-        if (spent >= MAX_BOT_EXCHANGES) {
-          if (spent === MAX_BOT_EXCHANGES) {
-            console.log(`[panda] bot loop in ${channelId}: ${MAX_BOT_EXCHANGES} exchanges with @${message.author.username} and no human — holding off until someone else speaks`);
-            botExchanges.set(channelId, spent + 1);
-          }
-          return;
-        }
-        botExchanges.set(channelId, spent + 1);
       }
 
       // Self-fix in progress: the bot is rewriting its own source and must not
