@@ -112,3 +112,16 @@ test('run.sh brings SearXNG up even when the script has no executable bit', () =
   assert.equal(result.status, 0, result.stderr);
   assert.ok(existsSync(path.join(root, 'ran')), 'ensure-searxng.sh must run on boot');
 });
+
+test('a hung docker cannot hold up the boot', () => {
+  // Docker Desktop stuck mid-update answers nothing; `compose up` then waited forever.
+  const dirs = stage({ settings: 'secret_key: "x"\n' });
+  const fake = path.join(dirs.bin, 'docker');
+  writeFileSync(fake, '#!/bin/bash\nsleep 30\n');
+  chmodSync(fake, 0o755);
+  const started = Date.now();
+  const result = run(dirs, { SEARXNG_START_TIMEOUT: '2' });
+  assert.equal(result.status, 0);
+  assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started}ms`);
+  assert.match(result.stderr, /docker did not answer/);
+});

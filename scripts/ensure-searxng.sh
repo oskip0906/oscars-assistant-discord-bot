@@ -46,7 +46,21 @@ if [ ! -f searxng/config/settings.yml ]; then
 fi
 
 echo "[searxng] starting panda-searxng…"
-if ! "$docker" compose -f searxng/docker-compose.yml up -d >/dev/null 2>&1; then
+# Bounded, because a Docker Desktop stuck mid-update never answers and the boot
+# waited on it forever. macOS has no `timeout`; the first run pulls the image,
+# hence the generous default.
+"$docker" compose -f searxng/docker-compose.yml up -d >/dev/null 2>&1 &
+compose=$!
+for _ in $(seq 1 "${SEARXNG_START_TIMEOUT:-120}"); do
+  kill -0 "$compose" 2>/dev/null || break
+  sleep 1
+done
+if kill -0 "$compose" 2>/dev/null; then
+  kill "$compose" 2>/dev/null
+  echo "[searxng] docker did not answer — web and image search will fail until Docker is running" >&2
+  exit 0
+fi
+if ! wait "$compose"; then
   echo "[searxng] could not start the container — web and image search will fail until it is up" >&2
   exit 0
 fi
