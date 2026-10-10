@@ -49,7 +49,7 @@ function turn(answers, extra = {}) {
 }
 
 const mention = { mayDecline: true };
-const addressed = { addressed: { noul: 0.9 } };
+const addressed = { addressed: { noul: 0.9 }, needs_tool: { noul: 0.9 } };
 
 test('a confident Jev pick forces that tool on the first call only', async () => {
   const calls = await turn({ ...addressed, tool: { choice: 'get_user_id', probabilities: { get_user_id: 0.9 } } }, mention);
@@ -58,12 +58,12 @@ test('a confident Jev pick forces that tool on the first call only', async () =>
   assert.equal(calls[1].toolChoice, 'auto');
 });
 
-test('an unsure, unknown or "none" pick leaves the model to choose', async () => {
-  for (const tool of [
-    { choice: 'get_user_id', probabilities: { get_user_id: 0.5 } },
-    { choice: 'made_up_tool', probabilities: { made_up_tool: 0.99 } },
-    { choice: 'none', probabilities: { none: 0.99 } },
-  ]) assert.equal((await turn({ ...addressed, tool }, mention))[0].toolChoice, 'auto');
+test('an unsure or unknown pick, or one Jev says is not needed, leaves the model to choose', async () => {
+  for (const answers of [
+    { ...addressed, tool: { choice: 'get_user_id', probabilities: { get_user_id: 0.5 } } },
+    { ...addressed, tool: { choice: 'made_up_tool', probabilities: { made_up_tool: 0.99 } } },
+    { ...addressed, needs_tool: { noul: 0.3 }, tool: { choice: 'get_user_id', probabilities: { get_user_id: 0.99 } } },
+  ]) assert.equal((await turn(answers, mention))[0].toolChoice, 'auto');
 });
 
 // --- sign-offs and name calls ----------------------------------------------
@@ -98,7 +98,7 @@ test('a mention-only turn Jev turns down, or cannot judge, gets no model call an
   }
 });
 
-test('a ping or reply goes straight to the model without asking Jev', async () => {
+test('a ping or reply is triaged by Jev but never turned down', async () => {
   let asked = 0;
   const invocation = {
     contextStore: new ContextStore(mkdtempSync(path.join(tmpdir(), 'panda-jev-'))),
@@ -109,7 +109,7 @@ test('a ping or reply goes straight to the model without asking Jev', async () =
   const chat = async ({ toolChoice }) => ({ content: `auto=${toolChoice === 'auto'}` });
   const reply = await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => (asked++, null) });
   assert.equal(reply, 'auto=true');
-  assert.equal(asked, 0);
+  assert.equal(asked, 1);
 });
 
 // --- research claims ---------------------------------------------------------

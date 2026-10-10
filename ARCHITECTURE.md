@@ -27,19 +27,30 @@ The first trigger opens a **3-second batch** for that sender. Everything they se
 - Every message is written as `Name (@username, id:NNN): text`, so the model knows who said what and can ping anyone with `<@id>`.
 - **Attachments** (`src/discord/attachments.js`) go to the model for this turn only: images (if the model accepts them, up to 5 MB), PDFs, text and code files (up to 200 KB), Tenor/Giphy GIF frames, and the picture a message replies to.
 
-**4. The agent loop.**
-The model is called with all tools. Each tool call is executed and its result fed back (capped at 12,000 characters) until the model answers in plain text or hits the tool-call limit (default 12). On a mention-only turn, a confident Jev pick forces the first tool call.
+**4. Jev triage.**
+Every turn starts with one Jev call (`triage` in `src/agent/agent.js`). It asks all of its questions at once, and code applies the answers in this order:
+1. **For Panda?** Only asked of mention-only messages; a ping or reply skips it. Not addressed and no reason to step in (both < 0.8): silence, nothing saved.
+2. **Sign-off?** (≥ 0.8) Panda reacts 👋 and the turn ends with no model call.
+3. **Is a tool needed** (≥ 0.5), and **which one first** (≥ 0.8)? Jev picks some tool even for "thanks", so a pick only counts when it also says a tool is needed. `react` is never picked here; step 4 decides it. If the tool is Oscar-only and the sender isn't Oscar, the turn stops with "Only Oscar can use `<tool>`."
+4. **Reaction, message, or both?**
+   - **Reaction:** the model has to make a tool call (`tool_choice: required`) until it has reacted. It can look things up first and react several times in one step. The turn ends at the first successful reaction, so the model never gets to add "Got it". Needs Jev at ≥ 0.8, since a wrong "reaction only" would leave a question unanswered.
+   - **Message:** the model doesn't get the `react` tool, so it can only answer in text.
+   - **Both:** the same, but the turn goes on after the reaction and the model answers in text.
 
-**React-only turns.** `react` takes a required `reply` flag. A model step that only reacts with `reply: false` ends the turn in code: no further model call, no text sent. This is how "just react", "bye", "thanks" or "lol" get a reaction and nothing else. Models asked to return empty text after reacting tend to add "Got it" anyway, so it isn't left to them. With `reply: true` the loop goes on to the answer. A reply after a reaction that has no letters or digits (usually the same emoji echoed back) is dropped too.
+Any answer Jev is unsure of, or a Jev outage, leaves that decision to the model. The exception is step 1: there a mention-only message gets no answer.
 
-**5. Sending the reply.**
-- Tool embeds (image results) go first, then the text, split into Discord-sized messages with code fences kept valid.
+**5. The agent loop.**
+The model is called with all tools, except as step 4 above says. Jev's tool, if any, is forced on the first call. Each tool call is executed and its result fed back (capped at 12,000 characters) until the model answers in plain text or hits the tool-call limit (default 12). A reply after a reaction that has no letters or digits (usually the same emoji echoed back) is dropped.
+
+**6. Sending the reply.**
+- Reactions are already on the message by now, one or several.
+- Tool embeds (image results) go first, then the text. Text over Discord's **2,000-character** limit is split into several messages (`src/discord/chunk.js`), at a paragraph, line, sentence or word break, in that order of preference, with code fences closed and reopened so each part renders.
 - Bare links are wrapped in `<>` so they don't unfurl; image URLs stay bare.
 - A response is mandatory: with no text and no reaction, Panda reacts 👀.
 - The batch and the reply are saved to the message database after sending.
 
-**6. Bot-to-bot conversations.**
-They run for as long as the other bot keeps going, and end on a sign-off ("bye!", "have a great day"): Panda reacts 👋 instead of replying, then ignores bots in that channel until a human speaks. Jev decides what counts as a sign-off; a regex is the fallback.
+**7. Bot-to-bot conversations.**
+They run for as long as the other bot keeps going, and end on a sign-off ("bye!", "have a great day"): Panda reacts 👋 instead of replying, then ignores bots in that channel until a human speaks. Bot sign-offs are checked per message, before batching: Jev decides, with a regex as the fallback. Human sign-offs are caught by the triage in step 4.
 
 ## Memory
 
@@ -75,18 +86,26 @@ Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), re
 `/set_model` and `/set_dev_model` (Oscar) switch models; `/model` shows the current one; `/usage` shows OpenRouter spend.
 
 **Jev** (`src/agent/jev.js`) returns probabilities instead of text, in about 0.2 s. Panda uses it to:
-1. **Triage mention-only messages**: is it speaking to Panda, should Panda step in (≥ 0.8 to answer), and which tool to start with.
-2. **Detect sign-offs** from other bots, including "aight gn" or other languages.
+1. **Triage every turn** (step 4 of "How a message becomes a reply"). One call answers:
+   - for mention-only messages, whether Panda is addressed or should step in (≥ 0.8);
+   - whether the message is a sign-off (≥ 0.8);
+   - whether a tool is needed (≥ 0.5), and which tool to call first (≥ 0.8), including whether it is Oscar-only;
+   - whether to respond with a reaction (≥ 0.8), a text message, or both.
+2. **Detect sign-offs from other bots**, per message, including "aight gn" or other languages.
 3. **Fact-check research**: drop claims whose quote likely doesn't support them (< 0.3).
 
-Jev only sees messages that already mention Panda. Calls time out after 5 s. If Jev is off or down, Panda doesn't answer mention-only messages, uses the sign-off regex, and keeps all claims.
+Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is off or down:
+- Panda doesn't answer mention-only messages.
+- The model decides tools and react/reply on its own.
+- Bot sign-offs use the regex.
+- All research claims are kept.
 
 ## Tools
 
 | Tool | What it does |
 |------|--------------|
 | `get_user_id` / `get_message_sender` | Find a member's or bot's id; who sent this message |
-| `react` | React with an emoji; `reply: false` makes the reaction the whole response |
+| `react` | React with an emoji, one or several (Jev decides whether text follows) |
 | `web_search` / `web_fetch` | Search via SearXNG; read a public page |
 | `image_search` | Up to 3 images, shown as embeds |
 | `fetch_history` | Read further back in the channel, or search older conversations |

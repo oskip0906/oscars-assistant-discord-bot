@@ -58,8 +58,8 @@ export async function signsOff(text, clientUserId, config, decideImpl = decide) 
 
 // Words that may mean Panda without a ping: its name, "Oscar's assistant", "the
 // bot". A hit only makes the message a candidate; the agent's Jev call decides
-// whether to answer (see triage in agent.js). Only these messages, and the ten
-// before them, reach Jev, so ordinary chatter never leaves the server.
+// whether to answer (see triage in agent.js). Only messages that trigger Panda
+// reach Jev, so ordinary chatter never leaves the server.
 export function mentionsPanda(text, config) {
   const name = String(config.botName || 'Panda').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`\\b(${name}|assistant|bot|oscar['’]?s)\\b`, 'i').test(String(text ?? ''));

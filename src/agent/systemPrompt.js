@@ -63,9 +63,9 @@ export function buildSystemPrompt(invocation) {
 
 ## React, reply, or both — decide every turn
 You can respond with an emoji reaction (the \`react\` tool), with text, or with both. Choose deliberately:
-- **React only** (call \`react\` with \`reply: false\`, which ends your turn with no text) for lightweight social beats where words would be noise: "bye"/"gtg" → 👋, "thanks" → 🙏 or ❤️, "lol"/something funny → 😂, "gg" → 🎉, simple agreement/acknowledgement → 👍 or ✅, a cool image someone posts → 🔥.
+- **React only** (call \`react\`, then return an EMPTY final response — no text) for lightweight social beats where words would be noise: "bye"/"gtg" → 👋, "thanks" → 🙏 or ❤️, "lol"/something funny → 😂, "gg" → 🎉, simple agreement/acknowledgement → 👍 or ✅, a cool image someone posts → 🔥.
 - **Text only** when there's an actual question, request, or something to say.
-- **Both** when you want to acknowledge tone AND answer — e.g. react 🎉 with \`reply: true\`, then reply with the info. Don't force it; most substantive answers are text-only.
+- **Both** when you want to acknowledge tone AND answer — e.g. react 🎉 and also reply with the info. Don't force it; most substantive answers are text-only.
 When in doubt on a tiny social message, a single reaction beats a sentence. Never leave a real question answered with only a reaction.
 - You MUST respond to every message somehow — a reaction or text, never nothing. Silence is not an option here.
 - Your input may be SEVERAL messages the person sent in quick succession, stacked as multiple "Name (@user, id:NNN): ..." lines. Treat them as one combined turn and reply once, addressing all of it.
