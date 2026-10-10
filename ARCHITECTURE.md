@@ -30,6 +30,8 @@ The first trigger opens a **3-second batch** for that sender. Everything they se
 **4. The agent loop.**
 The model is called with all tools. Each tool call is executed and its result fed back (capped at 12,000 characters) until the model answers in plain text or hits the tool-call limit (default 12). On a mention-only turn, a confident Jev pick forces the first tool call.
 
+**React-only turns.** `react` takes a required `reply` flag. A model step that only reacts with `reply: false` ends the turn in code: no further model call, no text sent. This is how "just react", "bye", "thanks" or "lol" get a reaction and nothing else. Models asked to return empty text after reacting tend to add "Got it" anyway, so it isn't left to them. With `reply: true` the loop goes on to the answer. A reply after a reaction that has no letters or digits (usually the same emoji echoed back) is dropped too.
+
 **5. Sending the reply.**
 - Tool embeds (image results) go first, then the text, split into Discord-sized messages with code fences kept valid.
 - Bare links are wrapped in `<>` so they don't unfurl; image URLs stay bare.
@@ -84,7 +86,7 @@ Jev only sees messages that already mention Panda. Calls time out after 5 s. If 
 | Tool | What it does |
 |------|--------------|
 | `get_user_id` / `get_message_sender` | Find a member's or bot's id; who sent this message |
-| `react` | React with an emoji |
+| `react` | React with an emoji; `reply: false` makes the reaction the whole response |
 | `web_search` / `web_fetch` | Search via SearXNG; read a public page |
 | `image_search` | Up to 3 images, shown as embeds |
 | `fetch_history` | Read further back in the channel, or search older conversations |

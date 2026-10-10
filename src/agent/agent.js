@@ -12,6 +12,8 @@ const clip = (v, n = 200) => {
   return s.length > n ? `${s.slice(0, n)}…(${s.length} chars)` : s;
 };
 const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
+// No letters or digits once custom emotes are removed: only emoji and punctuation.
+export const saysNothing = (text) => !/[\p{L}\p{N}]/u.test(text.replace(/<a?:\w+:\d+>/g, ''));
 
 // The agent loop: system + memory summary + new envelope → model →
 // execute tool calls → repeat until plain text (or iteration cap). Returns reply
@@ -75,16 +77,21 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
       // the handler then sends nothing. Otherwise fall back to a placeholder.
       const text = msg.content?.trim() || '';
       log(contextKey, `turn done in ${Date.now() - turnStart}ms after ${iteration + 1} model call(s)`);
-      if (text) return text;
-      return invocation.reacted ? '' : '🐼 …';
+      // After a reaction, a reply with no words (usually the same emoji echoed) is dropped.
+      if (invocation.reacted && saysNothing(text)) return '';
+      return text || '🐼 …';
     }
 
+    // A step that only reacts, without asking to reply, is the whole response:
+    // the turn ends here, so the model can't add "Got it" afterwards.
+    let reactOnly = msg.tool_calls.every((c) => c.function.name === 'react');
     for (const call of msg.tool_calls) {
       let result;
       const toolStart = Date.now();
       log(contextKey, `→ ${call.function.name}(${clip(call.function.arguments || '{}', 300)})`);
       try {
         const args = JSON.parse(call.function.arguments || '{}');
+        if (args.reply === true) reactOnly = false;
         result = await executeTool(call.function.name, args, invocation);
       } catch (err) {
         result = `Tool ${call.function.name} crashed: ${String(err.message || err).slice(0, 300)}`;
@@ -98,6 +105,11 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
       };
       messages.push(toolMsg);
       newMessages.push(toolMsg);
+    }
+    if (reactOnly && invocation.reacted) {
+      persist(invocation, newMessages);
+      log(contextKey, `turn done (reaction only) in ${Date.now() - turnStart}ms after ${iteration + 1} model call(s)`);
+      return '';
     }
   }
 

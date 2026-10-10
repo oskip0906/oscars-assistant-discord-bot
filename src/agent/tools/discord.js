@@ -19,13 +19,18 @@ export const defs = [
     function: {
       name: 'react',
       description:
-        "React to the message you're answering with an emoji (unicode like 👋, or a custom emote in <:name:id> form). Call multiple times for multiple reactions. For lightweight social messages (bye, thanks, lol, gg, simple agreement) reacting INSTEAD of replying is best: react, then return an empty final response (no text).",
+        "React to the message you're answering with an emoji (unicode like 👋, or a custom emote in <:name:id> form). For several reactions, call it several times in the same step. For lightweight social messages (bye, thanks, lol, gg, simple agreement), or when asked to just react, reacting INSTEAD of replying is best: set reply to false.",
       parameters: {
         type: 'object',
         properties: {
           emoji: { type: 'string', description: 'The emoji to react with' },
+          reply: {
+            type: 'boolean',
+            description:
+              'false = the reaction is your whole response: your turn ends right here and no text is sent. true = you will still answer in text or call more tools after reacting.',
+          },
         },
-        required: ['emoji'],
+        required: ['emoji', 'reply'],
       },
     },
   },
