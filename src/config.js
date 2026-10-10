@@ -19,8 +19,6 @@ function bool(value, fallback) {
 export const config = {
   projectRoot,
   dataDir: path.join(projectRoot, 'data'),
-  contextDir: path.join(projectRoot, 'data', 'context'),
-  contextFilesDir: path.join(projectRoot, 'context'),
 
   discordToken: process.env.DISCORD_TOKEN || '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
@@ -77,5 +75,8 @@ export function validateConfig() {
   if (!config.openrouterApiKey) missing.push('OPENROUTER_API_KEY');
   if (missing.length) {
     throw new Error(`Missing required env vars: ${missing.join(', ')} — fill them in ${path.join(projectRoot, '.env')}`);
+  }
+  if (!config.supabaseUrl || !config.supabaseKey) {
+    console.warn('[panda] SUPABASE_URL / SUPABASE_SECRET_KEY are not set: running without the prompts in Supabase (identity.md, soul.md) and without stored history.');
   }
 }

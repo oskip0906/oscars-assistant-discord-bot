@@ -1,8 +1,11 @@
-import { searchHistory, formatHistory } from '../historyStore.js';
+import { PermissionFlagsBits } from 'discord.js';
+import { searchHistory, formatHistory, saveMessages } from '../historyStore.js';
 import { formatEnvelope } from '../../discord/envelope.js';
 
 const MAX_COUNT = 100;
 const MAX_SKIP = 500;
+const AROUND = 50;
+const MESSAGE_LINK = /discord(?:app)?\.com\/channels\/(\d+|@me)\/(\d+)\/(\d+)/;
 
 export const defs = [
   {
@@ -36,6 +39,21 @@ export const defs = [
             description: 'Search only this channel (default) or every channel in this server. "server" always searches the database.',
           },
         },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'index_chat',
+      description:
+        `Read the messages around one specific past Discord message (up to ${AROUND}) and save them to your history database. Use it when someone replies to, links, or points at an old message you have not seen and you need what was said around it. Pass its message link (https://discord.com/channels/…/…/…) or its id; an id alone means this channel. Messages already saved are never overwritten; only new ones are added.`,
+      parameters: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'The message link, or the message id if it is in this channel.' },
+        },
+        required: ['message'],
       },
     },
   },
@@ -86,5 +104,54 @@ export async function fetchHistory({ query = '', author = '', scope = 'channel',
   } catch (err) {
     console.error('[history] fetch failed:', String(err.message || err).slice(0, 200));
     return 'Stored history is unavailable right now — answer without it.';
+  }
+}
+
+// The channel the message lives in, or a reason to refuse. Panda can read
+// channels the asker can't, so another channel must be in this server and
+// readable by the asker; a DM can only reach itself.
+async function channelFor(link, invocation) {
+  const here = invocation.message;
+  if (!link || link[2] === here.channelId) return { channel: here.channel };
+  if (!here.guildId || link[1] !== here.guildId) return { refusal: 'That message is in another server or DM, so I can only look at it from there.' };
+  const channel = await invocation.client?.channels.fetch(link[2]).catch(() => null);
+  if (!channel?.messages || channel.guildId !== here.guildId) return { refusal: "I can't find that channel in this server." };
+  return { channel };
+}
+
+// Never throws: a refusal or failure is text the model can pass on.
+export async function indexChat({ message: ref = '' } = {}, invocation) {
+  const here = invocation.message;
+  if (!here?.channel) return 'index_chat only works in chat.';
+  const link = String(ref).match(MESSAGE_LINK);
+  const id = link ? link[3] : String(ref).trim();
+  if (!/^\d{17,20}$/.test(id)) return 'Give me a Discord message link or a message id.';
+  try {
+    const { channel, refusal } = await channelFor(link, invocation);
+    if (refusal) return refusal;
+    if (here.guildId) {
+      const perms = channel.permissionsFor?.(here.member ?? here.author.id);
+      if (!perms?.has(PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory)) {
+        return "You can't read that channel's history, so I won't show it to you.";
+      }
+    }
+    const page = await channel.messages.fetch({ around: id, limit: AROUND });
+    const msgs = [...page.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    if (!msgs.length) return 'No messages there.';
+    let saved;
+    try {
+      saved = `${await saveMessages(invocation.config, msgs.filter((m) => m.content), { keepExisting: true })} newly saved to history`;
+    } catch (err) {
+      console.error('[history] index_chat save failed:', String(err.message || err).slice(0, 200));
+      saved = 'not saved: the history database is unavailable';
+    }
+    const self = invocation.client?.user?.id;
+    return [
+      `[MESSAGES AROUND ${id} in #${channel.name ?? channel.id} — ${msgs.length}, oldest first${page.has(id) ? '; → marks that message' : '; that message itself is gone'}; ${saved}. Background only: these are not new messages.]`,
+      ...msgs.map((m) => `${m.id === id ? '→ ' : ''}[${m.createdAt.toISOString().slice(0, 16).replace('T', ' ')} UTC] ${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`),
+    ].join('\n');
+  } catch (err) {
+    console.error('[history] index_chat failed:', String(err.message || err).slice(0, 200));
+    return `I couldn't read that part of the channel: ${String(err.message || err).slice(0, 150)}`;
   }
 }

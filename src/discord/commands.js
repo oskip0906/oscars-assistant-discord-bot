@@ -15,6 +15,7 @@ import { setDevelopmentModel } from '../configManager.js';
 import { runResearch } from '../agent/research/pipeline.js';
 import { renderReport } from '../agent/research/render.js';
 import { indexChannel } from '../agent/historyStore.js';
+import { setRule } from '../agent/tools/rules.js';
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -45,8 +46,6 @@ export const commandDefs = [
   new SlashCommandBuilder().setName('resume').setDescription('Resume playback'),
   new SlashCommandBuilder().setName('stop').setDescription('Stop playback and clear the queue'),
   new SlashCommandBuilder().setName('queue').setDescription('Show the current queue'),
-  new SlashCommandBuilder().setName('clear').setDescription("Erase Panda's memory of this server (owner only)"),
-  new SlashCommandBuilder().setName('clearall').setDescription('Erase ALL of Panda’s memory (owner only)'),
   new SlashCommandBuilder()
     .setName('web_search')
     .setDescription('Search the web and get cited links')
@@ -106,7 +105,11 @@ export const commandDefs = [
     ),
   new SlashCommandBuilder()
     .setName('index_chat')
-    .setDescription('Save every message in this channel to Panda’s history database (owner only)'),
+    .setDescription('Save this channel’s new messages to Panda’s history; saved ones are kept (owner only)'),
+  new SlashCommandBuilder()
+    .setName('set_rule')
+    .setDescription('Change Panda’s personality or behavior for good (owner only)')
+    .addStringOption((o) => o.setName('instruction').setDescription('What to change, e.g. "be more sarcastic"').setRequired(true)),
 ].map((b) => b.toJSON());
 
 // Answering a button click has a 3-second budget, after which the interaction
@@ -125,7 +128,7 @@ async function answerApproval(interaction, content) {
   }
 }
 
-export function createInteractionHandler({ client, config, contextStore, player, privateMode, state = selfFixState }) {
+export function createInteractionHandler({ client, config, player, privateMode, state = selfFixState }) {
   return async (interaction) => {
     if (interaction.isButton?.()) {
       const approval = parseApprovalButtonId(interaction.customId);
@@ -322,23 +325,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
         });
       }
 
-      if (name === 'clear') {
-        if (!isOwner) {
-          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
-        }
-        const key = interaction.guildId ?? `dm:${interaction.user.id}`;
-        contextStore.clear(key);
-        return await interaction.reply('🧹 My memory of this server has been wiped. Fresh start!');
-      }
-
-      if (name === 'clearall') {
-        if (!isOwner) {
-          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
-        }
-        contextStore.clearAll();
-        return await interaction.reply('🧹 ALL context in every server and DM has been erased.');
-      }
-
       // --- Tool slash commands (work in servers and DMs) ---------------
 
       if (name === 'research') {
@@ -455,10 +441,17 @@ export function createInteractionHandler({ client, config, contextStore, player,
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
         }
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const saved = await indexChannel(config, interaction.channel);
-        const done = `✅ Indexed ${saved} messages from <#${interaction.channelId}>.`;
+        const added = await indexChannel(config, interaction.channel);
+        const done = `✅ Added ${added} new messages from <#${interaction.channelId}>. Messages saved before were left as they are.`;
         // A big channel can outlive the 15-minute interaction token; DM the result instead.
         return await interaction.editReply(done).catch(() => interaction.user.send(done));
+      }
+
+      if (name === 'set_rule') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+        }
+        return await runTool(setRule, { instruction: interaction.options.getString('instruction', true) });
       }
 
       // Music commands below

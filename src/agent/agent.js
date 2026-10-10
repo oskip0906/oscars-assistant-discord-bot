@@ -1,7 +1,6 @@
 import { chatCompletion } from './openrouter.js';
 import { buildSystemPrompt } from './systemPrompt.js';
 import { toolDefs, executeTool, OWNER_ONLY_TOOLS } from './tools/index.js';
-import { rememberTurn } from './memory.js';
 import { decide } from './jev.js';
 
 const TOOL_RESULT_CAP = 12000;
@@ -16,35 +15,30 @@ const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
 // No letters or digits once custom emotes are removed: only emoji and punctuation.
 export const saysNothing = (text) => !/[\p{L}\p{N}]/u.test(text.replace(/<a?:\w+:\d+>/g, ''));
 
-// The agent loop: system + memory summary + new envelope → model →
-// execute tool calls → repeat until plain text (or iteration cap). Returns reply
-// text, or null when Panda was only mentioned and Jev decided it should stay out.
+// The agent loop: system prompt + the batch → model → execute tool calls →
+// repeat until plain text (or iteration cap). Returns reply text, or null when
+// Panda was only mentioned and Jev decided it should stay out.
 //
-// There is no stored transcript and no history block: the turn is only the
-// batch, and the model calls fetch_history when it needs earlier messages.
+// There is no stored transcript and no summary: the turn is only the batch, and
+// the model calls fetch_history or index_chat when it needs earlier messages.
 //
-// `rememberContent` is what goes into long-term memory, and it is deliberately
-// not `userContent`: media attachments go to the model for this turn only.
-export async function runAgent(invocation, userContent, rememberContent = userContent, { chat = chatCompletion, decideImpl = decide } = {}) {
-  const { contextStore, config, contextKey } = invocation;
-  const summary = contextStore.summary?.(contextKey) || '';
-  const messages = [
-    { role: 'system', content: buildSystemPrompt(invocation) },
-    ...(summary ? [{ role: 'system', content: `## What you remember about this server\n${summary}` }] : []),
-    { role: 'user', content: userContent },
-  ];
-  const newMessages = [{ role: 'user', content: rememberContent }];
+// `turnText` is the batch as plain text for Jev; `userContent` may also carry
+// media attachments, which only the model sees.
+export async function runAgent(invocation, userContent, turnText = userContent, { chat = chatCompletion, decideImpl = decide } = {}) {
+  const { config, contextKey } = invocation;
   const who = invocation.message?.author?.username ?? '?';
   const turnStart = Date.now();
-  log(contextKey, `turn start from @${who} (model ${config.model}): ${clip(rememberContent, 150)}`);
+  log(contextKey, `turn start from @${who} (model ${config.model}): ${clip(turnText, 150)}`);
 
-  // A turn that dies at the model call is still remembered: the question is
-  // usually the one thing left open.
   try {
-  const allTools = await toolDefs(invocation);
-  const plan = await triage(allTools, rememberContent, invocation, decideImpl);
+  const [allTools, system] = await Promise.all([toolDefs(invocation), buildSystemPrompt(invocation)]);
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: userContent },
+  ];
+  const plan = await triage(allTools, turnText, invocation, decideImpl);
   log(contextKey, `triage: respond=${plan.respond} signOff=${plan.signOff} tool=${plan.tool ?? 'none'} form=${plan.form ?? 'model decides'}`);
-  // Not for Panda after all: say nothing and remember nothing.
+  // Not for Panda after all: say nothing and save nothing.
   if (!plan.respond) return null;
   invocation.onAccept?.();
   // A goodbye gets a wave and nothing else, so the conversation can end.
@@ -79,10 +73,8 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
     const assistant = { role: 'assistant', content: msg.content ?? '' };
     if (msg.tool_calls?.length) assistant.tool_calls = msg.tool_calls;
     messages.push(assistant);
-    newMessages.push(assistant);
 
     if (!msg.tool_calls?.length) {
-      persist(invocation, newMessages);
       // Empty text is allowed when the model already reacted with an emoji —
       // the handler then sends nothing. Otherwise fall back to a placeholder.
       const text = msg.content?.trim() || '';
@@ -110,22 +102,18 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
         content: String(result).slice(0, TOOL_RESULT_CAP),
       };
       messages.push(toolMsg);
-      newMessages.push(toolMsg);
     }
     // A reaction-only turn ends at its first reaction, so the model can't add "Got it".
     if (plan.form === 'reaction' && invocation.reacted) {
-      persist(invocation, newMessages);
       log(contextKey, `turn done (reaction only) in ${Date.now() - turnStart}ms after ${iteration + 1} model call(s)`);
       return '';
     }
   }
 
   log(contextKey, `hit tool-use limit (${config.maxToolIterations}) after ${Date.now() - turnStart}ms`);
-  persist(invocation, newMessages);
   return '⚠️ I hit my tool-use limit before finishing that. Ask again, maybe a narrower version.';
   } catch (err) {
     log(contextKey, `turn failed after ${Date.now() - turnStart}ms: ${err.message || err}`);
-    persist(invocation, newMessages);
     throw err;
   }
 }
@@ -184,11 +172,4 @@ async function triage(tools, message, invocation, decideImpl) {
   const form = answers?.respond_with;
   const valid = ['reaction', 'message', 'both'].includes(form?.choice) && (form.choice !== 'reaction' || sureOf(form) >= PICK_THRESHOLD);
   return { respond, signOff: answers?.bye?.noul >= PICK_THRESHOLD, tool, form: valid ? form.choice : null };
-}
-
-function persist(invocation, newMessages) {
-  if (invocation.contextCleared) return;
-  // Summarising costs a model call, so it happens after the reply is on its way
-  // rather than in front of it.
-  rememberTurn({ store: invocation.contextStore, key: invocation.contextKey, messages: newMessages, config: invocation.config });
 }

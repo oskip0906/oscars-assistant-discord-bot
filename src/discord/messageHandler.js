@@ -77,8 +77,8 @@ export function suppressLinkEmbeds(text) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Cross-channel serialization per context (guild / DM) so two channels of one
-// guild can't race the stored memory.
+// One turn at a time per server (or DM), across its channels: turns there share
+// server-wide state such as the music queue.
 const contextQueues = new Map();
 function enqueueContext(key, task) {
   const prev = contextQueues.get(key) || Promise.resolve();
@@ -92,7 +92,7 @@ function enqueueContext(key, task) {
   return next;
 }
 
-export function createMessageHandler({ client, config, contextStore, player, privateMode, selfFix = selfFixState, runAgentImpl = runAgent, decideImpl = decide }) {
+export function createMessageHandler({ client, config, player, privateMode, selfFix = selfFixState, runAgentImpl = runAgent, decideImpl = decide }) {
   // channelId -> { queue: Batch[], busy: boolean }
   // Batch = { claimantId, messages: Message[], closed: boolean, collected: Promise }
   const channels = new Map();
@@ -155,12 +155,10 @@ export function createMessageHandler({ client, config, contextStore, player, pri
           member: anchor.member ?? null,
           client,
           player,
-          contextStore,
           config,
           contextKey,
           isOwner: anchor.author.id === config.ownerId,
           privateMode,
-          contextCleared: false,
           requestRestart: false,
           reacted: false,
           batchedCount: messages.length,

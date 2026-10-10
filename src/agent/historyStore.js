@@ -19,7 +19,7 @@ async function supabase(config, route, body, prefer) {
     signal: AbortSignal.timeout(15000),
   });
   if (!res.ok) throw new Error(`Supabase ${route}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-  return prefer ? null : res.json();
+  return prefer?.includes('return=minimal') ? null : res.json();
 }
 
 export const toRow = (m) => ({
@@ -37,23 +37,33 @@ export const toRow = (m) => ({
 });
 
 // Unconfigured is a quiet no-op: the bot works exactly as before without a database.
-export async function saveMessages(config, messages) {
-  if (!configured(config)) return;
+// Live turns refresh a stored row; indexing (keepExisting) never overwrites one and
+// only adds what is new. Returns how many rows were written.
+export async function saveMessages(config, messages, { keepExisting = false } = {}) {
+  if (!configured(config)) return 0;
   const rows = messages.filter(Boolean).map(toRow);
-  if (rows.length) await supabase(config, 'discord_messages', rows, 'resolution=merge-duplicates,return=minimal');
+  if (!rows.length) return 0;
+  if (!keepExisting) {
+    await supabase(config, 'discord_messages', rows, 'resolution=merge-duplicates,return=minimal');
+    return rows.length;
+  }
+  // ON CONFLICT DO NOTHING returns only the rows it actually inserted.
+  const added = await supabase(config, 'discord_messages?select=id', rows, 'resolution=ignore-duplicates,return=representation');
+  return added.length;
 }
 
-// Pages backwards through the whole channel, 100 at a time (Discord's max).
+// Pages backwards through the whole channel, 100 at a time (Discord's max), and
+// returns how many messages were new. Rows already stored are left as they are.
+// shortcut: re-reads the whole channel from Discord every run; track how far a
+// channel was indexed if big channels make /index_chat too slow.
 export async function indexChannel(config, channel) {
   if (!configured(config)) throw new Error('Set SUPABASE_URL and SUPABASE_SECRET_KEY in .env first.');
   let before;
-  let saved = 0;
+  let added = 0;
   for (;;) {
     const page = await channel.messages.fetch({ limit: 100, ...(before && { before }) });
-    if (!page.size) return saved;
-    const withText = [...page.values()].filter((m) => m.content);
-    await saveMessages(config, withText);
-    saved += withText.length;
+    if (!page.size) return added;
+    added += await saveMessages(config, [...page.values()].filter((m) => m.content), { keepExisting: true });
     before = page.last().id;
   }
 }

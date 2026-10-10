@@ -1,6 +1,6 @@
 # How Panda works
 
-How panda-bot turns a message into a reply, and how its memory, models, tools, research, sandbox and safety work. For a quick overview, see the [README](README.md).
+How panda-bot turns a message into a reply, and how its prompts, history, models, tools, research, sandbox and safety work. For a quick overview, see the [README](README.md).
 
 Panda's `how_i_work` tool reads this file to answer questions about itself. If you change how the bot works, update this file too.
 
@@ -16,15 +16,14 @@ The flow lives in `src/discord/messageHandler.js` and `src/agent/agent.js`.
 **2. Batching (3 seconds).**
 The first trigger opens a **3-second batch** for that sender. Everything they send in those 3 seconds joins it, ping or not, and the timer does not reset. Another person's trigger opens their own batch behind it.
 - Each channel processes batches one at a time, in order. At most **5** wait; more are dropped as spam.
-- Batches are also serialized per server, since all channels of a server share one memory.
+- Batches are also serialized per server, since turns there share server-wide state such as the music queue.
 - Panda replies to the **last** message of the batch, treating the batch as one turn.
 
 **3. Building the prompt.**
-- **System prompt** (`src/agent/systemPrompt.js`): tone, Discord formatting, react-or-reply rules, tool routing, security rules, and the persona files in `context/`.
-- **Long-term summary** of this server, if there is one.
-- **The turn:** only the batch, labelled `[RESPOND TO THIS]`. No earlier messages and no transcript.
-- **Context on demand.** If the turn leans on something said before ("as I said", "that one", a thread that started earlier), the model calls `fetch_history` to read as far back as it needs. A self-contained question gets no history at all.
-- Every message is written as `Name (@username, id:NNN): text`, so the model knows who said what and can ping anyone with `<@id>`.
+- **System prompt** (`src/agent/systemPrompt.js`): only what can't live in Supabase: today's date, server, channel, sender and owner id, the private-mode note, how the input is laid out, and the security rules. Then the two prompt files from Supabase, `identity.md` and `soul.md` (see "Prompts" below).
+- **The turn:** only the batch, labelled `[RESPOND TO THIS]`. No earlier messages, no transcript, no summary.
+- **Context on demand.** If the turn leans on something said before ("as I said", "that one", a thread that started earlier), the model calls `fetch_history` to read as far back as it needs. If it points at one specific old message (a reply to it, or a link), the model calls `index_chat` to read and save the messages around it. A self-contained question gets no history at all.
+- Every message is written as `Name (@username, id:NNN): text`, so the model knows who said what and can ping anyone with `<@id>`. A reply also shows the message it replies to, with that message's id.
 - **Attachments** (`src/discord/attachments.js`) go to the model for this turn only: images (if the model accepts them, up to 5 MB), PDFs, text and code files (up to 200 KB), Tenor/Giphy GIF frames, and the picture a message replies to.
 
 **4. Jev triage.**
@@ -52,26 +51,43 @@ The model is called with all tools, except as step 4 above says. Jev's tool, if 
 **7. Bot-to-bot conversations.**
 They run for as long as the other bot keeps going, and end on a sign-off ("bye!", "have a great day"): Panda reacts 👋 instead of replying, then ignores bots in that channel until a human speaks. Bot sign-offs are checked per message, before batching: Jev decides, with a regex as the fallback. Human sign-offs are caught by the triage in step 4.
 
-## Memory
+## Prompts
 
-Each server has its own memory, shared by its channels.
+Everything that tells the model who Panda is and how to behave lives in **Supabase Storage**, in the private bucket `prompts` (`src/agent/prompts.js`, bucket created by `supabase/prompts.sql`). The repo holds no prompt text beyond the short system prompt, the Jev triage questions, the task prompts of `/research`, `self_fix` commit messages, the dev sandbox and `set_rule`, and slash-command text.
 
-**Summary** (`src/agent/memory.js`, stored in `data/context/<serverId>.json`).
-- Every turn becomes an **exchange**: the question and Panda's final answer. Tool results and narration are dropped. A turn whose model call fails still keeps its question.
-- After **10** exchanges, the conversation model folds them into a summary of at most **1,500 characters**: people, decisions, facts, preferences, open tasks, promises. Greetings and bot pleasantries are dropped.
-- The summary goes into every prompt. Folding runs after the reply is sent; if it fails, the exchanges wait for next time.
+| File | What it holds | Who changes it |
+|------|---------------|----------------|
+| `identity.md` | Who Panda is; Oscar as owner and master; what may be shared about Oscar; boundaries; Discord rules; how to use each tool | Nobody from Discord. Edit it in the Supabase dashboard. |
+| `soul.md` | Personality: vibe, tone, attitude, how to react and reply, how to handle other bots | Oscar, with `set_rule` |
+| `history/soul-<time>.md` | Every `soul.md` that `set_rule` replaced | Written by `set_rule` |
+
+- Both files are read with the bot's Supabase secret key and cached for **60 seconds**, so a dashboard edit is live within a minute, with no deploy.
+- If Supabase can't be reached, the bot keeps the last copy it loaded. If it never loaded one, it runs on the system prompt alone (which still carries the security rules) and logs an error.
+- When the two files disagree, `identity.md` wins.
+
+**`set_rule`** (tool and `/set_rule <instruction>`, **Oscar only**). It changes Panda's personality for good. When Oscar says to behave differently from now on ("stop using emojis", "be more sarcastic"), the model calls it with his words.
+1. It reads the current `soul.md` and `identity.md` fresh from Supabase. If either can't be read, nothing changes.
+2. The **development** model rewrites `soul.md` with the instruction applied, touching nothing else, and with `identity.md` given only as reference.
+3. The old `soul.md` is saved to `history/` first, then the new one is written. An empty or unchanged result writes nothing.
+4. The change applies from the next message on.
+
+## History
+
+Panda keeps no summary and no transcript. What was said before is read on demand.
 
 **Message database** (Supabase Postgres, `src/agent/historyStore.js`, schema in `supabase/discord_history.sql`). Optional; without it nothing is stored.
-- Every batch message and every Panda reply is saved, keyed by message id. `/index_chat` (Oscar) saves a whole channel.
+- Every batch message and every Panda reply is saved, keyed by message id.
+- `/index_chat` (Oscar) saves a whole channel. It only **adds** messages that aren't stored yet; a saved message is never overwritten. It still reads the whole channel from Discord each time.
 - The table has row-level security on and no policies, so only the bot's secret key can use it.
 
 **`fetch_history`** has two modes:
 - **Range** (no `query` or `author`): reads this channel straight from Discord, back from the message being answered. `count` messages (default 30, max 100) after skipping the `skip` most recent (max 500). Panda's own replies are marked `(you)`. Doesn't need the database.
 - **Search** (`query`, `author`, or server scope): searches the database. Messages are grouped into conversations split at 30-minute gaps. A keyword query returns the 3 best-matching conversations (20 messages before each hit, 10 after); `author` keeps conversations where that person spoke; server scope with no query returns the 3 most recent.
 
-**Persona files.** `context/IDENTITY.md`, `SOUL.md` and `USER.md` set who Panda is and what may be shared about Oscar.
-
-**Forgetting.** `/clear` / `clear_context` wipes this server's summary; `/clearall` / `clear_all_context` wipes every server. Oscar only. The database is untouched.
+**`index_chat`** (the tool; anyone can trigger it) is for one specific old message Panda hasn't seen: someone replies to it, links it, or points at it.
+- It takes a message link, or an id in this channel, and reads the **50** messages around that message straight from Discord, oldest first, with the message itself marked.
+- It saves the ones not stored yet, the same add-only way as `/index_chat`. If the database is down, it still shows them.
+- Another channel must be in this server, and the person asking must be able to read its history. Panda can see channels they can't. A DM can only reach itself.
 
 ## Models: OpenRouter and Jev
 
@@ -79,8 +95,8 @@ Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), re
 
 | Role | Used for |
 |------|----------|
-| **Conversation** model | Chat replies, memory summaries, `/research` |
-| **Development** model | `self_fix` / `/run_dev`: the sandbox agent and commit messages |
+| **Conversation** model | Chat replies, `/research` |
+| **Development** model | `self_fix` / `/run_dev`: the sandbox agent and commit messages; `set_rule`: rewriting `soul.md` |
 | **Jev** (`typesafe/jev-1.13`) | Fast yes/no and pick-one decisions |
 
 `/set_model` and `/set_dev_model` (Oscar) switch models; `/model` shows the current one; `/usage` shows OpenRouter spend.
@@ -109,12 +125,13 @@ Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is o
 | `web_search` / `web_fetch` | Search via SearXNG; read a public page |
 | `image_search` | Up to 3 images, shown as embeds |
 | `fetch_history` | Read further back in the channel, or search older conversations |
+| `index_chat` | Read and save the messages around one old message |
 | `how_i_work` | Read this file |
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |
 | GitHub MCP tools | Read-only GitHub (**Oscar only**) |
 | `github` | GitHub REST API with Oscar's token (**Oscar only**) |
 | `create_pr` / `self_fix` | Development tasks ending in a PR (**Oscar only**) |
-| `clear_context` / `clear_all_context` | Wipe memory (**Oscar only**) |
+| `set_rule` | Change Panda's personality (`soul.md`) for good (**Oscar only**) |
 
 "Oscar only" is checked in code against the sender's Discord user id, never against what the message says.
 
@@ -123,7 +140,7 @@ Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is o
 - **Music:** `/play`, `/skip`, `/pause`, `/resume`, `/stop`, `/queue`
 - **Skills:** `/research <query> [quick|normal|deep]`, `/web_search`, `/web_fetch`, `/image_search`
 - **Info:** `/menu`, `/usage`, `/model`
-- **Oscar only:** `/clear`, `/clearall`, `/index_chat`, `/self_fix`, `/run_dev`, `/set_model`, `/set_dev_model`, `/private on|off|status`, `/github`
+- **Oscar only:** `/set_rule`, `/index_chat`, `/self_fix`, `/run_dev`, `/set_model`, `/set_dev_model`, `/private on|off|status`, `/github`
 
 ## Deep research
 
@@ -157,6 +174,8 @@ These never edit the running bot.
 ## Safety
 
 - Owner checks use the sender's Discord user id, never names or claims.
+- The security rules live in the system prompt in code, so they hold even when Supabase is down.
+- `index_chat` only reads channels of this server that the person asking can read.
 - `web_fetch` refuses loopback, LAN, link-local and cloud-metadata addresses, on every DNS lookup and redirect.
 - GitHub MCP uses GitHub's read-only endpoint.
 - `/set_model` only writes safe model-id characters to `.env`, atomically.
@@ -165,7 +184,7 @@ These never edit the running bot.
 
 `npm start` runs `run.sh`: it starts a local SearXNG container, then the bot under a supervisor (exit 42 → pull and restart, crash → restart after 3 s, exit 0 → stop). `npm run start:once` runs it without the supervisor; `npm test` runs the tests.
 
-Every push to `main` builds a Docker image and publishes it to Docker Hub (`.github/workflows/docker.yml`). `docker-compose.deploy.yml` runs the bot and SearXNG together; mount a volume on `/app/data` so summaries and the private-mode flag survive restarts.
+Every push to `main` builds a Docker image and publishes it to Docker Hub (`.github/workflows/docker.yml`). `docker-compose.deploy.yml` runs the bot and SearXNG together; mount a volume on `/app/data` so the private-mode flag and the dev-run log survive restarts. Set `SUPABASE_URL` and `SUPABASE_SECRET_KEY`: without them Panda runs with no prompts and no history.
 
 ## Project layout
 
@@ -173,14 +192,12 @@ Every push to `main` builds a Docker image and publishes it to Docker Hub (`.git
 src/index.js              boot, intents, slash-command registration
 src/discord/              message handler (batching), slash commands, embeds, chunking
 src/agent/agent.js        the tool-calling loop and Jev triage
-src/agent/contextStore.js summary storage
-src/agent/memory.js       exchanges → summary
+src/agent/prompts.js      identity.md / soul.md from Supabase Storage
 src/agent/historyStore.js Supabase message database
 src/agent/jev.js          Jev decision calls
 src/agent/tools/          every tool the model can call
 src/agent/research/       the /research pipeline
 src/music/                discord-player + yt-dlp streaming
-context/                  persona files read into the system prompt
-supabase/                 database schema
+supabase/                 database schema and the prompts bucket
 .github/                  Docker build and the development sandbox
 ```

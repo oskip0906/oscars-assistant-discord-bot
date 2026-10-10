@@ -1,11 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { decide } from '../src/agent/jev.js';
 import { runAgent } from '../src/agent/agent.js';
-import { ContextStore } from '../src/agent/contextStore.js';
 import { signsOff, mentionsPanda } from '../src/discord/messageHandler.js';
 import { supportedClaims } from '../src/agent/research/stages.js';
 
@@ -29,9 +25,8 @@ test('decide sends nothing when Jev is off and returns null on failure', async (
 function turn(answers, extra = {}) {
   const invocation = {
     ...extra,
-    contextStore: new ContextStore(mkdtempSync(path.join(tmpdir(), 'panda-jev-'))),
     contextKey: 'g',
-    config: { ...config, model: 'm', maxToolIterations: 4, ownerId: '1', contextFilesDir: 'context' },
+    config: { ...config, model: 'm', maxToolIterations: 4, ownerId: '1' },
     isOwner: false,
     guild: null,
     message: { channel: { name: 'general' }, author: { id: '2', username: 'someone', displayName: 'Someone' } },
@@ -89,21 +84,19 @@ test('a mention-only turn is answered when Jev says it is addressed or worth ste
   }
 });
 
-test('a mention-only turn Jev turns down, or cannot judge, gets no model call and leaves no memory', async () => {
+test('a mention-only turn Jev turns down, or cannot judge, gets no model call', async () => {
   for (const answers of [{ addressed: { noul: 0.3 }, step_in: { noul: 0.2 } }, null]) {
     const calls = await turn(answers, { mayDecline: true });
     assert.equal(calls.reply, null);
     assert.equal(calls.length, 0);
-    assert.equal(calls.invocation.contextStore.pendingCount('g'), 0);
   }
 });
 
 test('a ping or reply is triaged by Jev but never turned down', async () => {
   let asked = 0;
   const invocation = {
-    contextStore: new ContextStore(mkdtempSync(path.join(tmpdir(), 'panda-jev-'))),
     contextKey: 'g',
-    config: { ...config, model: 'm', maxToolIterations: 4, ownerId: '1', contextFilesDir: 'context' },
+    config: { ...config, model: 'm', maxToolIterations: 4, ownerId: '1' },
     message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' } },
   };
   const chat = async ({ toolChoice }) => ({ content: `auto=${toolChoice === 'auto'}` });

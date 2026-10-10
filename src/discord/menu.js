@@ -9,7 +9,7 @@ export function buildMenuEmbed(client, config) {
     .setDescription(
       `Hi, I'm **${config.botName}** — Oscar's AI familiar, rebuilt fully from scratch. ` +
         `**Mention me** (<@${client.user.id}>) or **reply to my messages** and I'll answer. ` +
-        `I remember each server separately. Here's everything I can do:`,
+        `I keep a searchable history of our chats. Here's everything I can do:`,
     )
     .setThumbnail(client.user.displayAvatarURL({ size: 256 }))
     .addFields(
@@ -35,11 +35,9 @@ export function buildMenuEmbed(client, config) {
         ].join('\n'),
       },
       {
-        name: '🧹 Context (Oscar only)',
+        name: '🗂️ History (Oscar only)',
         value: [
-          '`/clear` : Erase my memory of THIS server',
-          '`/clearall` : Erase ALL my memory everywhere',
-          '`/index_chat` : Save every message in this channel to my history database',
+          '`/index_chat` : Save this channel’s new messages to my history database (saved ones stay as they are)',
         ].join('\n'),
       },
       {
@@ -49,8 +47,8 @@ export function buildMenuEmbed(client, config) {
           '`/run_dev <instruction> [repo]` : Approve a remote-sandbox development PR',
           '`/set_dev_model <model>` : Choose the OpenRouter model used for development work',
           '`/set_model <model>` : Switch me to another OpenRouter model and restart',
+          '`/set_rule <instruction>` : Change my personality or behavior for good',
           '`/private on|off|status` : Only respond to Oscar',
-          '`/toggle_response <user_id>` : Toggle whether I respond to a specific user id',
         ].join('\n'),
       },
       {

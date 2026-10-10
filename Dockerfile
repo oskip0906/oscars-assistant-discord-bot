@@ -16,14 +16,13 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# App source + persona files (context/ is read at runtime), and ARCHITECTURE.md, which the
-# how_i_work tool reads to answer questions about the bot.
+# App source, and ARCHITECTURE.md, which the how_i_work tool reads to answer
+# questions about the bot. The prompts live in Supabase, not in the image.
 COPY src ./src
-COPY context ./context
 COPY ARCHITECTURE.md ./
 
-# Runtime state (transcripts, private-mode flag) lives here; mount a volume over it.
-RUN mkdir -p data/context && chown -R node:node /app
+# Runtime state (the private-mode flag, dev-run log) lives here; mount a volume over it.
+RUN mkdir -p data && chown -R node:node /app
 USER node
 
 CMD ["node", "src/index.js"]

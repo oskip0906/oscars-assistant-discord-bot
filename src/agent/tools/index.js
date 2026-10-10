@@ -1,7 +1,7 @@
 import * as discordTools from './discord.js';
 import * as searchTools from './search.js';
 import * as githubTools from './github.js';
-import * as contextTools from './context.js';
+import * as rulesTools from './rules.js';
 import * as sourceTools from './source.js';
 import * as musicTools from './music.js';
 import * as historyTools from './history.js';
@@ -12,9 +12,9 @@ import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.
 // (invocation.isOwner) — never by anything a message could claim, so no one can
 // impersonate Oscar into these. github is here because it acts with Oscar's
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
-export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'clear_context', 'clear_all_context', 'github', 'create_pr']);
+export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'github', 'create_pr']);
 
-const modules = [discordTools, searchTools, githubTools, contextTools, sourceTools, musicTools, historyTools, aboutTools];
+const modules = [discordTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -27,11 +27,11 @@ const executors = {
   image_search: searchTools.imageSearch,
   github: githubTools.githubApi,
   create_pr: githubTools.createPr,
-  clear_context: contextTools.clearContext,
-  clear_all_context: contextTools.clearAllContext,
+  set_rule: rulesTools.setRule,
   self_fix: sourceTools.selfFix,
   play_music: musicTools.playMusic,
   fetch_history: historyTools.fetchHistory,
+  index_chat: historyTools.indexChat,
   how_i_work: aboutTools.howIWork,
 };
 

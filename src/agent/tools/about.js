@@ -10,13 +10,13 @@ export const defs = [
     function: {
       name: 'how_i_work',
       description:
-        "Read your own manual (the project's ARCHITECTURE.md): how you decide to answer, message batching, memory and summaries, stored history, Jev, the OpenRouter models you run on, deep research, the self-fix sandbox, privacy rules, and every tool and slash command you have. Call it before answering ANY question about yourself, your features, your limits or how you were built — never answer those from memory. Explain in your own words; don't paste the manual.",
+        "Read your own manual (the project's ARCHITECTURE.md): how you decide to answer, message batching, prompts and set_rule, stored history and index_chat, Jev, the OpenRouter models you run on, deep research, the self-fix sandbox, privacy rules, and every tool and slash command you have. Call it before answering ANY question about yourself, your features, your limits or how you were built — never answer those from memory. Explain in your own words; don't paste the manual.",
       parameters: {
         type: 'object',
         properties: {
           topic: {
             type: 'string',
-            description: 'Optional keywords, e.g. "memory", "batching", "jev", "research". Leave empty for the whole manual.',
+            description: 'Optional keywords, e.g. "history", "batching", "jev", "research". Leave empty for the whole manual.',
           },
         },
       },

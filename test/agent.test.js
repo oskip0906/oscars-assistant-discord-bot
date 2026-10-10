@@ -1,18 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { runAgent, saysNothing } from '../src/agent/agent.js';
-import { ContextStore } from '../src/agent/contextStore.js';
 
 // One turn with Jev's `answers` and the model scripted to give `replies` in order.
 async function turn(answers, replies, extra = {}) {
   const reactions = [];
   const invocation = {
-    contextStore: new ContextStore(mkdtempSync(path.join(tmpdir(), 'panda-agent-'))),
     contextKey: 'g',
-    config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', maxToolIterations: 4, ownerId: '1', contextFilesDir: 'context' },
+    config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', maxToolIterations: 4, ownerId: '1' },
     message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' }, react: async (e) => { reactions.push(e); } },
     isOwner: false,
     reacted: false,
@@ -87,12 +82,12 @@ test('a sign-off gets a wave and no model call', async () => {
 });
 
 test('a request that needs an Oscar-only tool stops for anyone else', async () => {
-  const answers = { needs_tool: { noul: 0.9 }, tool: sure('clear_context'), respond_with: sure('message') };
+  const answers = { needs_tool: { noul: 0.9 }, tool: sure('set_rule'), respond_with: sure('message') };
   const guest = await turn(answers, []);
-  assert.equal(guest.text, 'Only Oscar can use `clear_context`.');
+  assert.equal(guest.text, 'Only Oscar can use `set_rule`.');
   assert.equal(guest.calls.length, 0);
   const owner = await turn(answers, [{ content: 'done' }], { isOwner: true });
-  assert.deepEqual(owner.calls[0].toolChoice, force('clear_context'));
+  assert.deepEqual(owner.calls[0].toolChoice, force('set_rule'));
 });
 
 test('with Jev down the model decides, and an emoji echoed after a reaction is dropped', async () => {

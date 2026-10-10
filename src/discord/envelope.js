@@ -17,7 +17,8 @@ export function formatEnvelope(message, refMsg = null) {
     const quote = String(refMsg.content || '')
       .replace(/\s+/g, ' ')
       .slice(0, 180);
-    header.push(`(replying to @${refMsg.author.username} (id:${refMsg.author.id}): "${quote}")`);
+    // The message id lets the model pull in what surrounded it with index_chat.
+    header.push(`(replying to message ${refMsg.id} from @${refMsg.author.username} (id:${refMsg.author.id}): "${quote}")`);
   }
 
   const attachments = [...(message.attachments?.values() ?? [])].map(
