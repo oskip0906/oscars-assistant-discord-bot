@@ -17,12 +17,11 @@ const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
 // execute tool calls → repeat until plain text (or iteration cap). Returns reply
 // text, or null when Panda was only mentioned and Jev decided it should stay out.
 //
-// There is no stored transcript: the turn carries the last few channel
-// messages, and the model calls fetch_history when it needs more.
+// There is no stored transcript and no history block: the turn is only the
+// batch, and the model calls fetch_history when it needs earlier messages.
 //
 // `rememberContent` is what goes into long-term memory, and it is deliberately
-// not `userContent`: the history block is scaffolding for this one reply, and
-// summarising it would fold the same messages in over and over.
+// not `userContent`: media attachments go to the model for this turn only.
 export async function runAgent(invocation, userContent, rememberContent = userContent, { chat = chatCompletion, decideImpl = decide } = {}) {
   const { contextStore, config, contextKey } = invocation;
   const summary = contextStore.summary?.(contextKey) || '';
@@ -120,7 +119,7 @@ async function triage(tools, message, invocation, decideImpl) {
   const { config } = invocation;
   const criteria = { none: 'No tool is needed: a plain text reply answers it.' };
   for (const t of tools) criteria[t.function.name] = String(t.function.description || '').slice(0, 300);
-  const state = { message, assistant_name: config.botName, owner_name: 'Oscar', recent_chat: invocation.recentChat || '' };
+  const state = { message, assistant_name: config.botName, owner_name: 'Oscar' };
   const questions = {
     addressed: {
       type: 'noul',
@@ -130,7 +129,7 @@ async function triage(tools, message, invocation, decideImpl) {
     step_in: {
       type: 'noul',
       instructions:
-        'Are people in `message` (with `recent_chat` as background) talking about the assistant in a way where it should step in: a question about it nobody has answered, something wrong said about it, or someone who clearly wants its help?',
+        'Is `message` talking about the assistant in a way where it should step in: a question about it nobody has answered, something wrong said about it, or someone who clearly wants its help?',
     },
     tool: { type: 'choice', instructions: 'Which tool should the assistant call first to handle `message`?', criteria },
   };
