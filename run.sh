@@ -14,13 +14,18 @@
 cd "$(dirname "$0")" || exit 1
 
 # Search needs a private SearXNG on loopback, and a fresh checkout has neither
-# the container nor its (gitignored) settings.yml. Run before either branch so a
-# crash-restart revives it too. Costs one health probe when it is already up,
-# and never fails the boot — see scripts/ensure-searxng.sh. Run through bash, not
-# ./, because git stores it without the executable bit and a `-x` check skipped it.
-[ -f scripts/ensure-searxng.sh ] && bash scripts/ensure-searxng.sh
+# the container nor its (gitignored) settings.yml. Run right before every node
+# start, so a crash-restart revives it too, and only once per start: with Docker
+# hung, each run waits out its deadline. Costs one health probe when it is
+# already up, and never fails the boot — see scripts/ensure-searxng.sh. Run
+# through bash, not ./, because git stores it without the executable bit.
+ensure_search() {
+  [ -f scripts/ensure-searxng.sh ] && bash scripts/ensure-searxng.sh
+  return 0
+}
 
 if [ -n "$PANDA_SUPERVISED" ]; then
+  ensure_search
   node src/index.js
   exit $?
 fi
@@ -70,6 +75,7 @@ fi
 
 if [ ! -x start.sh ]; then
   echo "[run.sh] could not create start.sh — booting once, without the pull-and-restart loop" >&2
+  ensure_search
   exec node src/index.js
 fi
 
