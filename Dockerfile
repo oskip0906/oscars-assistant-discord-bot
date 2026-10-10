@@ -16,9 +16,11 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# App source + persona files (context/ is read at runtime).
+# App source + persona files (context/ is read at runtime), and the README the
+# how_i_work tool reads to answer questions about the bot.
 COPY src ./src
 COPY context ./context
+COPY README.md ./
 
 # Runtime state (transcripts, private-mode flag) lives here; mount a volume over it.
 RUN mkdir -p data/context && chown -R node:node /app

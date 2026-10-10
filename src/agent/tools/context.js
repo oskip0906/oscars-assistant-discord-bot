@@ -4,7 +4,7 @@ export const defs = [
     function: {
       name: 'clear_context',
       description:
-        "Erase the bot's stored conversation memory for THIS server (all channels of it). Use when someone asks to reset/forget the conversation here.",
+        "Erase the bot's stored conversation memory for THIS server (all channels of it). Use when Oscar asks to reset/forget the conversation here. Owner (Oscar) only.",
       parameters: { type: 'object', properties: {} },
     },
   },

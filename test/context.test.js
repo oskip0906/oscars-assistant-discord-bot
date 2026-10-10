@@ -14,7 +14,7 @@ const store = () => new ContextStore(mkdtempSync(path.join(tmpdir(), 'panda-ctx-
 test('remembers what Panda answered, not only what was asked', () => {
   const evicted = [
     { role: 'user', content: 'where does the deploy config live?' },
-    { role: 'assistant', content: '', tool_calls: [{ id: '1', function: { name: 'vault_fetch', arguments: '{}' } }] },
+    { role: 'assistant', content: '', tool_calls: [{ id: '1', function: { name: 'web_search', arguments: '{}' } }] },
     { role: 'tool', tool_call_id: '1', content: 'a big blob of page text' },
     { role: 'assistant', content: 'It is docker-compose.deploy.yml at the repo root.' },
   ];

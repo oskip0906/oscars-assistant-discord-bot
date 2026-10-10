@@ -5,7 +5,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // One chat-completions call. Retries transient failures (network, 429, 5xx),
 // throws on real API errors. Returns the assistant message object
 // ({ content, tool_calls? }).
-export async function chatCompletion({ apiKey, model, messages, tools, maxRetries = 3 }) {
+export async function chatCompletion({ apiKey, model, messages, tools, toolChoice = 'auto', maxRetries = 3 }) {
   let lastErr;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     let res;
@@ -21,7 +21,7 @@ export async function chatCompletion({ apiKey, model, messages, tools, maxRetrie
         body: JSON.stringify({
           model,
           messages,
-          ...(tools?.length ? { tools, tool_choice: 'auto' } : {}),
+          ...(tools?.length ? { tools, tool_choice: toolChoice } : {}),
         }),
       });
     } catch (err) {

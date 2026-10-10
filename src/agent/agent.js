@@ -2,12 +2,20 @@ import { chatCompletion } from './openrouter.js';
 import { buildSystemPrompt } from './systemPrompt.js';
 import { toolDefs, executeTool } from './tools/index.js';
 import { rememberEvicted } from './memory.js';
+import { decide } from './jev.js';
 
 const TOOL_RESULT_CAP = 12000;
+const PICK_THRESHOLD = 0.8;
+
+const clip = (v, n = 200) => {
+  const s = typeof v === 'string' ? v : JSON.stringify(v);
+  return s.length > n ? `${s.slice(0, n)}…(${s.length} chars)` : s;
+};
+const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
 
 // The agent loop: system + memory + per-server history + new envelope → model →
 // execute tool calls → repeat until plain text (or iteration cap). Returns reply
-// text.
+// text, or null when Panda was only mentioned and Jev decided it should stay out.
 //
 // `rememberContent` is what goes into long-term memory, and it is deliberately
 // not `userContent`: the turn is sent with a block of recent channel history for
@@ -15,7 +23,7 @@ const TOOL_RESULT_CAP = 12000;
 // messages back into memory. Six turns of that filled the transcript with
 // duplicates of itself, evicted the real conversation, and left the model
 // reading its own "do NOT reply to these" blocks as if they were prior turns.
-export async function runAgent(invocation, userContent, rememberContent = userContent, { chat = chatCompletion } = {}) {
+export async function runAgent(invocation, userContent, rememberContent = userContent, { chat = chatCompletion, decideImpl = decide } = {}) {
   const { contextStore, config, contextKey } = invocation;
   const history = contextStore.get(contextKey);
   const summary = contextStore.summary?.(contextKey) || '';
@@ -26,6 +34,9 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
     { role: 'user', content: userContent },
   ];
   const newMessages = [{ role: 'user', content: rememberContent }];
+  const who = invocation.message?.author?.username ?? '?';
+  const turnStart = Date.now();
+  log(contextKey, `turn start from @${who} (model ${config.model}, ${history.length} history msgs): ${clip(rememberContent, 150)}`);
 
   // A turn that dies at the model call used to vanish from history entirely:
   // the model had seen the question, memory had not, and the next turn had no
@@ -33,13 +44,31 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
   // results are pushed in the same iteration as the assistant message that
   // requested them — so whatever it holds is valid history to store.
   try {
+  const tools = await toolDefs(invocation);
+  // A ping or reply goes straight to the model. A mention-only turn asks Jev
+  // first, which also names the tool to start with: when it is sure, the first
+  // call is made to use it rather than answering from memory. Later iterations
+  // go back to 'auto', so a wrong pick costs one call, not the turn.
+  const { respond, tool: firstTool } = invocation.mayDecline
+    ? await triage(tools, rememberContent, invocation, decideImpl)
+    : { respond: true, tool: null };
+  if (invocation.mayDecline) log(contextKey, `triage: respond=${respond} firstTool=${firstTool ?? 'none'}`);
+  // Not for Panda after all: say nothing and remember nothing.
+  if (!respond) return null;
+  invocation.onAccept?.();
   for (let iteration = 0; iteration < config.maxToolIterations; iteration++) {
+    const callStart = Date.now();
     const msg = await chat({
       apiKey: config.openrouterApiKey,
       model: config.model,
       messages,
-      tools: await toolDefs(invocation),
+      tools,
+      toolChoice: iteration === 0 && firstTool ? { type: 'function', function: { name: firstTool } } : 'auto',
     });
+
+    log(contextKey, `model #${iteration + 1} ${Date.now() - callStart}ms → ${
+      msg.tool_calls?.length ? `tools: ${msg.tool_calls.map((c) => c.function.name).join(', ')}` : `text (${(msg.content || '').length} chars)`
+    }`);
 
     const assistant = { role: 'assistant', content: msg.content ?? '' };
     if (msg.tool_calls?.length) assistant.tool_calls = msg.tool_calls;
@@ -51,18 +80,23 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
       // Empty text is allowed when the model already reacted with an emoji —
       // the handler then sends nothing. Otherwise fall back to a placeholder.
       const text = msg.content?.trim() || '';
+      log(contextKey, `turn done in ${Date.now() - turnStart}ms after ${iteration + 1} model call(s)`);
       if (text) return text;
       return invocation.reacted ? '' : '🐼 …';
     }
 
     for (const call of msg.tool_calls) {
       let result;
+      const toolStart = Date.now();
+      log(contextKey, `→ ${call.function.name}(${clip(call.function.arguments || '{}', 300)})`);
       try {
         const args = JSON.parse(call.function.arguments || '{}');
         result = await executeTool(call.function.name, args, invocation);
       } catch (err) {
         result = `Tool ${call.function.name} crashed: ${String(err.message || err).slice(0, 300)}`;
+        console.error(`[agent ${contextKey}] ✗ ${call.function.name} crashed:`, err);
       }
+      log(contextKey, `← ${call.function.name} ${Date.now() - toolStart}ms: ${clip(String(result))}`);
       const toolMsg = {
         role: 'tool',
         tool_call_id: call.id,
@@ -73,12 +107,45 @@ export async function runAgent(invocation, userContent, rememberContent = userCo
     }
   }
 
+  log(contextKey, `hit tool-use limit (${config.maxToolIterations}) after ${Date.now() - turnStart}ms`);
   persist(invocation, newMessages);
   return '⚠️ I hit my tool-use limit before finishing that. Progress is saved — tell me to continue.';
   } catch (err) {
+    log(contextKey, `turn failed after ${Date.now() - turnStart}ms: ${err.message || err}`);
     persist(invocation, newMessages);
     throw err;
   }
+}
+
+// The one Jev call for a turn where Panda was only mentioned (a keyword hit,
+// no ping or reply): should Panda answer, because the message is speaking to it
+// under any name or because people are talking about it and stepping in would
+// help, and which tool should it start with. Jev down means no answer, as before.
+async function triage(tools, message, invocation, decideImpl) {
+  const { config } = invocation;
+  const criteria = { none: 'No tool is needed: a plain text reply answers it.' };
+  for (const t of tools) criteria[t.function.name] = String(t.function.description || '').slice(0, 300);
+  const state = { message, assistant_name: config.botName, owner_name: 'Oscar', recent_chat: invocation.recentChat || '' };
+  const questions = {
+    addressed: {
+      type: 'noul',
+      instructions:
+        "Is `message` speaking to the assistant, asking or telling it something? It may be called `assistant_name`, `owner_name`'s assistant, the assistant of `owner_name`, the bot, or anything else that clearly means it.",
+    },
+    step_in: {
+      type: 'noul',
+      instructions:
+        'Are people in `message` (with `recent_chat` as background) talking about the assistant in a way where it should step in: a question about it nobody has answered, something wrong said about it, or someone who clearly wants its help?',
+    },
+    tool: { type: 'choice', instructions: 'Which tool should the assistant call first to handle `message`?', criteria },
+  };
+  const answers = await decideImpl(config, state, questions);
+  const respond = [answers?.addressed, answers?.step_in].some((a) => a?.noul >= PICK_THRESHOLD);
+
+  const answer = answers?.tool;
+  if (!answer || answer.choice === 'none' || !(answer.choice in criteria)) return { respond, tool: null };
+  const sure = (answer.probabilities?.[answer.choice] ?? answer.confidence ?? 0) >= PICK_THRESHOLD;
+  return { respond, tool: sure ? answer.choice : null };
 }
 
 function persist(invocation, newMessages) {

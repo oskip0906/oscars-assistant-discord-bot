@@ -71,14 +71,34 @@ export function writeEnvModel(config, model, key = 'OPENROUTER_MODEL') {
   }
 }
 
-// Every model id OpenRouter currently serves.
-export async function listOpenRouterModels(config) {
+async function fetchCatalog(config) {
   const res = await fetch('https://openrouter.ai/api/v1/models', {
     headers: { Authorization: `Bearer ${config.openrouterApiKey}` },
   });
   if (!res.ok) throw new Error(`OpenRouter models HTTP ${res.status}`);
-  const body = await res.json();
-  return (body.data || []).map((m) => m.id).filter(Boolean);
+  return (await res.json()).data || [];
+}
+
+// Every model id OpenRouter currently serves.
+export async function listOpenRouterModels(config) {
+  return (await fetchCatalog(config)).map((m) => m.id).filter(Boolean);
+}
+
+// What the chat model takes as input ("text", "image", "file", …), per
+// OpenRouter's catalog. Looked up once per model; a failed lookup means text
+// only, because sending an image to a text-only model fails the whole turn.
+const inputsCache = new Map();
+export async function modelInputs(config, catalog = fetchCatalog) {
+  if (!inputsCache.has(config.model)) {
+    try {
+      const model = (await catalog(config)).find((m) => m.id === config.model);
+      inputsCache.set(config.model, model?.architecture?.input_modalities ?? ['text']);
+    } catch (err) {
+      console.error('[model] could not read model input types:', err.message);
+      return ['text'];
+    }
+  }
+  return inputsCache.get(config.model);
 }
 
 // Discord fires autocomplete on every keystroke and gives 3 seconds to answer,

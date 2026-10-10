@@ -3,9 +3,8 @@ import { searchResults, fetchPage } from '../tools/search.js';
 export { fetchPage };
 
 // Bounded-concurrency map. Research fans out as wide as it can for speed, but
-// every page read goes through keyless r.jina.ai, which 429s under a wide
-// fan-out — and its backoff makes an unbounded run slower than a bounded one.
-// ponytail: fixed limit; raise it (or drop the bound) once JINA_API_KEY is set.
+// every page read is a request from this machine, and an unbounded fan-out
+// gets it rate-limited by the sites it reads.
 export async function pool(items, limit, fn) {
   const results = new Array(items.length);
   let next = 0;

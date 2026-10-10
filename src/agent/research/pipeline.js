@@ -73,7 +73,7 @@ export async function runResearch({ query, depth = 'normal', config, onProgress 
       if (outOfTime()) return;
       let page;
       try {
-        page = await fetchPage(hit.url, config);
+        page = await fetchPage(hit.url);
       } catch {
         return; // an unreachable page is a dropped source, not a failed run
       }

@@ -8,15 +8,13 @@ import { PRIVATE_MESSAGE } from '../privateMode.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
-import { vaultFetch, githubCall, createPr, writableRepoChoices } from '../agent/tools/github.js';
+import { githubCall, createPr, writableRepoChoices } from '../agent/tools/github.js';
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
 import { setDevelopmentModel } from '../configManager.js';
-import { clearPersonaCache } from '../agent/systemPrompt.js';
 import { runResearch } from '../agent/research/pipeline.js';
 import { renderReport } from '../agent/research/render.js';
-import fs from 'node:fs';
-import path from 'node:path';
+import { indexChannel } from '../agent/historyStore.js';
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -47,7 +45,7 @@ export const commandDefs = [
   new SlashCommandBuilder().setName('resume').setDescription('Resume playback'),
   new SlashCommandBuilder().setName('stop').setDescription('Stop playback and clear the queue'),
   new SlashCommandBuilder().setName('queue').setDescription('Show the current queue'),
-  new SlashCommandBuilder().setName('clear').setDescription("Erase Panda's memory of this server"),
+  new SlashCommandBuilder().setName('clear').setDescription("Erase Panda's memory of this server (owner only)"),
   new SlashCommandBuilder().setName('clearall').setDescription('Erase ALL of Panda’s memory (owner only)'),
   new SlashCommandBuilder()
     .setName('web_search')
@@ -61,10 +59,6 @@ export const commandDefs = [
     .setName('image_search')
     .setDescription('Search for images')
     .addStringOption((o) => o.setName('query').setDescription('What to find pictures of').setRequired(true)),
-  new SlashCommandBuilder()
-    .setName('vault_fetch')
-    .setDescription("Read Oscar's knowledge vault")
-    .addStringOption((o) => o.setName('query').setDescription('What to look for in the vault')),
   new SlashCommandBuilder()
     .setName('research')
     .setDescription('Deep research: plan, crawl, verify, and report with sources')
@@ -111,11 +105,8 @@ export const commandDefs = [
         ),
     ),
   new SlashCommandBuilder()
-    .setName('set_rule')
-    .setDescription('Set a rule that Panda always follows — writes to instructions.md (owner only)')
-    .addStringOption((o) =>
-      o.setName('rule').setDescription('The rule text (can be any instruction you want Panda to obey)').setRequired(true),
-    ),
+    .setName('index_chat')
+    .setDescription('Save every message in this channel to Panda’s history database (owner only)'),
 ].map((b) => b.toJSON());
 
 // Answering a button click has a 3-second budget, after which the interaction
@@ -332,13 +323,16 @@ export function createInteractionHandler({ client, config, contextStore, player,
       }
 
       if (name === 'clear') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+        }
         const key = interaction.guildId ?? `dm:${interaction.user.id}`;
         contextStore.clear(key);
         return await interaction.reply('🧹 My memory of this server has been wiped. Fresh start!');
       }
 
       if (name === 'clearall') {
-        if (interaction.user.id !== config.ownerId) {
+        if (!isOwner) {
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
         }
         contextStore.clearAll();
@@ -404,13 +398,6 @@ export function createInteractionHandler({ client, config, contextStore, player,
         return;
       }
 
-      if (name === 'vault_fetch') {
-        return await runTool(vaultFetch, {
-          path: undefined,
-          query: interaction.options.getString('query') ?? undefined,
-        });
-      }
-
       if (name === 'github') {
         if (!isOwner) {
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
@@ -463,31 +450,15 @@ export function createInteractionHandler({ client, config, contextStore, player,
         return await sendToolResult(result);
       }
 
-      // --- set_rule (owner-only, writes instructions.md) ---------------
-      if (name === 'set_rule') {
+      if (name === 'index_chat') {
         if (!isOwner) {
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
         }
-        const ruleText = interaction.options.getString('rule', true).trim();
-        if (!ruleText) {
-          return await interaction.reply({ content: '⚠️ Provide a rule to set.', flags: MessageFlags.Ephemeral });
-        }
-        try {
-          const filePath = path.join(config.contextFilesDir, 'instructions.md');
-          fs.mkdirSync(path.dirname(filePath), { recursive: true });
-          fs.writeFileSync(filePath, ruleText);
-          // Clear the persona cache so the new rule takes effect in the next reply.
-          clearPersonaCache();
-        } catch (err) {
-          return await interaction.reply({
-            content: `⚠️ Could not write instructions.md: ${err.message}`,
-            flags: MessageFlags.Ephemeral,
-          });
-        }
-        return await interaction.reply({
-          content: `✅ Rule set. Panda will now follow this rule at all times:\n>>> ${ruleText}`,
-          flags: MessageFlags.Ephemeral,
-        });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const saved = await indexChannel(config, interaction.channel);
+        const done = `✅ Indexed ${saved} messages from <#${interaction.channelId}>.`;
+        // A big channel can outlive the 15-minute interaction token; DM the result instead.
+        return await interaction.editReply(done).catch(() => interaction.user.send(done));
       }
 
       // Music commands below

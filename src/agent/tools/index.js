@@ -4,15 +4,17 @@ import * as githubTools from './github.js';
 import * as contextTools from './context.js';
 import * as sourceTools from './source.js';
 import * as musicTools from './music.js';
+import * as historyTools from './history.js';
+import * as aboutTools from './about.js';
 import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.js';
 
 // Owner-only tools. Gated by the AUTHENTICATED Discord author id
 // (invocation.isOwner) — never by anything a message could claim, so no one can
 // impersonate Oscar into these. github is here because it acts with Oscar's
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
-export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'clear_all_context', 'github', 'create_pr']);
+export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'clear_context', 'clear_all_context', 'github', 'create_pr']);
 
-const modules = [discordTools, searchTools, githubTools, contextTools, sourceTools, musicTools];
+const modules = [discordTools, searchTools, githubTools, contextTools, sourceTools, musicTools, historyTools, aboutTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -23,13 +25,14 @@ const executors = {
   web_search: searchTools.webSearch,
   web_fetch: searchTools.webFetch,
   image_search: searchTools.imageSearch,
-  vault_fetch: githubTools.vaultFetch,
   github: githubTools.githubApi,
   create_pr: githubTools.createPr,
   clear_context: contextTools.clearContext,
   clear_all_context: contextTools.clearAllContext,
   self_fix: sourceTools.selfFix,
   play_music: musicTools.playMusic,
+  fetch_history: historyTools.fetchHistory,
+  how_i_work: aboutTools.howIWork,
 };
 
 // Async because the GitHub MCP tool list is fetched from GitHub's hosted server

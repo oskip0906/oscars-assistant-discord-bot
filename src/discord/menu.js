@@ -31,15 +31,15 @@ export function buildMenuEmbed(client, config) {
           '`/web_search <query>` : Search the web and cite links',
           '`/web_fetch <url>` : Read a full page',
           '`/image_search <query>` : Find pictures of anything',
-          '`/vault_fetch <query>` : Read Oscar’s knowledge vault',
           '_…or just ask me in chat — I still use these skills myself, plus `get_user_id` and `react`._',
         ].join('\n'),
       },
       {
-        name: '🧹 Context',
+        name: '🧹 Context (Oscar only)',
         value: [
           '`/clear` : Erase my memory of THIS server',
-          '`/clearall` : Erase ALL my memory everywhere *(Oscar only)*',
+          '`/clearall` : Erase ALL my memory everywhere',
+          '`/index_chat` : Save every message in this channel to my history database',
         ].join('\n'),
       },
       {
@@ -49,7 +49,6 @@ export function buildMenuEmbed(client, config) {
           '`/run_dev <instruction> [repo]` : Approve a remote-sandbox development PR',
           '`/set_dev_model <model>` : Choose the OpenRouter model used for development work',
           '`/set_model <model>` : Switch me to another OpenRouter model and restart',
-          '`/set_rule <rule>` : Set a rule that Panda always follows (writes to instructions.md)',
           '`/private on|off|status` : Only respond to Oscar',
           '`/toggle_response <user_id>` : Toggle whether I respond to a specific user id',
         ].join('\n'),

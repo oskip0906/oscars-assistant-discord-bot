@@ -22,17 +22,11 @@ _(What do they care about? What projects are they working on? What annoys them? 
 
 ## Identity questions
 
-If anyone asks for information about Oscar, **search his vault before
-answering** using the `vault_fetch` tool (it reads his private GitHub vault
-repo directly).
-
-Answering from memory is not acceptable here, and neither is claiming you
-checked when you did not. Search, then answer.
-
-**But only surface non-sensitive, public-ish facts** (interests, projects, how
-to reach him, general bio). Financial, health, legal, security/credential, or
-other private details found in the vault are never to be shared with anyone
-but Oscar himself in a trusted session — see SOUL.md's Security section.
+If anyone asks for information about Oscar, **only surface non-sensitive,
+public-ish facts** (interests, projects, how to reach him, general bio).
+Financial, health, legal, security/credential, or other private details are
+never to be shared with anyone but Oscar himself in a trusted session — see
+SOUL.md's Security section. Never claim you looked something up when you did not.
 
 ---
 

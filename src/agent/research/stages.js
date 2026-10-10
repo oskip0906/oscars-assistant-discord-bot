@@ -1,4 +1,5 @@
 import { askJson } from './askJson.js';
+import { decide } from '../jev.js';
 
 // Every stage is a prompt plus a shape predicate. None of them plans, decides
 // what to read next, or judges when the run is done — that is pipeline.js, in
@@ -40,7 +41,7 @@ export async function planQuestions({ query, count, config }) {
   }));
 }
 
-export async function extractClaims({ question, page, config, maxClaims = 5 }) {
+export async function extractClaims({ question, page, config, maxClaims = 5, decideImpl = decide }) {
   const body = String(page.content || '').slice(0, 8000);
   if (body.length < 200) return [];
 
@@ -65,7 +66,24 @@ export async function extractClaims({ question, page, config, maxClaims = 5 }) {
   });
   if (!value) return [];
 
-  return verifyClaims(value.claims.slice(0, maxClaims), body);
+  return supportedClaims(verifyClaims(value.claims.slice(0, maxClaims), body), config, decideImpl);
+}
+
+// verifyClaims proves a quote is on the page, not that it says what the claim
+// says. Jev asks that per claim in one call; a claim it is fairly sure the quote
+// does not back is dropped, and a failed call keeps every claim.
+export async function supportedClaims(claims, config, decideImpl = decide) {
+  if (!claims.length) return claims;
+  const state = {};
+  const questions = {};
+  claims.forEach((c, i) => {
+    state[`claim_${i}`] = c.text;
+    state[`quote_${i}`] = c.quote;
+    questions[`supported_${i}`] = { type: 'noul', instructions: `Does \`quote_${i}\` state or directly imply \`claim_${i}\`?` };
+  });
+  const answers = await decideImpl(config, state, questions);
+  if (!answers) return claims;
+  return claims.filter((_, i) => !(answers[`supported_${i}`]?.noul < 0.3));
 }
 
 // The hallucination filter, and the reason a weak model is safe here: a claim

@@ -1,6 +1,6 @@
-import { search, SafeSearchType } from 'duck-duck-scrape';
 import { EmbedBuilder } from 'discord.js';
 import { randomEmbedColor } from '../../discord/colors.js';
+import { getPublic, htmlToText } from './page.js';
 
 export const defs = [
   {
@@ -109,13 +109,11 @@ async function headOk(url, timeoutMs = 5000) {
   }
 }
 
-const jinaHeaders = (config) => (config.jinaApiKey ? { Authorization: `Bearer ${config.jinaApiKey}` } : {});
-
 // --- Search providers ---------------------------------------------------
 
-// Primary: the self-hosted SearXNG metasearch instance (docker, loopback).
-// It's our own server with the bot-limiter disabled, so there is no external
-// rate limit at all.
+// The self-hosted SearXNG metasearch instance (docker, loopback) is the only
+// provider. It's our own server with the bot-limiter disabled, so there is no
+// external rate limit at all.
 async function searxngSearch(query, count, config) {
   const url = `${config.searxngUrl}/search?q=${encodeURIComponent(query)}&format=json&safesearch=1`;
   const res = await fetchWithRetry(url, { headers: { Accept: 'application/json' } }, { retries: 1, timeoutMs: 20000 });
@@ -129,102 +127,15 @@ async function searxngSearch(query, count, config) {
   return results;
 }
 
-async function braveSearch(query, count, apiKey) {
-  const res = await fetchWithRetry(
-    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`,
-    { headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' } },
-  );
-  if (!res.ok) throw new Error(`Brave HTTP ${res.status}`);
-  const data = await res.json();
-  const results = (data.web?.results || []).map((r) => ({
-    title: stripHtml(r.title),
-    url: r.url,
-    snippet: stripHtml(r.description),
-  }));
-  if (!results.length) throw new Error('Brave returned no results');
-  return results;
-}
-
-function decodeUddg(ddgUrl) {
-  const m = String(ddgUrl).match(/[?&]uddg=([^&]+)/);
-  try {
-    return m ? decodeURIComponent(m[1]) : ddgUrl;
-  } catch {
-    return ddgUrl;
-  }
-}
-
-const cleanMd = (s) =>
-  String(s || '')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // drop images
-    .replace(/\*\*/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-// Parse the markdown that Jina Reader returns for a DuckDuckGo HTML results
-// page into {title,url,snippet} objects. Pure + exported for tests.
-export function parseDdgMarkdown(content) {
-  const results = [];
-  const seen = new Set();
-  const blocks = String(content || '').split(/^##\s+/m).slice(1);
-  for (const block of blocks) {
-    const titleMatch = block.match(/^\[([^\]]+)\]\((https:\/\/duckduckgo\.com\/l\/\?uddg=[^)]+)\)/);
-    if (!titleMatch) continue;
-    const url = decodeUddg(titleMatch[2]);
-    if (seen.has(url)) continue;
-    seen.add(url);
-    const texts = [...block.matchAll(/\[([^\]]{25,})\]\(https:\/\/duckduckgo\.com\/l\//g)].map((m) => m[1]);
-    const snippet = cleanMd(texts.sort((a, b) => b.length - a.length)[0] || '');
-    results.push({ title: cleanMd(titleMatch[1]), url, snippet });
-  }
-  return results;
-}
-
-// Jina Reader fetches the DDG results page from ITS OWN ip pool, so the bot is
-// never the one hitting DuckDuckGo → no client-side rate limiting.
-async function jinaDdgSearch(query, config) {
-  const target = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const res = await fetchWithRetry(`https://r.jina.ai/${target}`, {
-    headers: { Accept: 'application/json', 'X-Retain-Images': 'none', ...jinaHeaders(config) },
-  });
-  if (!res.ok) throw new Error(`Jina HTTP ${res.status}`);
-  const data = await res.json();
-  const results = parseDdgMarkdown(data?.data?.content || '');
-  if (!results.length) throw new Error('Jina/DDG returned no parseable results');
-  return results;
-}
-
-async function ddgDirectSearch(query) {
-  const res = await search(query, { safeSearch: SafeSearchType.MODERATE });
-  if (res.noResults || !res.results?.length) throw new Error('DDG direct: no results');
-  return res.results.map((r) => ({ title: stripHtml(r.title), url: r.url, snippet: stripHtml(r.description) }));
-}
-
 // --- Tools --------------------------------------------------------------
 
-// Structured search: the provider chain and cache, without the model-facing
+// Structured search: SearXNG plus the cache, without the model-facing
 // formatting. webSearch renders this; deep research consumes it directly.
 export async function searchResults(query, count, config) {
   const key = `search:${query}`;
   const hit = cached(key);
   if (hit) return hit.slice(0, count);
-
-  const providers = [];
-  if (config.searxngUrl) providers.push(['searxng', () => searxngSearch(query, count, config)]);
-  if (config.braveApiKey) providers.push(['brave', () => braveSearch(query, count, config.braveApiKey)]);
-  providers.push(['jina/ddg', () => jinaDdgSearch(query, config)]);
-  providers.push(['ddg-direct', () => ddgDirectSearch(query)]);
-
-  const errors = [];
-  for (const [name, run] of providers) {
-    try {
-      const results = await run();
-      if (results?.length) return store(key, results).slice(0, count);
-    } catch (err) {
-      errors.push(`${name}: ${String(err.message || err).slice(0, 80)}`);
-    }
-  }
-  throw new Error(`all providers failed (${errors.join(' | ')})`);
+  return store(key, await searxngSearch(query, count, config)).slice(0, count);
 }
 
 export async function webSearch({ query, count }, invocation) {
@@ -245,25 +156,18 @@ export async function webSearch({ query, count }, invocation) {
 
 // Structured page fetch: returns { title, url, content } or throws with a
 // human-readable reason. webFetch renders this; research consumes it directly.
-export async function fetchPage(url, config) {
+export async function fetchPage(url) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) throw new Error('not an http(s) URL');
   const key = `fetch:${target}`;
   const hit = cached(key);
   if (hit) return hit;
 
-  const res = await fetchWithRetry(`https://r.jina.ai/${target}`, {
-    headers: { Accept: 'application/json', 'X-Retain-Images': 'none', ...jinaHeaders(config) },
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  const payload = {
-    title: data?.data?.title || target,
-    url: data?.data?.url || target,
-    content: data?.data?.content || '',
-  };
-  if (!payload.content) throw new Error('no readable content');
-  return store(key, payload);
+  const page = await getPublic(target);
+  if (page.type && !/html|xml|text|json/i.test(page.type)) throw new Error(`not a web page (${page.type.split(';')[0]})`);
+  const { title, text } = /html|xml/i.test(page.type) || /^\s*</.test(page.body) ? htmlToText(page.body) : { title: '', text: page.body.trim() };
+  if (!text) throw new Error('no readable content');
+  return store(key, { title: title || target, url: page.url, content: text });
 }
 
 export async function webFetch({ url, max_chars }, invocation) {
@@ -272,7 +176,7 @@ export async function webFetch({ url, max_chars }, invocation) {
   const cap = clampCount(max_chars, 6000, 20000);
   let payload;
   try {
-    payload = await fetchPage(target, invocation.config);
+    payload = await fetchPage(target);
   } catch (err) {
     const reason = String(err.message || err);
     if (/^HTTP /.test(reason)) return `Couldn't fetch that page (${reason}).`;

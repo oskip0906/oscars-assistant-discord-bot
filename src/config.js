@@ -5,10 +5,11 @@ import dotenv from 'dotenv';
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 dotenv.config({ path: path.join(projectRoot, '.env'), quiet: true });
 
-// Oscar's Discord user id, pinned as a hardcoded constant so owner-gating can
-// never be weakened by a missing/edited .env. The env var may only NARROW to
-// this exact value; anything else is ignored and we fall back to the constant.
+// Oscar's Discord user id. OWNER_DISCORD_ID in .env sets it; this constant is
+// the fallback, so a missing or malformed value can never leave the bot with no
+// owner, or with whatever junk was typed there as its owner.
 export const OWNER_ID = '767525911695851550';
+const envOwnerId = process.env.OWNER_DISCORD_ID?.trim() || '';
 
 function bool(value, fallback) {
   if (value === undefined || value === '') return fallback;
@@ -35,9 +36,8 @@ export const config = {
     process.env.OPENROUTER_DEFAULT_MODEL || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
   developmentModelName:
     process.env.OPENROUTER_DEV_MODEL || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
-  ownerId: OWNER_ID,
+  ownerId: /^\d{17,20}$/.test(envOwnerId) ? envOwnerId : OWNER_ID,
   githubPat: process.env.GITHUB_PAT || '',
-  vaultRepo: process.env.VAULT_REPO || 'oskip0906/oskip-vault',
   // GitHub's hosted MCP server, read-only path. Owner-gated at the tool list, so
   // a guest never sees these and never spends tokens on them. Off automatically
   // when GITHUB_PAT is unset; GITHUB_MCP_ENABLED=false turns it off explicitly.
@@ -49,19 +49,26 @@ export const config = {
   developmentSandboxRepo: process.env.DEVELOPMENT_SANDBOX_REPO || 'oskip0906/oscars-assistant-discord-bot',
   developmentSandboxWorkflow: process.env.DEVELOPMENT_SANDBOX_WORKFLOW || 'development-sandbox.yml',
   developmentSandboxRef: process.env.DEVELOPMENT_SANDBOX_REF || 'main',
+  // Jev (TypeSafe's decision model, via the same OpenRouter key) makes Panda's
+  // quick yes/no and pick-one calls. JEV_ENABLED=false sends nothing to it and
+  // every call site falls back to its pre-Jev behaviour.
+  jevEnabled: bool(process.env.JEV_ENABLED, true),
   botName: process.env.BOT_NAME || 'Panda',
   allowBots: bool(process.env.ALLOW_BOTS, true),
-  // DM functionality is disabled: the bot ignores direct messages regardless of
-  // the DM_ENABLED env var. See messageHandler's `isDM && !config.dmEnabled` guard.
+  // DM functionality is disabled and has no env switch: the bot ignores direct
+  // messages. See messageHandler's `isDM && !config.dmEnabled` guard.
   dmEnabled: false,
   maxToolIterations: Math.max(1, parseInt(process.env.MAX_TOOL_ITERATIONS || '12', 10) || 12),
-  braveApiKey: process.env.BRAVE_API_KEY || '',
-  jinaApiKey: process.env.JINA_API_KEY || '',
   // YouTube now bot-walls unauthenticated stream extraction under load; a cookies
   // file (or browser) lets yt-dlp authenticate and play reliably.
   ytCookiesFile: process.env.YT_COOKIES_FILE || '',
   ytCookiesFromBrowser: process.env.YT_COOKIES_FROM_BROWSER || '',
   searxngUrl: (process.env.SEARXNG_URL || 'http://127.0.0.1:8888').replace(/\/$/, ''),
+  // Supabase Postgres holding every message sent to Panda plus whatever
+  // /index_chat scrapes, read back by the fetch_history tool. Unset = nothing is
+  // stored or searched. Server-side secret key only: it bypasses row-level security.
+  supabaseUrl: (process.env.SUPABASE_URL || '').replace(/\/$/, ''),
+  supabaseKey: process.env.SUPABASE_SECRET_KEY || '',
 };
 
 export function validateConfig() {

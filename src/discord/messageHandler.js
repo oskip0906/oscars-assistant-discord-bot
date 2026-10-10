@@ -3,6 +3,10 @@ import { formatEnvelope } from './envelope.js';
 import { chunkMessage } from './chunk.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
 import { selfFixState, SELF_FIX_MESSAGE } from '../selfFixState.js';
+import { decide } from '../agent/jev.js';
+import { saveMessages } from '../agent/historyStore.js';
+import { attachmentParts, gifPreviews } from './attachments.js';
+import { modelInputs } from './model.js';
 
 // Fixed-window input debounce with a per-channel queue.
 //
@@ -15,6 +19,9 @@ import { selfFixState, SELF_FIX_MESSAGE } from '../selfFixState.js';
 // a time per channel, in arrival order, and never before their 3s collection
 // has elapsed.
 const WINDOW_MS = 3000;
+
+// Waiting batches per channel. A trigger past this is dropped (spam guard).
+const MAX_QUEUE = 5;
 
 // The messages before the ping, always fetched and always labelled as
 // background. Previously this was conditional on the trigger looking ambiguous,
@@ -51,6 +58,26 @@ export function isSignOff(text, clientUserId = '') {
   return FAREWELL_RE.test(stripped) && !stripped.includes('?');
 }
 
+// Jev reads intent, so "aight gn" or a goodbye in another language counts too.
+// The regex above is the fallback when Jev is off or down.
+export async function signsOff(text, clientUserId, config, decideImpl = decide) {
+  const stripped = stripBotMention(text, clientUserId);
+  if (!stripped) return false;
+  const answers = await decideImpl(config, { message: stripped }, {
+    bye: { type: 'noul', instructions: 'Is `message` a sign-off that ends the conversation without asking for or offering anything more?' },
+  });
+  return answers?.bye ? answers.bye.noul >= 0.8 : isSignOff(text, clientUserId);
+}
+
+// Words that may mean Panda without a ping: its name, "Oscar's assistant", "the
+// bot". A hit only makes the message a candidate; the agent's Jev call decides
+// whether to answer (see triage in agent.js). Only these messages, and the ten
+// before them, reach Jev, so ordinary chatter never leaves the server.
+export function mentionsPanda(text, config) {
+  const name = String(config.botName || 'Panda').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b(${name}|assistant|bot|oscar['’]?s)\\b`, 'i').test(String(text ?? ''));
+}
+
 // Suppress Discord link embeds by wrapping bare URLs in <>. Image URLs stay
 // bare on purpose — for image_search results the embed IS the answer. Skips
 // URLs already wrapped, inside markdown links, or in inline code.
@@ -78,7 +105,7 @@ function enqueueContext(key, task) {
   return next;
 }
 
-export function createMessageHandler({ client, config, contextStore, player, privateMode, selfFix = selfFixState, runAgentImpl = runAgent }) {
+export function createMessageHandler({ client, config, contextStore, player, privateMode, selfFix = selfFixState, runAgentImpl = runAgent, decideImpl = decide }) {
   // channelId -> { queue: Batch[], busy: boolean }
   // Batch = { claimantId, messages: Message[], closed: boolean, collected: Promise }
   const channels = new Map();
@@ -87,8 +114,9 @@ export function createMessageHandler({ client, config, contextStore, player, pri
   // Kept outside `channels`, which is torn down as soon as its queue drains.
   const botExchanges = new Map();
 
-  function makeBatch(message) {
-    const batch = { claimantId: message.author.id, messages: [message], closed: false };
+  // direct = pinged, replied to, or DMed; otherwise Panda was only mentioned and may stay out.
+  function makeBatch(message, direct) {
+    const batch = { claimantId: message.author.id, messages: [message], closed: false, direct };
     batch.collected = new Promise((resolve) => {
       setTimeout(() => {
         batch.closed = true;
@@ -104,8 +132,15 @@ export function createMessageHandler({ client, config, contextStore, player, pri
     const contextKey = anchor.guild ? anchor.guild.id : `dm:${anchor.author.id}`;
 
     await enqueueContext(contextKey, async () => {
-      anchor.channel.sendTyping().catch(() => {});
-      const typing = setInterval(() => anchor.channel.sendTyping().catch(() => {}), 8000);
+      // A mention-only batch shows no typing until Jev decides Panda should answer.
+      let typing = null;
+      let accepted = false;
+      const startTyping = () => {
+        if (typing) return;
+        anchor.channel.sendTyping().catch(() => {});
+        typing = setInterval(() => anchor.channel.sendTyping().catch(() => {}), 8000);
+      };
+      if (batch.direct) startTyping();
       try {
         // The messages before the ping, always. `before` anchors on the trigger
         // itself, so this is the run-up to being addressed rather than "the last
@@ -126,10 +161,13 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         }
 
         const parts = [];
+        const attachments = [];
         for (const m of messages) {
           let ref = null;
           if (m.reference?.messageId) ref = await m.fetchReference().catch(() => null);
           parts.push(formatEnvelope(m, ref));
+          // A reply to someone's picture ("what's this?") is about that picture.
+          for (const msg of [m, ref]) attachments.push(...(msg?.attachments?.values() ?? []), ...gifPreviews(msg));
         }
 
         // Two labelled blocks, because an unlabelled wall of messages left the
@@ -151,7 +189,7 @@ export function createMessageHandler({ client, config, contextStore, player, pri
                 '',
               ]
             : []),
-          `[RESPOND TO THIS — ${triggerName} pinged you${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This is your actual task. Answer what is actually said here.]`,
+          `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : 'mentioned you without a ping, and you chose to step in'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This is your actual task. Answer what is actually said here.]`,
           turn,
         ].join('\n');
 
@@ -173,15 +211,27 @@ export function createMessageHandler({ client, config, contextStore, player, pri
           // Collect any Discord embeds produced by tool calls (e.g. image_search)
           // so they can be sent alongside the text reply.
           embeds: [],
+          mayDecline: !batch.direct,
+          recentChat: historyParts.join('\n'),
+          onAccept: () => {
+            accepted = true;
+            startTyping();
+          },
         };
+
+        // Media goes to the model for this turn only; memory keeps the text,
+        // whose attachment URLs expire and would break later turns.
+        const media = attachments.length ? await attachmentParts(attachments, await modelInputs(config)) : [];
 
         let replyText;
         try {
-          replyText = await runAgentImpl(invocation, combined, turn);
+          replyText = await runAgentImpl(invocation, media.length ? [{ type: 'text', text: combined }, ...media] : combined, turn);
         } catch (err) {
           console.error('[panda] agent failed:', err);
           replyText = `⚠️ Something broke on my end: ${String(err.message || err).slice(0, 250)}`;
         }
+        // Only mentioned, and Panda stayed out (or failed before deciding): no reply, nothing saved.
+        if (!batch.direct && !accepted) return;
 
         // Send any embeds the tools produced (e.g. from image_search). These go
         // before the text reply so the images appear above the fold.
@@ -204,6 +254,7 @@ export function createMessageHandler({ client, config, contextStore, player, pri
           }
         }
 
+        const sent = [];
         if (replyText.trim()) {
           replyText = suppressLinkEmbeds(replyText);
           const parts = chunkMessage(replyText);
@@ -215,14 +266,18 @@ export function createMessageHandler({ client, config, contextStore, player, pri
             // internally, but this keeps long replies from bursting.
             if (!first) await sleep(750);
             try {
-              if (first) await anchor.reply(payload);
-              else await anchor.channel.send(payload);
+              sent.push(first ? await anchor.reply(payload) : await anchor.channel.send(payload));
             } catch {
-              await anchor.channel.send(payload).catch(() => {});
+              sent.push(await anchor.channel.send(payload).catch(() => null));
             }
             first = false;
           }
         }
+
+        // Saved after the reply is out, so the database can never delay or break it.
+        saveMessages(config, [...messages, ...sent]).catch((err) =>
+          console.error('[history] save failed:', String(err.message || err).slice(0, 200)),
+        );
 
         if (invocation.requestRestart) {
           console.log('[panda] self_fix requested restart — exiting with code 42');
@@ -277,6 +332,7 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         const open = state.queue.find((b) => !b.closed && b.claimantId === message.author.id);
         if (open) {
           open.messages.push(message);
+          if (message.mentions?.users?.has(client.user.id)) open.direct = true;
           return;
         }
       }
@@ -292,7 +348,8 @@ export function createMessageHandler({ client, config, contextStore, player, pri
         const ref = await message.fetchReference().catch(() => null);
         repliedToBot = ref?.author?.id === client.user.id;
       }
-      if (!isDM && !mentioned && !repliedToBot) return;
+      const direct = isDM || mentioned || repliedToBot;
+      if (!direct && !mentionsPanda(message.content, config)) return;
 
       // Bot-to-bot: end it deliberately rather than trading pleasantries until
       // one of us is rate-limited. A sign-off gets a wave and nothing else, and
@@ -301,7 +358,7 @@ export function createMessageHandler({ client, config, contextStore, player, pri
       // human speaks, which clears the count above.
       if (message.author.bot) {
         const spent = botExchanges.get(channelId) || 0;
-        if (isSignOff(message.content, client.user.id)) {
+        if (await signsOff(message.content, client.user.id, config, decideImpl)) {
           botExchanges.set(channelId, MAX_BOT_EXCHANGES);
           if (spent < MAX_BOT_EXCHANGES) await message.react('👋').catch(() => {});
           return;
@@ -346,9 +403,13 @@ export function createMessageHandler({ client, config, contextStore, player, pri
 
       // Open a new 3s collection batch at the back of this channel's queue.
       const st = channels.get(channelId) ?? { queue: [], busy: false };
+      if (st.queue.length >= MAX_QUEUE) {
+        console.log(`[panda] queue full in ${channelId}: dropped a trigger from @${message.author.username}`);
+        return;
+      }
       channels.set(channelId, st);
-      st.queue.push(makeBatch(message));
-      message.channel.sendTyping().catch(() => {});
+      st.queue.push(makeBatch(message, direct));
+      if (direct) message.channel.sendTyping().catch(() => {});
       pump(channelId);
     } catch (err) {
       console.error('[panda] message handling failed:', err);
