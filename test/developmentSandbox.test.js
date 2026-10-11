@@ -20,7 +20,7 @@ test('reads the default branch and the merged pull request over MCP', async () =
     }
     throw new Error(`unexpected ${name}`);
   };
-  const result = await runDevelopmentSandbox({ repo: 'owner/target', instruction: 'x', model: 'm', autoMerge: true, config }, options(read));
+  const result = await runDevelopmentSandbox({ repo: 'owner/target', instruction: 'x', autoMerge: true, config }, options(read));
   assert.equal(result.ok, true);
   assert.equal(result.merged, true);
   assert.match(result.summary, /`trunk`/);
@@ -39,10 +39,10 @@ test('names the failed step of a run that died before opening a pull request', a
       return { workflow_runs: [{ id: 1, display_title: `Development sandbox ${requestId}`, status: 'completed', conclusion: 'failure', html_url: 'u' }] };
     }
     // The MCP server nests GitHub's {total_count, jobs} under another `jobs`.
-    if (args.method === 'list_workflow_jobs') return { jobs: { jobs: [{ steps: [{ name: 'Check sandbox credentials', conclusion: 'failure' }] }] } };
+    if (args.method === 'list_workflow_jobs') return { jobs: { jobs: [{ steps: [{ name: 'Run checks', conclusion: 'failure' }] }] } };
     throw new Error(`unexpected ${name}`);
   };
-  const result = await runDevelopmentSandbox({ repo: 'owner/target', base: 'main', instruction: 'x', model: 'm', config }, { ...options(read), gh });
+  const result = await runDevelopmentSandbox({ repo: 'owner/target', base: 'main', instruction: 'x', config }, { ...options(read), gh });
   assert.equal(result.ok, false);
-  assert.match(result.summary, /"Check sandbox credentials"/);
+  assert.match(result.summary, /"Run checks"/);
 });

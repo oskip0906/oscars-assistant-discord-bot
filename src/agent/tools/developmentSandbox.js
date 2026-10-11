@@ -9,7 +9,8 @@ export const devRunStore = new DevRunStore(botConfig.dataDir);
 // through the GitHub MCP server (githubReadJson).
 const API = 'https://api.github.com';
 const POLL_MS = 5_000;
-const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
+// Claude's run, then CI on the PR, then the auto-merge.
+const DEFAULT_TIMEOUT_MS = 45 * 60 * 1000;
 
 function cleanRepo(value) {
   const repo = String(value || '').replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/^\/+|\/+$/g, '');
@@ -91,8 +92,8 @@ async function failedRun(read, sandboxRepo, workflow, requestId) {
 }
 
 // "The run failed" is not something Oscar can act on from Discord. The step
-// name is: a missing secret dies in "Check sandbox credentials", a rejected
-// push in "Develop, verify, and open pull request".
+// name is: a bad Claude token dies in "Claude Code", a task Claude gave up on
+// in "Check changes", broken tests in "Run checks".
 async function failedStep(read, sandboxRepo, runId) {
   if (!runId) return null;
   const result = await tryRead(read, 'actions_list', { ...ownerRepo(sandboxRepo), method: 'list_workflow_jobs', resource_id: String(runId) });
@@ -152,7 +153,7 @@ async function waitForPullRequest({ read, repo, branch, timeoutMs, sleep, now, o
 // sandbox. The bot process merely asks, observes, and (for its own repository)
 // restarts after the PR actually merges.
 export async function runDevelopmentSandbox(
-  { repo, instruction, model, base, autoMerge = false, selfFix = false, config, onPullRequest, commitTitle },
+  { repo, instruction, base, autoMerge = false, selfFix = false, config, onPullRequest, commitTitle },
   {
     gh = githubRequest(config.githubPat),
     read = (name, args) => githubReadJson(name, args, { config }),
@@ -176,15 +177,12 @@ export async function runDevelopmentSandbox(
   const dispatch = await gh('POST', `/repos/${sandboxRepo}/actions/workflows/${encodeURIComponent(config.developmentSandboxWorkflow)}/dispatches`, {
     ref: config.developmentSandboxRef,
     inputs: {
-      target_repo: targetRepo,
       base: targetBase,
       instruction: String(instruction).slice(0, 8_000),
-      model: String(model),
       request_id: requestId,
       branch,
       commit_title: commitTitle_,
       auto_merge: String(Boolean(autoMerge)),
-      self_fix: String(Boolean(selfFix)),
     },
   });
   if (dispatch.status !== 204) {

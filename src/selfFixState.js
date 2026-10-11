@@ -9,7 +9,7 @@ export const SELF_FIX_MESSAGE =
 // Absolute cap on how long the lock may hold. A remote sandbox can legitimately
 // wait for CI and auto-merge, but it must still fail open rather than leaving
 // the bot permanently ignoring everyone.
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_TIMEOUT_MS = 50 * 60 * 1000;
 
 export class SelfFixState {
   constructor({ timeoutMs = DEFAULT_TIMEOUT_MS, now = Date.now } = {}) {

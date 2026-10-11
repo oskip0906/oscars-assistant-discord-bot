@@ -50,12 +50,12 @@ export function parseApprovalButtonId(customId) {
 
 // All development tasks use this Discord-native gate. There is intentionally
 // no text fallback: changing source must be an explicit button interaction.
-export async function requestDevelopmentApproval({ instruction, invocation, state, model, label = 'Self-fix', card = approvalCard }) {
+export async function requestDevelopmentApproval({ instruction, invocation, state, label = 'Self-fix', card = approvalCard }) {
   const approval = state.beginApproval({ userId: config.ownerId });
   const prompt = {
     content: [
       `🛠️ **${label} requested**`,
-      `OpenRouter development model: \`${model}\``,
+      'Runs Claude Code in GitHub Actions.',
       `Task: ${String(instruction).replace(/\s+/g, ' ').slice(0, 800)}`,
       '',
       'This will run only in an isolated GitHub Actions sandbox and open a pull request. The buttons wait for you — take as long as you need.',
@@ -150,11 +150,11 @@ export async function selfFix(
   // never approved, not just the runs that made it to the sandbox.
   const logFinish = startLog('self_fix', {
     repo: config.developmentSandboxRepo,
-    model: devModel,
+    model: 'claude-code',
     task: instruction,
   });
 
-  const outcome = await confirm({ instruction, invocation, state, model: devModel });
+  const outcome = await confirm({ instruction, invocation, state });
   if (outcome !== 'confirm') {
     const why =
       { cancel: 'you cancelled it', superseded: 'a newer request took its place', aborted: 'the request was torn down before you answered' }[outcome] ||
@@ -165,33 +165,23 @@ export async function selfFix(
 
   state.begin();
   await invocation.message?.channel
-    ?.send(`🛠️ Approval received — running in the remote GitHub Actions sandbox with \`${devModel}\`. I will wait for the PR to merge before restarting.`)
+    ?.send(`🛠️ Approval received — running Claude Code in the remote GitHub Actions sandbox. I will wait for the PR to merge before restarting.`)
     .catch(() => {});
 
-  // Generate a proper commit message so the instruction never appears verbatim in the commit.
-  let commitMessage = null;
-  let sandboxInstruction = instruction;
+  // Generate a proper commit title so the instruction never appears verbatim in
+  // it. The workflow commits; Claude's own summary becomes the commit body.
   let commitTitle = null;
   try {
-    commitMessage = await generateCommitMessage(instruction, {
-      apiKey: config.openrouterApiKey,
-      model: devModel,
-    });
-    // Instruct the sandbox to use this exact title/description for its commit.
-    sandboxInstruction = [
-      `Use the following commit title: \`${commitMessage.title}\` and commit description:\n\n\`\`\`\n${commitMessage.description}\n\`\`\`\n\nThe actual code change to implement:\n${instruction}`,
-    ].join('\n');
-    commitTitle = commitMessage.title;
+    commitTitle = (await generateCommitMessage(instruction, { apiKey: config.openrouterApiKey, model: devModel })).title;
   } catch (err) {
-    // Model call failed; fall back to the original instruction.
-    console.error('[self_fix] commit message generation failed, using raw instruction:', err.message);
+    // Model call failed; runDevelopmentSandbox falls back to an automatic title.
+    console.error('[self_fix] commit message generation failed, using the automatic title:', err.message);
   }
 
   try {
     const result = await runSandbox({
       repo: config.developmentSandboxRepo,
-      instruction: sandboxInstruction,
-      model: devModel,
+      instruction,
       autoMerge: true,
       selfFix: true,
       config,

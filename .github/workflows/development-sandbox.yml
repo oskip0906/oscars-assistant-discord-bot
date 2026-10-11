@@ -4,20 +4,12 @@ run-name: Development sandbox ${{ inputs.request_id }}
 on:
   workflow_dispatch:
     inputs:
-      target_repo:
-        description: Repository to change (owner/name)
-        required: true
-        type: string
       base:
         description: Base branch
         required: true
         type: string
       instruction:
         description: Approved development task
-        required: true
-        type: string
-      model:
-        description: OpenRouter development model
         required: true
         type: string
       request_id:
@@ -32,89 +24,74 @@ on:
       auto_merge:
         required: true
         type: boolean
-      self_fix:
-        required: true
-        type: boolean
 
-# Development happens in a separate checkout of the target repository, never in
-# this one. GH_PAT is the same GitHub token the bot runs on (GITHUB_PAT; Actions
-# secret names can't start with GITHUB_). It is never exposed to the OpenRouter
-# request or to the checked out target files. When that secret is missing the job falls back to the
-# built-in GITHUB_TOKEN, which can only reach this repository — hence the write
-# permissions below.
+# The job token can only read, so Claude can never push. GH_PAT appears only in
+# the last step, after Claude has exited; a PR it opens also triggers CI, which
+# a GITHUB_TOKEN-opened PR would not.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   develop:
     name: ${{ inputs.request_id }}
     runs-on: ubuntu-latest
-    timeout-minutes: 18
-    env:
-      # Empty secrets are falsy in expressions, so this resolves to the built-in
-      # token whenever the PAT has not been configured.
-      SANDBOX_TOKEN: ${{ secrets.GH_PAT || github.token }}
-      GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-      HAS_SANDBOX_PAT: ${{ secrets.GH_PAT != '' }}
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      # Fail here, before the model call, when the job could never open a pull
-      # request. A late failure wastes an OpenRouter request and leaves Panda
-      # waiting for a PR that is never coming.
-      - name: Check sandbox credentials
+      - run: npm ci
+      - name: Create branch
         env:
-          TARGET_REPO: ${{ inputs.target_repo }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          if [ "$HAS_SANDBOX_PAT" != "true" ]; then
-            if [ "$TARGET_REPO" != "$GITHUB_REPOSITORY" ]; then
-              echo "::error::GH_PAT is not set in $GITHUB_REPOSITORY. Add it as a repository Actions secret (fine-grained PAT with Contents and Pull requests read/write on $TARGET_REPO) to develop repositories other than this one."
-              exit 1
-            fi
-            echo "::warning::GH_PAT is not set; using the built-in GITHUB_TOKEN. Pull requests it opens or merges do not trigger other workflows."
-          fi
-          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
-            echo "::error::OPENROUTER_API_KEY is not set as a repository Actions secret in $GITHUB_REPOSITORY."
-            exit 1
-          fi
-          # A deleted key only surfaces later as OpenRouter's cryptic "User not found".
-          if ! curl -sf -o /dev/null -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/key; then
-            echo "::error::OpenRouter rejected OPENROUTER_API_KEY in $GITHUB_REPOSITORY (deleted, revoked, or mistyped key). Replace the secret with a live key."
-            exit 1
-          fi
-          # GitHub's MCP server only takes a user PAT. Without one the target is
-          # this repository, which the job's own write permissions cover.
-          if [ "$HAS_SANDBOX_PAT" = "true" ]; then
-            GH_PAT="$SANDBOX_TOKEN" node .github/scripts/check-target-repo.mjs
-          fi
-      - name: Create isolated target checkout
-        env:
-          TARGET_REPO: ${{ inputs.target_repo }}
-          BASE: ${{ inputs.base }}
-        run: |
-          # The helper reads the token from the environment at push time, so it
-          # is never written into .git/config or into a command line.
-          git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$SANDBOX_TOKEN"; }; f'
-          git clone --single-branch --branch "$BASE" "https://github.com/$TARGET_REPO.git" target
-      - name: Develop, verify, and open pull request
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          TARGET_REPO: ${{ inputs.target_repo }}
-          BASE: ${{ inputs.base }}
-          INSTRUCTION: ${{ inputs.instruction }}
-          MODEL: ${{ inputs.model }}
           BRANCH: ${{ inputs.branch }}
-          COMMIT_TITLE: ${{ inputs.commit_title }}
+        run: git switch -c "$BRANCH"
+
+      # Nobody can answer a question mid-run: dontAsk denies anything off the
+      # allow list, and --permission-prompts none removes AskUserQuestion.
+      - name: Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: ${{ inputs.instruction }}
+          claude_args: |
+            --max-turns 60
+            --permission-mode dontAsk
+            --permission-prompts none
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(npm test *),Bash(node --check *)"
+            --append-system-prompt "You are running unattended in CI and nobody can reply. Never ask questions or wait for confirmation: choose the most reasonable reading of the task, finish it, and end with a short summary of what you changed and any assumptions you made. Run npm test before you stop. Do not commit, push, or open a pull request; the workflow does that. Do not edit .github/, .env files, data/, or node_modules/."
+
+      # Same paths as FORBIDDEN in src/agent/tools/repoAgent.js.
+      - name: Check changes
+        run: |
+          git add -A
+          if git diff --cached --quiet; then echo "::error::Claude made no changes"; exit 1; fi
+          if git diff --cached --name-only | grep -Ei '(^|/)(\.git|node_modules|data)/|(^|/)\.env(\.|$)|^\.github/'; then
+            echo "::error::The change touches a protected path"; exit 1
+          fi
+      - name: Run checks
+        run: npm test
+      - name: Push and open pull request
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          BRANCH: ${{ inputs.branch }}
+          BASE: ${{ inputs.base }}
+          TITLE: ${{ inputs.commit_title }}
+          REQUEST_ID: ${{ inputs.request_id }}
           AUTO_MERGE: ${{ inputs.auto_merge }}
-          SELF_FIX: ${{ inputs.self_fix }}
-          # GitHub's hosted MCP server needs a user PAT; the Actions GITHUB_TOKEN
-          # is not accepted there. Absent, the sandbox runs with file tools only.
-          GH_PAT: ${{ secrets.GH_PAT }}
-          # Remote writes bypass node --check, npm test, and the FORBIDDEN path
-          # guard, so they stay off unless the repository variable says otherwise.
-          SANDBOX_MCP_WRITE: ${{ vars.SANDBOX_MCP_WRITE }}
-        run: node .github/scripts/development-sandbox.mjs target
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          summary=$(jq -r 'last(.[] | select(.type == "result")) | .result // empty' "$EXECUTION_FILE" 2>/dev/null || true)
+          body="${summary:-Claude Code change.}"$'\n\n'"Self-fix $REQUEST_ID, approved by Oscar in Discord."
+          git commit -q -m "$TITLE" -m "$body"
+          git push -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE" --head "$BRANCH" --title "$TITLE" --body "$body"
+          if [ "$AUTO_MERGE" = "true" ]; then
+            gh pr merge "$BRANCH" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --auto \
+              || echo "::warning::Could not enable auto-merge; the pull request stays open for a manual merge."
+          fi

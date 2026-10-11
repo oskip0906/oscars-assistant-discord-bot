@@ -130,7 +130,7 @@ Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), re
 | Role | Used for |
 |------|----------|
 | **Conversation** model | Chat replies, `/research` |
-| **Development** model | `self_fix`: the sandbox agent and commit messages; `set_rule`: rewriting `soul.md` |
+| **Development** model | `self_fix` commit titles (the change itself is Claude Code's); `set_rule`: rewriting `soul.md` |
 | **Jev** (`typesafe/jev-1.13`) | Fast yes/no and pick-one decisions |
 
 `/set_model` and `/set_dev_model` (Oscar) switch models; `/model` shows the current one; `/usage` shows OpenRouter spend. The choice is saved by committing `src/models.json` to the repo: the file is read through the GitHub MCP server and written with one REST call. That commit triggers CI, which redeploys the bot with the new file.
@@ -210,11 +210,11 @@ Each source is cited as a masked link with no `<>` around it, so Discord shows i
 `self_fix` is the only way Panda changes code, and only its own repo. It never edits the running bot.
 
 1. **Approval.** Panda posts an Approve / Cancel card. Only Oscar's click starts anything, and it waits as long as needed.
-2. **Dispatch.** The bot starts `.github/workflows/development-sandbox.yml` with one REST call. The workflow first checks, through the GitHub MCP server (`.github/scripts/check-target-repo.mjs`), that `GH_PAT` can read and push the target repo. Then it clones the target repo into a throwaway Actions runner.
-3. **Agent loop.** The development model uses `list_files`, `read_file`, `write_file`, `delete_file`, `finish` and read-only GitHub MCP tools. It must read before writing, can't touch `.git`, `node_modules`, `data/`, `.env` or `.github/`, and has at most 40 steps.
-4. **Verify.** `node --check`, import resolution, `npm ci`, `npm test`, then a `panda-dev-*` branch and a PR.
+2. **Dispatch.** The bot starts `.github/workflows/development-sandbox.yml` with one REST call. The workflow checks out this repo on a throwaway Actions runner and creates a `panda-dev-*` branch.
+3. **Claude Code.** The [Claude Code Action](https://github.com/anthropics/claude-code-action), signed in with Oscar's subscription token (`CLAUDE_CODE_OAUTH_TOKEN` secret), makes the change. It can only read and edit files and run `npm test` / `node --check`; it holds a read-only GitHub token, so it can't push. It runs unattended: anything off that list is denied instead of prompting, and it can't ask questions.
+4. **Verify.** The workflow fails if Claude changed nothing or touched `.git`, `node_modules`, `data/`, `.env` or `.github/`, then runs `npm test`. Only then does it commit (Claude's summary is the body), push and open the PR with `GH_PAT`, so the PR triggers `ci.yml`. A ruleset makes that `test` check required on `main`, so auto-merge waits for it.
 
-While it runs, the bot watches it only through the GitHub MCP server (`actions` and `pull_requests` tools): the pull request for its branch, or the failed run and the step it died on. `self_fix` enables auto-merge and waits for the merge. If the bot restarts mid-run, the next boot looks the pull request up the same way and reports it. The merge to main triggers the CI deploy, which restarts Panda on the fix; under `run.sh` it also exits with code 42 so the supervisor pulls and restarts. Others get the "rebuilding" message meanwhile; the lock frees itself after 30 min.
+While it runs, the bot watches it only through the GitHub MCP server (`actions` and `pull_requests` tools): the pull request for its branch, or the failed run and the step it died on. `self_fix` enables auto-merge and waits for the merge. If the bot restarts mid-run, the next boot looks the pull request up the same way and reports it. The merge to main triggers the CI deploy, which restarts Panda on the fix; under `run.sh` it also exits with code 42 so the supervisor pulls and restarts. Others get the "rebuilding" message meanwhile; the lock frees itself after 50 min.
 
 ## Safety
 
@@ -261,5 +261,5 @@ src/agent/mcp.js          minimal MCP client (GitHub's hosted server)
 src/models.json           the conversation and development model ids
 src/agent/research/       the /research pipeline
 src/music/                discord-player + yt-dlp streaming
-.github/                  Docker build + PMS deploy, the development sandbox and its scripts
+.github/                  Docker build + PMS deploy, CI tests, the development sandbox
 ```
