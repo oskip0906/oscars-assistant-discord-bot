@@ -190,7 +190,7 @@ test('a click runs through the real message handler as a direct turn from the cl
   assert.ok(userContent.startsWith('[RECENT MESSAGES') && userContent.includes(recent));
   assert.ok(!turnText.includes('ramen spots'), 'Jev gets them separately from the turn');
   assert.equal(invocation.isOwner, true, 'owner checks use the clicker, not the card');
-  assert.equal(invocation.mayDecline, false, 'a click on Panda\'s card is a direct turn');
+  assert.ok(userContent.includes('Someone pinged you'), 'a click on Panda\'s card is a direct turn');
   assert.match(turnText, /Someone \(@someone, id:2\) \(replying to message 555 from @Panda \(id:bot\): "Ramen near you"\): \[clicked "More like this"\]/);
   assert.deepEqual(ui.calls.find(([k]) => k === 'followUp')[1].content, 'Here are three more.');
 });

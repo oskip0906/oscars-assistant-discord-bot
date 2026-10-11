@@ -10,30 +10,29 @@ The flow lives in `src/discord/messageHandler.js` and `src/agent/agent.js`.
 
 **1. Does Panda answer?**
 - **Always:** an @-ping, or a reply to one of Panda's messages.
-- **Maybe:** a message that says "Panda", "assistant", "bot" or "Oscar's" without a ping. **Jev** (below) decides whether it is speaking to Panda, or whether Panda should step in. If not, Panda stays silent and saves nothing.
+- **Maybe:** every other message, with no keyword filter (`forPanda` in `src/discord/messageHandler.js`). **Jev** (below) reads it with only the 2 messages before it, to keep the call small, and says yes (≥ 0.8) only if it speaks to Panda directly (by name, as Oscar's assistant, or as the bot) or answers or follows up on what Panda just said. Passing mentions, people talking to each other, a "lol" or "thanks" that needs nothing back, and questions nobody put to Panda are a no. A no means silence, and nothing is saved. Panda's own messages are never checked.
 - **Never:** DMs. In private mode, anyone but Oscar gets a fixed "I am in a private conversation with Oscar right now." While a self-fix runs, people get a fixed "rebuilding my own source code" message, once each.
 
 **2. Batching (3 seconds).**
 The first trigger opens a **3-second batch** for that sender. Everything they send in those 3 seconds joins it, ping or not, and the timer does not reset. Another person's trigger opens their own batch behind it.
-- Each channel processes batches one at a time, in order. At most **5** wait; more are dropped as spam.
+- Each channel processes batches one at a time, in the order their triggers were **sent**, not the order their Jev checks came back. Two sent in the same millisecond go in a random order. At most **10** wait, held in memory (a restart drops them); more are dropped as spam, before Jev is asked.
 - Batches are also serialized per server, since turns there share server-wide state such as the music queue.
 - Panda replies to the **last** message of the batch, treating the batch as one turn.
 
 **3. Building the prompt.**
 - **System prompt** (`src/agent/systemPrompt.js`): only what can't live in the database: today's date, server, channel, sender and owner id, the private-mode note, how the input is laid out, and the security rules. Then the two prompt files from the database, `identity.md` and `soul.md` (see "Prompts" below).
-- **The turn:** the batch, labelled `[RESPOND TO THIS]`, under `[RECENT MESSAGES]`: the 20 messages just before it in the channel (each cut to 500 characters, Panda's own marked `(you)`). That is how "that", "it" or "the bug" get resolved, by the model and by Jev. No transcript, no summary.
+- **The turn:** the batch, labelled `[RESPOND TO THIS]`, under `[RECENT MESSAGES]`: the 10 messages just before it in the channel (each cut to 500 characters, Panda's own marked `(you)`). That is how "that", "it" or "the bug" get resolved, by the model and by Jev. No transcript, no summary.
 - **Older context.** Anything further back is only read when Jev picks `fetch_history` (search what was remembered), `search_notes` (the saved notes) or `index_chat` (the messages around one specific old message, from a reply or a link).
 - Every message is written as `Name (@username, id:NNN): text`, so the model knows who said what and can ping anyone with `<@id>`. A reply also shows the message it replies to, with that message's id.
 - **Attachments** (`src/discord/attachments.js`) go to the model for this turn only: images (if the model accepts them, up to 5 MB), PDFs, text and code files (up to 200 KB), Tenor/Giphy GIF frames, and the picture a message replies to.
 
 **4. Jev triage.**
-Every turn starts with one Jev call (`triage` in `src/agent/agent.js`). It asks all of its questions at once, and code applies the answers in this order:
-1. **For Panda?** Only asked of mention-only messages; a ping or reply skips it. Not addressed and no reason to step in (both < 0.8): silence, nothing saved.
-2. **Sign-off?** (≥ 0.8) Panda reacts 👋 and the turn ends with no model call.
-3. **Which tools?** One yes/no per tool, read with the recent messages, so several can be picked at once. A tool runs only at ≥ 0.5: plain chat scores every tool under that, and a clear request scores the right one well above it. `react` is never asked about; step 4 decides it. If a picked tool is Oscar-only and the sender isn't Oscar, the turn stops with "Only Oscar can use `<tool>`."
-4. **Reaction, message, or both?** Reaction needs Jev at ≥ 0.8, since a wrong "reaction only" would leave a question unanswered. Reaction and both add `react` to the picked tools.
+Every turn starts with one Jev call (`triage` in `src/agent/agent.js`); by then step 1 has settled that it is for Panda. It asks all of its questions at once, and code applies the answers in this order:
+1. **Sign-off?** (≥ 0.8) Panda reacts 👋 and the turn ends with no model call.
+2. **Which tools?** One yes/no per tool, read with the recent messages, so several can be picked at once. A tool runs only at ≥ 0.5: plain chat scores every tool under that, and a clear request scores the right one well above it. `react` is never asked about; step 3 decides it. If a picked tool is Oscar-only and the sender isn't Oscar, the turn stops with "Only Oscar can use `<tool>`."
+3. **Reaction, message, or both?** Reaction needs Jev at ≥ 0.8, since a wrong "reaction only" would leave a question unanswered. Reaction and both add `react` to the picked tools.
 
-Any answer Jev is unsure of means no tools and a text reply; a Jev outage means the same. The exception is step 1: there a mention-only message gets no answer.
+Any answer Jev is unsure of means no tools and a text reply; a Jev outage means the same.
 
 **5. Running the tools.**
 The model never chooses tools; it only fills in arguments. A turn is at most two model calls:
@@ -137,18 +136,18 @@ Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), re
 `/set_model` and `/set_dev_model` (Oscar) switch models; `/model` shows the current one; `/usage` shows OpenRouter spend. The choice is saved by committing `src/models.json` to the repo: the file is read through the GitHub MCP server and written with one REST call. That commit triggers CI, which redeploys the bot with the new file.
 
 **Jev** (`src/agent/jev.js`) returns probabilities instead of text, in about 0.2 s. Panda uses it to:
-1. **Triage every turn** (step 4 of "How a message becomes a reply"). One call answers:
-   - for mention-only messages, whether Panda is addressed or should step in (≥ 0.8);
+1. **Decide whether a message is for Panda** (step 1 of "How a message becomes a reply"): every message that isn't a ping or a reply to Panda, read with the 2 messages before it (≥ 0.8).
+2. **Triage every turn** (step 4). One call answers:
    - whether the message is a sign-off (≥ 0.8);
    - which tools to run, one yes/no each (≥ 0.5), including whether one is Oscar-only;
    - whether to respond with a reaction (≥ 0.8), a text message, or both.
-2. **Detect sign-offs from other bots**, per message, including "aight gn" or other languages.
-3. **Fact-check research**: drop claims whose quote likely doesn't support them (< 0.3).
-4. **Pick what to remember**: one yes/no per line (≥ 0.5) before anything goes into the context store.
-5. **Walk the notes tree**: which folders to go into, level by level.
+3. **Detect sign-offs from other bots**, per message, including "aight gn" or other languages.
+4. **Fact-check research**: drop claims whose quote likely doesn't support them (< 0.3).
+5. **Pick what to remember**: one yes/no per line (≥ 0.5) before anything goes into the context store.
+6. **Walk the notes tree**: which folders to go into, level by level.
 
-Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is off or down:
-- Panda doesn't answer mention-only messages.
+Jev sees every message Panda can read in a server (with the 2 before it), so ordinary chatter does reach OpenRouter. Calls time out after 5 s. If Jev is off or down:
+- Panda answers only pings, replies to its messages, and DMs.
 - No tools run, and the model answers in text.
 - Bot sign-offs use the regex.
 - All research claims are kept.

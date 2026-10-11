@@ -4,7 +4,7 @@ import { chunkMessage } from './chunk.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
 import { selfFixState, SELF_FIX_MESSAGE } from '../selfFixState.js';
 import { decide } from '../agent/jev.js';
-import { rememberTurn } from '../agent/historyStore.js';
+import { saveContext } from '../agent/historyStore.js';
 import { attachmentParts, gifPreviews } from './attachments.js';
 import { modelInputs } from './model.js';
 import { redactSecrets } from '../config.js';
@@ -12,22 +12,25 @@ import { readChannelRange } from '../agent/tools/history.js';
 
 // Fixed-window input debounce with a per-channel queue.
 //
-// The FIRST triggering message from a sender opens a 3s collection batch for
-// them. Everything that sender says during those 3s is concatenated into one
-// model input (the timer does NOT reset). Triggers from OTHER senders during
-// that time are not dropped: each opens their own batch at the back of the
-// channel's FIFO queue — it collects its sender's follow-ups for its own 3s
-// and is processed when its turn comes. Batches are processed strictly one at
-// a time per channel, in arrival order, and never before their 3s collection
-// has elapsed.
+// A trigger is a ping, a reply to Panda, a DM, or any other message Jev says is
+// meant for Panda (forPanda). The FIRST trigger from a sender opens a 3s
+// collection batch for them. Everything that sender says during those 3s is
+// concatenated into one model input (the timer does NOT reset). Triggers from
+// OTHER senders during that time are not dropped: each opens their own batch in
+// the channel's queue — it collects its sender's follow-ups for its own 3s and
+// is processed when its turn comes. Batches are processed strictly one at a time
+// per channel, in the order their triggers were sent, and never before their 3s
+// collection has elapsed.
 const WINDOW_MS = 3000;
 
 // Messages shown above each turn, and the most of each one that is kept.
-const RECENT_COUNT = 20;
+const RECENT_COUNT = 10;
 const RECENT_CHARS = 500;
+// Messages Jev reads before a message to decide whether it is for Panda.
+const GATE_COUNT = 2;
 
-// Waiting batches per channel. A trigger past this is dropped (spam guard).
-const MAX_QUEUE = 5;
+// Waiting batches per channel, held in memory. A trigger past this is dropped (spam guard).
+const MAX_QUEUE = 10;
 
 // Sign-offs. A conversation with another bot runs as long as it has something to
 // say; it ends when the other bot says one of these. A wave costs one reaction
@@ -62,13 +65,28 @@ export async function signsOff(text, clientUserId, config, decideImpl = decide) 
   return answers?.bye ? answers.bye.noul >= 0.8 : isSignOff(text, clientUserId);
 }
 
-// Words that may mean Panda without a ping: its name, "Oscar's assistant", "the
-// bot". A hit only makes the message a candidate; the agent's Jev call decides
-// whether to answer (see triage in agent.js). Only messages that trigger Panda
-// reach Jev, so ordinary chatter never leaves the server.
-export function mentionsPanda(text, config) {
-  const name = String(config.botName || 'Panda').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\b(${name}|assistant|bot|oscar['’]?s)\\b`, 'i').test(String(text ?? ''));
+// One line of channel history as Panda reads it; its own lines are marked (you).
+const historyLine = (m, self) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`.slice(0, RECENT_CHARS);
+
+// Is a message that is not a ping, a reply to Panda or a DM still meant for it?
+// Asked of every such message, so Jev reads only it and the GATE_COUNT lines
+// before it. Tight on purpose: not everything deserves an answer. Jev off or
+// down means no, so then only pings, replies and DMs are answered.
+export async function forPanda(message, before, self, config, decideImpl = decide) {
+  const state = {
+    message: formatEnvelope(message),
+    recent_messages: before.slice(-GATE_COUNT).map((m) => historyLine(m, self)).join('\n') || '(none)',
+    assistant_name: config.botName,
+    owner_name: 'Oscar',
+  };
+  const answers = await decideImpl(config, state, {
+    for_assistant: {
+      type: 'noul',
+      instructions:
+        "Is `message` meant for the assistant, so that it should answer? Yes only if `message` speaks to the assistant directly (as `assistant_name`, `owner_name`'s assistant, the assistant of `owner_name`, or the bot), or answers or follows up on what the assistant just said (its lines in `recent_messages` start with (you)). No if it only mentions the assistant in passing, is people talking to each other, is a reaction such as lol, ok or thanks that needs nothing back, or is a question nobody put to the assistant.",
+    },
+  });
+  return answers?.for_assistant?.noul >= 0.8;
 }
 
 // Suppress Discord link embeds by wrapping bare URLs in <>. Image URLs stay
@@ -115,9 +133,9 @@ export function createMessageHandler({ client, config, player, privateMode, self
   // Kept outside `channels`, which is torn down as soon as its queue drains.
   const signedOff = new Set();
 
-  // direct = pinged, replied to, or DMed; otherwise Panda was only mentioned and may stay out.
+  // direct = pinged, replied to, or DMed; otherwise Jev judged it meant for Panda.
   function makeBatch(message, direct) {
-    const batch = { claimantId: message.author.id, messages: [message], closed: false, direct };
+    const batch = { claimantId: message.author.id, messages: [message], closed: false, direct, sentAt: message.createdAt?.getTime() ?? Date.now() };
     batch.collected = new Promise((resolve) => {
       setTimeout(() => {
         batch.closed = true;
@@ -133,15 +151,8 @@ export function createMessageHandler({ client, config, player, privateMode, self
     const contextKey = anchor.guild ? anchor.guild.id : `dm:${anchor.author.id}`;
 
     await enqueueContext(contextKey, async () => {
-      // A mention-only batch shows no typing until Jev decides Panda should answer.
-      let typing = null;
-      let accepted = false;
-      const startTyping = () => {
-        if (typing) return;
-        anchor.channel.sendTyping().catch(() => {});
-        typing = setInterval(() => anchor.channel.sendTyping().catch(() => {}), 8000);
-      };
-      if (batch.direct) startTyping();
+      anchor.channel.sendTyping().catch(() => {});
+      const typing = setInterval(() => anchor.channel.sendTyping().catch(() => {}), 8000);
       try {
         const parts = [];
         const attachments = [];
@@ -156,15 +167,15 @@ export function createMessageHandler({ client, config, player, privateMode, self
         // What was said just before the batch, so "that" and "it" resolve without
         // searching history. Jev reads it too when picking tools.
         const self = client.user?.id;
-        const recent = (await readChannelRange(messages[0], { count: RECENT_COUNT }).catch(() => []))
-          .map((m) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`.slice(0, RECENT_CHARS))
+        const recent = (await readChannelRange(messages[0].channel, messages[0].id, { count: RECENT_COUNT }).catch(() => []))
+          .map((m) => historyLine(m, self))
           .join('\n');
         const trigger = messages[0].author;
         const triggerName = messages[0].member?.displayName || trigger.displayName || trigger.username;
         const turn = parts.join('\n');
         const combined = [
           ...(recent ? ['[RECENT MESSAGES — what was said just before, oldest first. Context only: use it to tell what the turn refers to, and do not answer these. Lines marked (you) are your own replies.]', recent, ''] : []),
-          `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : 'mentioned you without a ping, and you chose to step in'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This is your actual task. Answer what is actually said here.]`,
+          `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : 'spoke to you without a ping'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This is your actual task. Answer what is actually said here.]`,
           turn,
         ].join('\n');
 
@@ -189,11 +200,6 @@ export function createMessageHandler({ client, config, player, privateMode, self
           // Collect any Discord embeds produced by tool calls (e.g. image_search)
           // so they can be sent alongside the text reply.
           embeds: [],
-          mayDecline: !batch.direct,
-          onAccept: () => {
-            accepted = true;
-            startTyping();
-          },
         };
 
         // Media goes to the model for this turn only; memory keeps the text,
@@ -207,8 +213,6 @@ export function createMessageHandler({ client, config, player, privateMode, self
           console.error('[panda] agent failed:', err);
           replyText = `⚠️ Something broke on my end: ${String(err.message || err).slice(0, 250)}`;
         }
-        // Only mentioned, and Panda stayed out (or failed before deciding): no reply, nothing saved.
-        if (!batch.direct && !accepted) return;
 
         // Send any embeds the tools produced (e.g. from image_search). These go
         // before the text reply so the images appear above the fold.
@@ -253,8 +257,8 @@ export function createMessageHandler({ client, config, player, privateMode, self
         }
 
         // Saved after the reply is out, so the database can never delay or break it.
-        // Only the lines Jev picks as worth remembering are kept; DMs never are.
-        rememberTurn(config, [...messages, ...sent], decideImpl).catch((err) =>
+        // The whole turn and the replies are kept, in this channel's memory; DMs never are.
+        saveContext(config, [...messages, ...sent]).catch((err) =>
           console.error('[history] save failed:', String(err.message || err).slice(0, 200)),
         );
 
@@ -279,6 +283,8 @@ export function createMessageHandler({ client, config, player, privateMode, self
         while (state.queue.length) {
           const batch = state.queue[0];
           await batch.collected;
+          // An earlier message whose Jev check came back late was queued in front: it goes first.
+          if (state.queue[0] !== batch) continue;
           state.queue.shift();
           try {
             await processBatch(batch);
@@ -305,16 +311,17 @@ export function createMessageHandler({ client, config, player, privateMode, self
       if (!message.author.bot) signedOff.delete(channelId);
 
       // A sender with a still-collecting batch in this channel gets everything
-      // they say folded into it (no mention needed, timer NOT reset).
-      const state = channels.get(channelId);
-      if (state) {
-        const open = state.queue.find((b) => !b.closed && b.claimantId === message.author.id);
-        if (open) {
-          open.messages.push(message);
-          if (message.mentions?.users?.has(client.user.id)) open.direct = true;
-          return;
-        }
-      }
+      // they say folded into it (no check needed, timer NOT reset).
+      const foldIn = () => {
+        const open = channels.get(channelId)?.queue.find((b) => !b.closed && b.claimantId === message.author.id);
+        if (!open) return false;
+        open.messages.push(message);
+        // A slower Jev check can land after a later follow-up; keep them in the order they were sent.
+        open.messages.sort((a, b) => a.createdAt - b.createdAt);
+        if (message.mentions?.users?.has(client.user.id)) open.direct = true;
+        return true;
+      };
+      if (foldIn()) return;
 
       // Otherwise this message must qualify as a trigger to open a new batch.
       if (message.author.bot && !config.allowBots) return;
@@ -328,7 +335,14 @@ export function createMessageHandler({ client, config, player, privateMode, self
         repliedToBot = ref?.author?.id === client.user.id;
       }
       const direct = isDM || mentioned || repliedToBot;
-      if (!direct && !mentionsPanda(message.content, config)) return;
+      if (!direct) {
+        // A full queue would drop it anyway, so Jev is not asked.
+        if ((channels.get(channelId)?.queue.length ?? 0) >= MAX_QUEUE) return;
+        const before = await message.channel.messages.fetch({ limit: GATE_COUNT, before: message.id }).catch(() => []);
+        if (!(await forPanda(message, [...before.values()].reverse(), client.user.id, config, decideImpl))) return;
+        // A follow-up of theirs may have opened a batch while Jev was deciding.
+        if (foldIn()) return;
+      }
 
       // Bot-to-bot: keep going as long as the other bot does, and end it on its
       // sign-off with a wave instead of a reply. Silent toward bots from then on
@@ -370,15 +384,19 @@ export function createMessageHandler({ client, config, player, privateMode, self
         return;
       }
 
-      // Open a new 3s collection batch at the back of this channel's queue.
+      // Open a new 3s collection batch in this channel's queue, placed by when the
+      // trigger was sent rather than when its Jev check came back. Two sent in the
+      // same millisecond go in a random order.
       const st = channels.get(channelId) ?? { queue: [], busy: false };
       if (st.queue.length >= MAX_QUEUE) {
         console.log(`[panda] queue full in ${channelId}: dropped a trigger from @${message.author.username}`);
         return;
       }
       channels.set(channelId, st);
-      st.queue.push(makeBatch(message, direct));
-      if (direct) message.channel.sendTyping().catch(() => {});
+      const batch = makeBatch(message, direct);
+      const at = st.queue.findIndex((b) => b.sentAt > batch.sentAt || (b.sentAt === batch.sentAt && Math.random() < 0.5));
+      st.queue.splice(at === -1 ? st.queue.length : at, 0, batch);
+      message.channel.sendTyping().catch(() => {});
       pump(channelId);
     } catch (err) {
       console.error('[panda] message handling failed:', err);

@@ -37,6 +37,7 @@ const executors = {
   index_chat: historyTools.indexChat,
   how_i_work: aboutTools.howIWork,
   search_notes: notesTools.searchNotes,
+  save_note: notesTools.saveNoteFromChat,
 };
 
 // Async because the GitHub MCP tool list is fetched from GitHub's hosted server

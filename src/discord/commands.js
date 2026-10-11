@@ -17,7 +17,7 @@ import { renderReport } from '../agent/research/render.js';
 import { redactSecrets } from '../config.js';
 import { setRule } from '../agent/tools/rules.js';
 import { UI_PREFIX, clickAsMessage, createPoll, sendCard } from '../agent/tools/ui.js';
-import { saveNote, loadTree, openNote, getNote, relatedNotes, noteChoices, deleteNote, folderPath } from '../agent/notes.js';
+import { saveNote, windowMessages, loadTree, openNote, getNote, relatedNotes, noteChoices, deleteNote, folderPath } from '../agent/notes.js';
 import { NOTES_PREFIX, noteMessage, folderView, deleteNoteConfirm } from './notes.js';
 import { addReminder, activeReminders, reminderChoices, deleteReminder, timezoneChoices, repeatText } from '../reminders.js';
 import { remindersEmbed } from './reminders.js';
@@ -99,7 +99,10 @@ export const commandDefs = [
           { name: 'status', value: 'status' },
         ),
     ),
-  new SlashCommandBuilder().setName('save_note').setDescription('Save a summary of the recent conversation here as a note'),
+  new SlashCommandBuilder()
+    .setName('save_note')
+    .setDescription('Save a summary of the recent conversation here as a note')
+    .addIntegerOption((o) => o.setName('minutes').setDescription('How far back to cover, in minutes (default 10)').setMinValue(1)),
   new SlashCommandBuilder().setName('display_notes').setDescription('Browse every saved note, folder by folder'),
   new SlashCommandBuilder()
     .setName('open_note')
@@ -545,8 +548,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           return await interaction.reply({ content: 'I can only save a note from a channel I can read.', flags: MessageFlags.Ephemeral });
         }
         await interaction.deferReply();
-        const page = await interaction.channel.messages.fetch({ limit: 50 });
-        const messages = [...page.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+        const messages = await windowMessages(interaction.channel, undefined, interaction.options.getInteger('minutes'));
         const saved = await saveNote(config, { messages, authorId: interaction.user.id });
         if (saved.error) return await interaction.editReply(`⚠️ ${saved.error}`);
         return await interaction.editReply({

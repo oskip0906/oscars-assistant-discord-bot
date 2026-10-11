@@ -2,6 +2,8 @@ import { db, configured } from '../db.js';
 import { decide } from './jev.js';
 import { askJson } from './research/askJson.js';
 import { isFull, noteWrite, pruneEmptyFolders } from '../storage.js';
+import { pickRelevant, relevantTo, worthRemembering } from './historyStore.js';
+import { readChannelRange } from './tools/history.js';
 
 // Shared notes in db-1: a folder tree the model files each note into, like a
 // knowledge graph, plus links between related notes. Everyone sees every note.
@@ -10,6 +12,9 @@ const MAX_DEPTH = 6;
 const MAX_OPENED = 8; // folders the Jev walk may enter per search
 const MAX_KIDS = 20; // shortcut: Jev picks among at most 20 sibling folders; split the choice if a folder grows wider
 const DESCEND = 0.25;
+const MAX_TRANSCRIPT = 60_000; // characters the note writer is given
+const WINDOW = 10; // minutes a note covers by default
+const MAX_WINDOW_MESSAGES = 1000; // shortcut: a long, busy window is cut to its newest 1000 messages; page further if notes need more
 const COLUMNS = 'n.id, n.folder_id, n.title, n.description, n.body, n.author_id, n.created_at';
 
 // Any word may match: "trip budget japan" finds a note that only says "Japan".
@@ -77,15 +82,29 @@ Reply with ONLY JSON: {"path": ["Top folder", "Sub folder"], "descriptions": {"N
 
 const str = (v, max) => typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null;
 
+// The last `minutes` (default 10) of a channel before `before` (now when unset), oldest first.
+export function windowMessages(channel, before, minutes) {
+  const span = Math.max(1, Math.floor(Number(minutes)) || WINDOW);
+  return readChannelRange(channel, before, { count: MAX_WINDOW_MESSAGES, since: Date.now() - span * 60_000 });
+}
+
+const transcriptOf = (messages) =>
+  messages
+    .map((m) => `[${m.createdAt.toISOString().slice(0, 16).replace('T', ' ')}] ${m.member?.displayName || m.author.displayName || m.author.username}: ${m.content}`)
+    .join('\n');
+
 // messages: Discord messages, oldest first. Returns { note, path } or { error }.
-export async function saveNote(config, { messages, authorId }, { ask = askJson } = {}) {
+export async function saveNote(config, { messages, authorId, topic = '' }, { ask = askJson, decideImpl = decide } = {}) {
   if (!configured(config)) return { error: 'Notes need DATABASE_URL to be set.' };
   if (isFull('notes')) return { error: 'Storage for notes is full; Oscar has been asked to approve a cleanup.' };
-  const transcript = messages
-    .filter((m) => m.content)
-    .map((m) => `[${m.createdAt.toISOString().slice(0, 16).replace('T', ' ')}] ${m.member?.displayName || m.author.displayName || m.author.username}: ${m.content}`)
-    .join('\n')
-    .slice(-60_000);
+  let lines = messages.filter((m) => m.content);
+  // Too long for the writer: Jev keeps the lines that matter first. Jev down (or
+  // keeping nothing) falls back to cutting the oldest lines.
+  if (transcriptOf(lines).length > MAX_TRANSCRIPT) {
+    const kept = await pickRelevant(config, lines, topic ? relevantTo : worthRemembering, topic, decideImpl);
+    if (kept.length) lines = kept;
+  }
+  const transcript = transcriptOf(lines).slice(-MAX_TRANSCRIPT);
   if (!transcript) return { error: 'There is no conversation here to save.' };
 
   const written = await ask({

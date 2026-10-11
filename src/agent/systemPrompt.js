@@ -17,7 +17,7 @@ export async function buildSystemPrompt(invocation) {
   return `You are ${config.botName}, a Discord bot. identity.md (fixed) and soul.md (your personality, which Oscar changes with set_rule) below say who you are and how to behave.
 
 ## Right now
-- Date: ${new Date().toDateString()}
+- Now: ${new Date().toUTCString()}
 - Server: ${guild ? guild.name : 'Direct message'} · Channel: ${channelName}
 - Talking to: ${senderName} (@${sender.username}, id:${sender.id})${invocation.isOwner ? ' — this is Oscar, your owner' : ''}
 - Owner: Oscar, id:${config.ownerId}. Everyone else is a guest.${privateNote}

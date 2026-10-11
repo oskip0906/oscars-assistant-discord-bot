@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { walkFolders, orQuery, folderPath, treeOutline, saveNote } from '../src/agent/notes.js';
+import { walkFolders, orQuery, folderPath, treeOutline, saveNote, windowMessages } from '../src/agent/notes.js';
 import { folderView } from '../src/discord/notes.js';
 import { db } from '../src/db.js';
 import { check, cleanup, resetStorageState, setAlertOwner, SECTIONS } from '../src/storage.js';
@@ -87,6 +87,46 @@ test('a new note is filed into existing and new folders, with links only to note
   assert.deepEqual(created, [{ id: 100, parent_id: 2, name: 'Kyoto', description: 'the Kyoto leg' }]);
   assert.deepEqual(inserts[0], [100, 'Kyoto day', 'what we do in Kyoto', '- temples', 'u1']);
   assert.deepEqual(inserts[1], [50, [7]], 'note 99 was never shown, so it is not linked');
+});
+
+test('a note covers the last 10 minutes by default, or as many as asked', async () => {
+  // One message every minute for an hour, newest first like Discord.
+  const now = Date.now();
+  const all = Array.from({ length: 60 }, (_, k) => ({ id: String(1000 - k), content: `m${k}`, createdTimestamp: now - (k + 0.5) * 60_000 }));
+  const channel = {
+    messages: {
+      fetch: async ({ limit, before }) => {
+        const page = all.filter((m) => !before || Number(m.id) < Number(before)).slice(0, limit);
+        return Object.assign(new Map(page.map((m) => [m.id, m])), { last: () => page.at(-1) });
+      },
+    },
+  };
+  const ten = await windowMessages(channel, undefined, null);
+  assert.deepEqual(ten.map((m) => m.content), ['m9', 'm8', 'm7', 'm6', 'm5', 'm4', 'm3', 'm2', 'm1', 'm0']);
+  assert.equal((await windowMessages(channel, undefined, 30)).length, 30);
+});
+
+test('a transcript too long for the writer goes through Jev first, and is cut when Jev is down', async () => {
+  db.query = async (_c, text) => (text.includes('as used') ? { rows: [{ used: 0 }] } : { rows: [] });
+  // 150 lines of ~500 characters: well over the 60k the writer is given.
+  const messages = Array.from({ length: 150 }, (_, n) => ({
+    content: `${n % 10 === 0 ? 'budget' : 'chatter'} ${n} ${'x'.repeat(480)}`,
+    createdAt: new Date('2026-10-11T12:00:00Z'),
+    author: { username: 'oscar' },
+  }));
+  const keepBudget = async (_c, state, questions) =>
+    Object.fromEntries(Object.keys(questions).map((q) => [q, { noul: /budget/.test(state[q.slice(5)]) ? 0.9 : 0.1 }]));
+  const seen = [];
+  const ask = async ({ user }) => (seen.push(user), null); // stop after the writer sees the transcript
+
+  await saveNote(config, { messages, authorId: 'u1', topic: 'budget' }, { ask, decideImpl: keepBudget });
+  const kept = seen[0].split('\n');
+  assert.equal(kept.length, 15);
+  assert.ok(kept.every((l) => / budget \d+ /.test(l)));
+
+  await saveNote(config, { messages, authorId: 'u1' }, { ask, decideImpl: async () => null });
+  assert.ok(seen[1].length <= 60_000);
+  assert.match(seen[1], /chatter 149 x+$/, 'the newest lines survive the cut');
 });
 
 // --- storage budget ----------------------------------------------------------

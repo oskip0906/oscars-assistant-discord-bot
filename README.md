@@ -6,7 +6,7 @@
 
 ## What it can do
 
-- **Chat** when pinged, replied to, or mentioned by name.
+- **Chat** when pinged or replied to, or when Jev judges a message is meant for it, such as a follow-up to what it just said.
 - **Remember** what matters: after each reply it keeps only the lines worth remembering, and can look back through what it remembered, the channel itself, or the messages around any older message someone replies to or links.
 - **Take notes** anyone can save, browse, open and delete; saved conversations are filed into a folder tree.
 - **Remind** people by DM, once or on a repeating schedule, in their own timezone.

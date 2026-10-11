@@ -20,7 +20,7 @@ const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
 export const saysNothing = (text) => !/[\p{L}\p{N}]/u.test(text.replace(/<a?:\w+:\d+>/g, ''));
 
 // One turn, at most two model calls after one Jev call:
-// 1. Jev (triage) decides whether to answer, in what form, and which tools run:
+// 1. Jev (triage) decides in what form to answer, and which tools run:
 //    a yes/no per tool. The model never adds a tool of its own.
 // 2. If Jev picked any, one model call fills in their arguments and they all run at once.
 // 3. One model call writes the reply from the results, with no tools left.
@@ -44,10 +44,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     { role: 'user', content: userContent },
   ];
   const plan = await triage(allTools, turnText, invocation, decideImpl);
-  log(contextKey, `triage: respond=${plan.respond} signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'}`);
-  // Not for Panda after all: say nothing and save nothing.
-  if (!plan.respond) return null;
-  invocation.onAccept?.();
+  log(contextKey, `triage: signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'}`);
   // A goodbye gets a wave and nothing else, so the conversation can end.
   if (plan.signOff) {
     await invocation.message.react('👋').then(() => (invocation.reacted = true), () => {});
@@ -122,13 +119,12 @@ async function runTool(call, invocation, contextKey) {
   return { role: 'tool', tool_call_id: call.id, content: redactSecrets(result).slice(0, TOOL_RESULT_CAP) };
 }
 
-// The one Jev call of every turn. Its answers are applied in order by runAgent:
-// 1. a mention-only message (no ping or reply): is it for Panda, or should Panda step in?
-// 2. is it a sign-off?
-// 3. which tools does it need? One yes/no per tool, so several can run at once.
-// 4. should Panda react, reply in text, or both?
-// Jev down, or unsure of an answer, means no tools and a text reply, except
-// that a mention-only message then gets no answer at all.
+// The one Jev call of every turn, made once the turn is known to be for Panda
+// (forPanda in messageHandler.js). Its answers are applied in order by runAgent:
+// 1. is it a sign-off?
+// 2. which tools does it need? One yes/no per tool, so several can run at once.
+// 3. should Panda react, reply in text, or both?
+// Jev down, or unsure of an answer, means no tools and a text reply.
 async function triage(tools, message, invocation, decideImpl) {
   const { config } = invocation;
   const author = invocation.message?.author;
@@ -140,18 +136,6 @@ async function triage(tools, message, invocation, decideImpl) {
     owner_name: 'Oscar',
   };
   const questions = {
-    ...(invocation.mayDecline && {
-      addressed: {
-        type: 'noul',
-        instructions:
-          "Is `message` speaking to the assistant, asking or telling it something? It may be called `assistant_name`, `owner_name`'s assistant, the assistant of `owner_name`, the bot, or anything else that clearly means it.",
-      },
-      step_in: {
-        type: 'noul',
-        instructions:
-          'Is `message` talking about the assistant in a way where it should step in: a question about it nobody has answered, something wrong said about it, or someone who clearly wants its help?',
-      },
-    }),
     bye: { type: 'noul', instructions: 'Is `message` a sign-off that ends the conversation without asking for or offering anything more?' },
     respond_with: {
       type: 'choice',
@@ -175,10 +159,9 @@ async function triage(tools, message, invocation, decideImpl) {
   const answers = await decideImpl(config, state, questions);
   const sureOf = (a) => a?.probabilities?.[a.choice] ?? a?.confidence ?? 0;
 
-  const respond = !invocation.mayDecline || [answers?.addressed, answers?.step_in].some((a) => a?.noul >= PICK_THRESHOLD);
   const picked = asked.map((t) => t.function.name).filter((name) => answers?.[`use_${name}`]?.noul >= TOOL_THRESHOLD);
   // A wrong "reaction only" leaves a question unanswered, so that one needs Jev to be sure.
   const form = answers?.respond_with;
   const valid = ['reaction', 'message', 'both'].includes(form?.choice) && (form.choice !== 'reaction' || sureOf(form) >= PICK_THRESHOLD);
-  return { respond, signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: picked, form: valid ? form.choice : null };
+  return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: picked, form: valid ? form.choice : null };
 }

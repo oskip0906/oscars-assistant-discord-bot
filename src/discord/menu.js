@@ -48,7 +48,7 @@ export function buildMenuEmbeds(client, config) {
     sectionEmbed(
       '📝 Notes',
       [
-        '`/save_note` : Save an organized summary of the recent conversation here, filed into folders',
+        '`/save_note [minutes]` : Save an organized summary of the last 10 minutes here (or longer), filed into folders',
         '`/display_notes` : Browse every saved note, folder by folder',
         '`/open_note <title>` : Open a note by its title, or the closest match',
         '`/delete_note <note>` : Delete one of your notes',

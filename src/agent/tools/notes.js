@@ -1,5 +1,5 @@
 import { configured } from '../../db.js';
-import { findNotes, loadTree, folderPath } from '../notes.js';
+import { findNotes, loadTree, folderPath, saveNote, windowMessages } from '../notes.js';
 
 const MAX_TOOL_BODY = 3000;
 
@@ -17,7 +17,38 @@ export const defs = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'save_note',
+      description:
+        'Summarize the recent conversation in this channel and save it as a shared note, the same as /save_note. Use it whenever someone asks you to summarize, note down, write up, jot down or keep track of what was said. It covers the last `minutes` (default 10): "the last hour" is 60; for "today" or "since 9am" count the minutes from then to now. Returns the note to share.',
+      parameters: {
+        type: 'object',
+        properties: {
+          minutes: { type: 'integer', description: 'How far back to cover, in minutes (default 10).' },
+          topic: { type: 'string', description: 'Optional: what to focus on when there is a lot to cover, e.g. "the trip budget".' },
+        },
+      },
+    },
+  },
 ];
+
+// Never throws: a refusal or failure is text the model can pass on.
+export async function saveNoteFromChat({ minutes, topic = '' } = {}, invocation) {
+  const here = invocation.message;
+  if (!here?.channel?.messages) return 'I can only save a note from chat.';
+  try {
+    const messages = await windowMessages(here.channel, here.id, minutes);
+    const saved = await saveNote(invocation.config, { messages, authorId: here.author.id, topic: String(topic) });
+    if (saved.error) return saved.error;
+    const { note } = saved;
+    return `[NOTE SAVED — "${note.title}" in 📁 ${saved.path.join(' / ')}. Say it was saved (they can open it with /open_note) and share the summary.]\n${note.description}\n\n${note.body.slice(0, MAX_TOOL_BODY)}`;
+  } catch (err) {
+    console.error('[notes] save from chat failed:', String(err.message || err).slice(0, 200));
+    return `I couldn't save that note: ${String(err.message || err).slice(0, 150)}`;
+  }
+}
 
 // Never throws: a refusal or failure is text the model can pass on.
 export async function searchNotes({ query = '' } = {}, invocation) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatContext, rememberTurn, saveContext } from '../src/agent/historyStore.js';
+import { formatContext, saveContext } from '../src/agent/historyStore.js';
 import { fetchHistory, indexChat } from '../src/agent/tools/history.js';
 import { db } from '../src/db.js';
 import { check, isFull, resetStorageState } from '../src/storage.js';
@@ -8,16 +8,20 @@ import { check, isFull, resetStorageState } from '../src/storage.js';
 const config = { databaseUrl: 'postgres://test', openrouterApiKey: 'k', jevEnabled: true };
 
 // A fake context_messages table. Inserts keep only ids not stored yet (ON
-// CONFLICT DO NOTHING); searches answer `found` and record their parameters.
+// CONFLICT DO NOTHING) and record each new row's [server, channel]; searches
+// answer `found` and record their parameters.
 function database({ stored = new Set(), found = [], down = false, used = 0 } = {}) {
-  const log = { inserted: [], searches: [] };
+  const log = { inserted: [], where: [], searches: [] };
   db.query = async (_config, text, params) => {
     if (down) throw new Error('connect ECONNREFUSED');
     if (text.includes('as used')) return { rows: [{ used }] };
     if (text.includes('insert into context_messages')) {
-      const fresh = params[0].filter((id) => !stored.has(id));
-      fresh.forEach((id) => stored.add(id));
-      log.inserted.push(...fresh);
+      const fresh = params[0].map((id, i) => [id, params[1][i], params[2][i]]).filter(([id]) => !stored.has(id));
+      fresh.forEach(([id, guild, channel]) => {
+        stored.add(id);
+        log.inserted.push(id);
+        log.where.push([guild, channel]);
+      });
       return { rowCount: fresh.length, rows: [] };
     }
     if (text.includes('from context_messages')) {
@@ -74,15 +78,12 @@ test('formats stored lines oldest first, with names when known', () => {
   assert.equal(lines[2], '[2026-10-01 14:02 UTC] <@2>: $400 each');
 });
 
-test('a turn keeps only the lines Jev picks, never DMs, and nothing when Jev is down', async () => {
-  const turn = [msg(1, { content: 'we leave friday at 9' }), msg(2, { content: 'lol' }), msg(3, { content: 'my birthday is may 3', guildId: null })];
-  let log = database();
-  await withJev((line) => !/lol/.test(line), () => rememberTurn(config, turn));
-  assert.deepEqual(log.inserted, [ID(1)]);
-
-  log = database();
-  await withJev(() => true, () => rememberTurn(config, turn), { down: true });
-  assert.deepEqual(log.inserted, []);
+test('a turn is saved whole, each line with its server and channel, never DMs', async () => {
+  const turn = [msg(1, { content: 'we leave friday at 9' }), msg(2, { content: 'lol', channelId: C2 }), msg(3, { content: 'my birthday is may 3', guildId: null })];
+  const log = database();
+  assert.equal(await saveContext(config, turn), 2);
+  assert.deepEqual(log.inserted, [ID(1), ID(2)]);
+  assert.deepEqual(log.where, [[G, C1], [G, C2]]);
 });
 
 test('a full context section stores nothing until a cleanup', async () => {
@@ -100,7 +101,7 @@ test('a full context section stores nothing until a cleanup', async () => {
 test('search goes to the store first, with the author resolved to an id', async () => {
   const log = database({ found: [{ author_id: '42', content: 'flights are $900', created_at: '2026-10-01T14:01:00Z' }] });
   const out = await fetchHistory({ query: 'flights', author: '<@42>' }, { config, message: { guildId: G, channelId: C1 } });
-  assert.deepEqual(log.searches[0], ['flights', '42']);
+  assert.deepEqual(log.searches[0], ['flights', '42', C1], 'only this channel is searched');
   assert.match(out, /<@42>: flights are \$900/);
 });
 
@@ -131,8 +132,9 @@ const invocationIn = (here, others = {}, content = 'what was the plan') => ({
   message: { id: ID(999), guildId: G, channelId: here.id, channel: here, member: {}, author: { id: 'u' }, content },
 });
 
-test('nothing remembered yet: the channel is searched, and only the matching lines are saved', async () => {
-  const general = channel(C1, 30, { content: (n) => (n === 7 ? 'the plan is the lake house' : `chat ${n}`) });
+test('nothing remembered yet: the last 1000 messages are searched, and only the matching lines are saved', async () => {
+  // Message 7 is 143 back, past the 100 an older scan read.
+  const general = channel(C1, 150, { content: (n) => (n === 7 ? 'the plan is the lake house' : `chat ${n}`) });
   const log = database();
   const out = await withJev(
     (line, focus) => focus === 'plan' && /plan/.test(line),
@@ -173,16 +175,16 @@ test('no query reads a range of the channel from Discord, oldest first, own repl
 
 // --- index_chat ------------------------------------------------------------------
 
-test('index_chat shows every message around one message, but remembers only the relevant new ones', async () => {
+test('index_chat shows and remembers every message around one message, once', async () => {
   const general = channel(C1, 20);
   const log = database({ stored: new Set([ID(9)]) });
-  const out = await withJev((line) => /m(9|10|11)$/.test(line), () => indexChat({ message: ID(10) }, invocationIn(general)));
-  assert.deepEqual(log.inserted, [ID(10), ID(11)]);
+  const out = await indexChat({ message: ID(10) }, invocationIn(general));
+  assert.deepEqual(log.inserted, [ID(8), ID(10), ID(11), ID(12)]);
   const lines = out.split('\n');
-  assert.match(lines[0], new RegExp(`AROUND ${ID(10)} in #general — 5, oldest first; → marks that message; 2 newly remembered`));
+  assert.match(lines[0], new RegExp(`AROUND ${ID(10)} in #general — 5, oldest first; → marks that message; 4 newly remembered`));
   assert.deepEqual(lines.slice(1).map((l) => l.match(/: (m\d+)$/)[1]), ['m8', 'm9', 'm10', 'm11', 'm12']);
   assert.match(lines[3], /^→ \[2026-01-01 12:10 UTC\]/);
-  assert.equal(general.fetched[0].around, ID(10));
+  assert.deepEqual(general.fetched[0], { around: ID(10), limit: 100 }, 'about 50 before and 50 after');
 });
 
 test('index_chat follows a message link to another channel of this server', async () => {
@@ -190,7 +192,7 @@ test('index_chat follows a message link to another channel of this server', asyn
   const other = channel(C2, 20);
   database();
   const link = `https://discord.com/channels/${G}/${C2}/${ID(15)}`;
-  const out = await withJev(() => false, () => indexChat({ message: link }, invocationIn(general, { [C2]: other })));
+  const out = await indexChat({ message: link }, invocationIn(general, { [C2]: other }));
   assert.match(out, /in #secret/);
   assert.equal(other.fetched[0].around, ID(15));
 });
@@ -209,7 +211,7 @@ test('index_chat refuses other servers, unreadable channels and things that are 
 
 test('index_chat still shows the messages when the database is down', async () => {
   database({ down: true });
-  const out = await withJev(() => true, () => indexChat({ message: ID(2) }, invocationIn(channel(C1, 5))));
+  const out = await indexChat({ message: ID(2) }, invocationIn(channel(C1, 5)));
   assert.match(out, /not remembered: the context database is unavailable/);
   assert.match(out, /→ .*: m2$/m);
 });
