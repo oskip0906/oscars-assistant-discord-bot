@@ -46,14 +46,15 @@ export class DevRunStore {
 // Called on boot. If a run was in flight when this process's predecessor died,
 // look up what became of its pull request and report it — the finish line the
 // old process never got to log, plus a DM so a landed self-fix is not silent.
-export async function resolveInterruptedRun({ store, gh, log = console.log, notify = async () => {}, client, ownerId }) {
+// `read` is githubReadJson: a GitHub MCP tool name and its arguments.
+export async function resolveInterruptedRun({ store, read, log = console.log, notify = async () => {}, client, ownerId }) {
   const run = store.read();
   if (!run) return null;
   store.end();
 
-  const [owner] = run.repo.split('/');
-  const result = await gh('GET', `/repos/${run.repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${run.branch}`)}&per_page=1`).catch(() => null);
-  const pr = result?.status === 200 ? result.json?.[0] : null;
+  const [owner, repo] = run.repo.split('/');
+  const pulls = await read('list_pull_requests', { owner, repo, state: 'all', head: `${owner}:${run.branch}`, perPage: 1 }).catch(() => null);
+  const pr = Array.isArray(pulls) ? pulls[0] || null : null;
   const outcome = !pr ? 'unknown-after-restart' : pr.merged_at ? 'merged-during-restart' : pr.state === 'closed' ? 'closed-during-restart' : 'pull-request-open';
 
   log(

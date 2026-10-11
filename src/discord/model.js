@@ -1,6 +1,7 @@
 import { EmbedBuilder } from 'discord.js';
 import { randomEmbedColor } from './colors.js';
 import { setDefaultModel } from '../configManager.js';
+import { githubRead } from '../agent/tools/githubMcp.js';
 
 // A model id is committed into src/models.json, so it has to be inert: nothing
 // outside this charset gets into the file.
@@ -8,8 +9,14 @@ const SAFE_MODEL_ID = /^[A-Za-z0-9._\-/:]+$/;
 
 // Save `key` ('conversation' or 'development') as `model` by committing
 // src/models.json to the bot's repo. The host has no disk to write to; the commit
-// triggers CI, whose deploy boots the bot with the new file. Never throws.
-export async function saveModel(config, key, model, { fetchImpl = fetch } = {}) {
+// triggers CI, whose deploy boots the bot with the new file. The read goes
+// through the GitHub MCP server, the commit through REST. Never throws.
+export async function saveModel(
+  config,
+  key,
+  model,
+  { fetchImpl = fetch, read = (name, args) => githubRead(name, args, { config }) } = {},
+) {
   const value = String(model ?? '').trim();
   if (!value || !SAFE_MODEL_ID.test(value)) {
     return { ok: false, error: `\`${value.slice(0, 80) || '(empty)'}\` is not a valid model id.` };
@@ -23,10 +30,13 @@ export async function saveModel(config, key, model, { fetchImpl = fetch } = {}) 
     'User-Agent': 'panda-bot',
   };
   try {
-    const current = await fetchImpl(`${url}?ref=main`, { headers });
-    if (!current.ok) throw new Error(`GitHub HTTP ${current.status} reading src/models.json`);
-    const { sha, content } = await current.json();
-    const models = { ...JSON.parse(Buffer.from(content, 'base64').toString('utf8')), [key]: value };
+    const [owner, repo] = String(config.developmentSandboxRepo).split('/');
+    const { result, text } = await read('get_file_contents', { owner, repo, path: 'src/models.json', ref: 'refs/heads/main' });
+    // The blob sha comes back in the text part ("... (SHA: <sha>)"), the file in a resource part.
+    const sha = text.match(/SHA: ([0-9a-f]{40})/)?.[1];
+    const content = result?.content?.find((part) => part.type === 'resource')?.resource?.text;
+    if (!sha || content == null) throw new Error('GitHub MCP returned no sha or content for src/models.json');
+    const models = { ...JSON.parse(content), [key]: value };
     const res = await fetchImpl(url, {
       method: 'PUT',
       headers: { ...headers, 'Content-Type': 'application/json' },

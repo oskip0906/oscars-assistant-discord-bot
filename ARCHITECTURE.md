@@ -108,7 +108,7 @@ Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), re
 | **Development** model | `self_fix`: the sandbox agent and commit messages; `set_rule`: rewriting `soul.md` |
 | **Jev** (`typesafe/jev-1.13`) | Fast yes/no and pick-one decisions |
 
-`/set_model` and `/set_dev_model` (Oscar) switch models; `/model` shows the current one; `/usage` shows OpenRouter spend.
+`/set_model` and `/set_dev_model` (Oscar) switch models; `/model` shows the current one; `/usage` shows OpenRouter spend. The choice is saved by committing `src/models.json` to the repo: the file is read through the GitHub MCP server and written with one REST call. That commit triggers CI, which redeploys the bot with the new file.
 
 **Jev** (`src/agent/jev.js`) returns probabilities instead of text, in about 0.2 s. Panda uses it to:
 1. **Triage every turn** (step 4 of "How a message becomes a reply"). One call answers:
@@ -139,8 +139,8 @@ Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is o
 | `index_chat` | Read and save the messages around one old message |
 | `how_i_work` | Read this file |
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |
-| GitHub MCP tools | Read-only GitHub (**Oscar only**) |
-| `github` | GitHub REST API with Oscar's token (**Oscar only**) |
+| GitHub MCP tools | Every GitHub read: files, commits, issues, PRs, code search, Actions runs (**Oscar only**) |
+| `github` | GitHub REST **writes only** (POST/PATCH/PUT/DELETE) with Oscar's token; it refuses reads (**Oscar only**) |
 | `self_fix` | Change Panda's own code through a merged PR (**Oscar only**) |
 | `set_rule` | Change Panda's personality (`soul.md`) for good (**Oscar only**) |
 
@@ -149,9 +149,9 @@ Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is o
 ## Slash commands
 
 - **Music:** `/play`, `/skip`, `/pause`, `/resume`, `/stop`, `/queue`
-- **Skills:** `/research <query> [quick|normal|deep]`, `/web_search`, `/web_fetch`, `/image_search`
+- **Skills:** `/research <query> [quick|normal|deep]`, `/web_search`, `/web_fetch`, `/image_search`, `/create_poll`, `/create_card`
 - **Info:** `/menu`, `/usage`, `/model`
-- **Oscar only:** `/set_rule`, `/index_chat`, `/self_fix`, `/set_model`, `/set_dev_model`, `/private on|off|status`, `/github`
+- **Oscar only:** `/set_rule`, `/index_chat`, `/self_fix`, `/set_model`, `/set_dev_model`, `/private on|off|status`, `/github` (lists Oscar's own repositories, read through the GitHub MCP server)
 
 ## Deep research
 
@@ -178,11 +178,11 @@ Each source is cited as a masked link with no `<>` around it, so Discord shows i
 `self_fix` is the only way Panda changes code, and only its own repo. It never edits the running bot.
 
 1. **Approval.** Panda posts an Approve / Cancel card. Only Oscar's click starts anything, and it waits as long as needed.
-2. **Dispatch.** `.github/workflows/development-sandbox.yml` clones the target repo into a throwaway Actions runner.
+2. **Dispatch.** The bot starts `.github/workflows/development-sandbox.yml` with one REST call. The workflow first checks, through the GitHub MCP server (`.github/scripts/check-target-repo.mjs`), that `GH_PAT` can read and push the target repo. Then it clones the target repo into a throwaway Actions runner.
 3. **Agent loop.** The development model uses `list_files`, `read_file`, `write_file`, `delete_file`, `finish` and read-only GitHub MCP tools. It must read before writing, can't touch `.git`, `node_modules`, `data/`, `.env` or `.github/`, and has at most 40 steps.
 4. **Verify.** `node --check`, import resolution, `npm ci`, `npm test`, then a `panda-dev-*` branch and a PR.
 
-`self_fix` enables auto-merge and waits for the merge. The merge to main triggers the CI deploy, which restarts Panda on the fix; under `run.sh` it also exits with code 42 so the supervisor pulls and restarts. Others get the "rebuilding" message meanwhile; the lock frees itself after 30 min.
+While it runs, the bot watches it only through the GitHub MCP server (`actions` and `pull_requests` tools): the pull request for its branch, or the failed run and the step it died on. `self_fix` enables auto-merge and waits for the merge. If the bot restarts mid-run, the next boot looks the pull request up the same way and reports it. The merge to main triggers the CI deploy, which restarts Panda on the fix; under `run.sh` it also exits with code 42 so the supervisor pulls and restarts. Others get the "rebuilding" message meanwhile; the lock frees itself after 30 min.
 
 ## Safety
 
@@ -191,7 +191,8 @@ Each source is cited as a masked link with no `<>` around it, so Discord shows i
 - Nobody can get a credential by asking, Oscar included. The Discord token, OpenRouter key, GitHub token and Supabase key are only ever used in auth headers, so the model never sees them. On top of that, `redactSecrets` (`src/config.js`) strips their exact values from every tool result before the model reads it, and from every message Panda sends.
 - `index_chat` only reads channels of this server that the person asking can read.
 - `web_fetch` refuses loopback, LAN, link-local and cloud-metadata addresses, on every DNS lookup and redirect.
-- GitHub MCP uses GitHub's read-only endpoint.
+- Every GitHub read, in chat and in code, goes through GitHub's read-only MCP endpoint (`/mcp/readonly`), so a read can never write. The only REST calls are writes: the sandbox dispatch, the `src/models.json` commit and the `github` tool.
+- There is one GitHub token: `GITHUB_PAT` in the bot, the `GH_PAT` Actions secret in CI (Actions secret names can't start with `GITHUB_`).
 - `/set_model` and `/set_dev_model` only commit safe model-id characters to `src/models.json`.
 
 ## Running and deploying
@@ -204,7 +205,11 @@ Each source is cited as a masked link with no `<>` around it, so Discord shows i
 - **Lifetime:** `run.sh` stops it when the bot stops (`searxng/searxng.pid`), and the next start brings up a fresh one. A SearXNG that was started some other way and is already answering is used and left running.
 - **Failures:** it never blocks or fails the boot. Without `uv`, or after a failed install, the bot starts without search and the next start tries again.
 
-Every push to `main` builds a Docker image and publishes it to Docker Hub (`.github/workflows/docker.yml`). `docker-compose.deploy.yml` runs the bot and SearXNG together; mount a volume on `/app/data` so the private-mode flag and the dev-run log survive restarts. Set `SUPABASE_URL` and `SUPABASE_SECRET_KEY`: without them Panda runs with no prompts and no history.
+Every push to `main` builds two Docker images and publishes them to Docker Hub, tagged `latest` and with the commit sha (`.github/workflows/docker.yml`): the bot, and `panda-searxng`, a SearXNG with its settings baked in (`searxng/Dockerfile`).
+
+**Production runs on PMS Cloud containers**, project `oscars-discord-bot`: `panda-bot` and `panda-searxng` (port 8080). The bot reaches search at `SEARXNG_URL=http://panda-searxng:8080`. PMS containers have no disk and no file mounts, so YouTube cookies go in as `YT_COOKIES_B64` and `/app/data` resets on every restart. After building, CI points both containers at the new sha with the `PMS_EMAIL` / `PMS_PASSWORD` secrets, since PMS has no API tokens. Cloudflare in front of `api.pmservers.org` currently blocks GitHub's runners, so that step fails and the deploy is done by hand: `pms container edit <name> --image <image>:<sha>`.
+
+To self-host instead, `docker-compose.deploy.yml` runs the bot and SearXNG together; mount a volume on `/app/data` so the private-mode flag and the dev-run log survive restarts. Either way, set `SUPABASE_URL` and `SUPABASE_SECRET_KEY`: without them Panda runs with no prompts and no history.
 
 ## Project layout
 
@@ -215,9 +220,11 @@ src/agent/agent.js        Jev triage, one round of tools, the answer
 src/agent/prompts.js      identity.md / soul.md from Supabase Storage
 src/agent/historyStore.js Supabase message database
 src/agent/jev.js          Jev decision calls
-src/agent/tools/          every tool the model can call
+src/agent/tools/          every tool the model can call; githubMcp.js is the one way code reads GitHub
+src/agent/mcp.js          minimal MCP client (GitHub's hosted server)
+src/models.json           the conversation and development model ids
 src/agent/research/       the /research pipeline
 src/music/                discord-player + yt-dlp streaming
 supabase/                 database schema and the prompts bucket
-.github/                  Docker build and the development sandbox
+.github/                  Docker build + PMS deploy, the development sandbox and its scripts
 ```

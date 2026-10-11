@@ -24,12 +24,31 @@ export function resetGithubMcp() {
   names = new Set();
 }
 
+// The default toolsets plus actions, which the self-fix monitor reads runs from.
+export const GITHUB_MCP_TOOLSETS = 'default,actions';
+
 function makeClient(config) {
   return new McpClient({
     url: config.githubMcpReadOnlyUrl || GITHUB_MCP_READONLY_URL,
-    headers: { Authorization: `Bearer ${config.githubPat}` },
+    headers: { Authorization: `Bearer ${config.githubPat}`, 'X-MCP-Toolsets': GITHUB_MCP_TOOLSETS },
     name: 'panda-bot',
   });
+}
+
+// Every GitHub read the bot makes in code goes through here, so reads share the
+// read-only server's guarantee; only writes (commits, dispatches) use REST.
+// Resolves to the raw tools/call result; a tool error rejects.
+export async function githubRead(name, args, { config = botConfig, client } = {}) {
+  if (!config?.githubPat) throw new Error('GITHUB_PAT is not set');
+  const result = await (client || makeClient(config)).callToolResult(name, args);
+  const text = (result?.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+  if (result?.isError) throw new Error(`GitHub MCP ${name}: ${text.slice(0, 200) || 'failed'}`);
+  return { result, text };
+}
+
+// For the tools that answer with one JSON document in a text part.
+export async function githubReadJson(name, args, options) {
+  return JSON.parse((await githubRead(name, args, options)).text);
 }
 
 function enabled(config) {

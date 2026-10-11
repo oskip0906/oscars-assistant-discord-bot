@@ -102,12 +102,17 @@ export class McpClient {
     return result?.tools || [];
   }
 
+  // The raw tools/call result, for code that reads structured parts itself.
+  async callToolResult(name, args) {
+    await this.connect();
+    return this.send('tools/call', { name, arguments: args || {} });
+  }
+
   // Returns text, never throws for a tool that merely failed: `isError` means
   // the call was made and the server said no, which the model can read and act
   // on. Only a broken transport or a malformed request throws.
   async callTool(name, args) {
-    await this.connect();
-    const result = await this.send('tools/call', { name, arguments: args || {} });
+    const result = await this.callToolResult(name, args);
     const text = (result?.content || []).map(partText).filter(Boolean).join('\n').trim();
     if (result?.isError) return `The ${name} tool failed: ${text || 'no detail given.'}`;
     return text || JSON.stringify(result?.structuredContent ?? result ?? {});

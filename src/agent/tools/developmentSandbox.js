@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { config as botConfig } from '../../config.js';
 import { DevRunStore } from '../../devRunStore.js';
+import { githubReadJson } from './githubMcp.js';
 
 export const devRunStore = new DevRunStore(botConfig.dataDir);
 
+// REST is only for the one write here, the workflow dispatch; every read goes
+// through the GitHub MCP server (githubReadJson).
 const API = 'https://api.github.com';
 const POLL_MS = 5_000;
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
@@ -49,18 +52,39 @@ export function githubRequest(pat) {
   };
 }
 
-async function defaultBranch(gh, repo) {
-  const res = await gh('GET', `/repos/${repo}`);
-  return res.status === 200 ? res.json?.default_branch || 'main' : null;
+// A read that fails (network, missing repo, MCP down) is "no answer", which
+// every caller below already handles.
+async function tryRead(read, name, args) {
+  try {
+    return await read(name, args);
+  } catch {
+    return null;
+  }
+}
+
+const ownerRepo = (repo) => {
+  const [owner, name] = repo.split('/');
+  return { owner, repo: name };
+};
+
+async function defaultBranch(read, repo) {
+  const found = await tryRead(read, 'search_repositories', { query: `repo:${repo}`, minimal_output: false, perPage: 1 });
+  const match = found?.items?.find((item) => item.full_name?.toLowerCase() === repo.toLowerCase());
+  return match ? match.default_branch || 'main' : null;
 }
 
 // The workflow names its run after the request id, so a run that dies before it
 // can open a PR (a missing secret, a rejected push) is reported in seconds
 // instead of stalling the caller for the full timeout.
-async function failedRun(gh, sandboxRepo, workflow, requestId) {
-  const result = await gh('GET', `/repos/${sandboxRepo}/actions/workflows/${encodeURIComponent(workflow)}/runs?event=workflow_dispatch&per_page=20`);
-  if (result.status !== 200) return null;
-  const run = (result.json?.workflow_runs || []).find((candidate) =>
+async function failedRun(read, sandboxRepo, workflow, requestId) {
+  const result = await tryRead(read, 'actions_list', {
+    ...ownerRepo(sandboxRepo),
+    method: 'list_workflow_runs',
+    resource_id: workflow,
+    workflow_runs_filter: { event: 'workflow_dispatch' },
+    perPage: 20,
+  });
+  const run = (result?.workflow_runs || []).find((candidate) =>
     [candidate?.name, candidate?.display_title].some((value) => String(value || '').includes(requestId)),
   );
   return run && run.status === 'completed' && run.conclusion !== 'success' ? run : null;
@@ -69,11 +93,12 @@ async function failedRun(gh, sandboxRepo, workflow, requestId) {
 // "The run failed" is not something Oscar can act on from Discord. The step
 // name is: a missing secret dies in "Check sandbox credentials", a rejected
 // push in "Develop, verify, and open pull request".
-async function failedStep(gh, sandboxRepo, runId) {
+async function failedStep(read, sandboxRepo, runId) {
   if (!runId) return null;
-  const result = await gh('GET', `/repos/${sandboxRepo}/actions/runs/${runId}/jobs?per_page=20`);
-  if (result.status !== 200) return null;
-  for (const job of result.json?.jobs || []) {
+  const result = await tryRead(read, 'actions_list', { ...ownerRepo(sandboxRepo), method: 'list_workflow_jobs', resource_id: String(runId) });
+  // The MCP server nests GitHub's {total_count, jobs} under another `jobs`.
+  const jobs = Array.isArray(result?.jobs) ? result.jobs : result?.jobs?.jobs || [];
+  for (const job of jobs) {
     const step = (job.steps || []).find((candidate) => candidate?.conclusion && !['success', 'skipped'].includes(candidate.conclusion));
     if (step?.name) return step.name;
   }
@@ -84,15 +109,15 @@ async function failedStep(gh, sandboxRepo, runId) {
 // reviewed and merged by hand, so an open PR is that run's finished state —
 // polling on for a merge that needs a human would block the agent loop (and the
 // caller's Discord interaction token) for the full timeout after the work landed.
-async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onPullRequest = () => {}, sandboxRepo, workflow, requestId, waitForMerge = true }) {
+async function waitForPullRequest({ read, repo, branch, timeoutMs, sleep, now, onPullRequest = () => {}, sandboxRepo, workflow, requestId, waitForMerge = true }) {
   const [owner] = repo.split('/');
   const deadline = now() + timeoutMs;
   let pr = null;
   let reported = false;
   while (now() < deadline) {
-    const result = await gh('GET', `/repos/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=1`);
-    if (result.status === 200 && result.json?.[0]) {
-      pr = result.json[0];
+    const pulls = await tryRead(read, 'list_pull_requests', { ...ownerRepo(repo), state: 'all', head: `${owner}:${branch}`, perPage: 1 });
+    if (pulls?.[0]) {
+      pr = pulls[0];
       if (!reported) {
         reported = true;
         await onPullRequest(pr);
@@ -102,9 +127,9 @@ async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onP
       if (pr.state === 'closed') return { ok: false, pr, merged: false, detail: 'The pull request was closed without merging.' };
     }
     if (!pr) {
-      const failed = await failedRun(gh, sandboxRepo, workflow, requestId);
+      const failed = await failedRun(read, sandboxRepo, workflow, requestId);
       if (failed) {
-        const step = await failedStep(gh, sandboxRepo, failed.id);
+        const step = await failedStep(read, sandboxRepo, failed.id);
         return {
           ok: false,
           detail: [
@@ -128,7 +153,12 @@ async function waitForPullRequest({ gh, repo, branch, timeoutMs, sleep, now, onP
 // restarts after the PR actually merges.
 export async function runDevelopmentSandbox(
   { repo, instruction, model, base, autoMerge = false, selfFix = false, config, onPullRequest, commitTitle },
-  { gh = githubRequest(config.githubPat), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, timeoutMs = DEFAULT_TIMEOUT_MS, store = devRunStore } = {},
+  {
+    gh = githubRequest(config.githubPat),
+    read = (name, args) => githubReadJson(name, args, { config }),
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, timeoutMs = DEFAULT_TIMEOUT_MS,
+    store = devRunStore,
+  } = {},
 ) {
   const targetRepo = cleanRepo(repo);
   const sandboxRepo = cleanRepo(config.developmentSandboxRepo);
@@ -136,7 +166,7 @@ export async function runDevelopmentSandbox(
   if (!sandboxRepo) return { ok: false, summary: '❌ DEVELOPMENT_SANDBOX_REPO must be set to `owner/name`.' };
   if (!config.githubPat) return { ok: false, summary: '❌ GITHUB_PAT is required to dispatch and observe the development sandbox.' };
 
-  const targetBase = base || (await defaultBranch(gh, targetRepo));
+  const targetBase = base || (await defaultBranch(read, targetRepo));
   if (!targetBase) return { ok: false, summary: `❌ Could not read the default branch for \`${targetRepo}\`.` };
 
   const requestId = randomUUID().replace(/-/g, '').slice(0, 16);
@@ -167,7 +197,7 @@ export async function runDevelopmentSandbox(
   store?.begin({ kind: selfFix ? 'self_fix' : 'development', repo: targetRepo, branch, base: targetBase, requestId });
 
   const waited = await waitForPullRequest({
-    gh,
+    read,
     repo: targetRepo,
     branch,
     timeoutMs,

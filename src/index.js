@@ -5,7 +5,8 @@ import { createPlayer } from './music/player.js';
 import { createMessageHandler } from './discord/messageHandler.js';
 import { commandDefs, createInteractionHandler } from './discord/commands.js';
 import { approvalCard } from './agent/tools/source.js';
-import { devRunStore, githubRequest } from './agent/tools/developmentSandbox.js';
+import { devRunStore } from './agent/tools/developmentSandbox.js';
+import { githubReadJson } from './agent/tools/githubMcp.js';
 import { resolveInterruptedRun } from './devRunStore.js';
 import { dmOwner } from './discord/notify.js';
 
@@ -55,7 +56,7 @@ async function boot(intents) {
     await approvalCard.retireStale(readyClient).catch(() => {});
     await resolveInterruptedRun({
       store: devRunStore,
-      gh: githubRequest(config.githubPat),
+      read: (name, args) => githubReadJson(name, args, { config }),
       client: readyClient,
       ownerId: config.ownerId,
       notify: dmOwner,

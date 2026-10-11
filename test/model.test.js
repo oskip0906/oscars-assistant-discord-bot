@@ -4,21 +4,31 @@ import { saveModel, switchModel } from '../src/discord/model.js';
 import { getDefaultModelName } from '../src/configManager.js';
 
 const repoConfig = { githubPat: 'pat', developmentSandboxRepo: 'owner/repo' };
-const encode = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64');
+const SHA = 'a'.repeat(40);
 
-test('saveModel commits src/models.json with only the one key changed', async () => {
+// What GitHub's MCP get_file_contents answers for a text file.
+const mcpFile = (obj) => async (name, args) => {
+  assert.equal(name, 'get_file_contents');
+  assert.deepEqual(args, { owner: 'owner', repo: 'repo', path: 'src/models.json', ref: 'refs/heads/main' });
+  const text = `successfully downloaded text file (SHA: ${SHA})`;
+  return { text, result: { content: [{ type: 'text', text }, { type: 'resource', resource: { text: JSON.stringify(obj) } }] } };
+};
+
+test('saveModel reads src/models.json over MCP and commits only the one key changed', async () => {
   const calls = [];
   const fetchImpl = async (url, opts = {}) => {
     calls.push({ url, opts });
-    if (!opts.method) return { ok: true, json: async () => ({ sha: 'abc', content: encode({ conversation: 'a/old', development: 'b/dev' }) }) };
     return { ok: true };
   };
-  assert.deepEqual(await saveModel(repoConfig, 'conversation', 'a/new', { fetchImpl }), { ok: true });
+  const read = mcpFile({ conversation: 'a/old', development: 'b/dev' });
+  assert.deepEqual(await saveModel(repoConfig, 'conversation', 'a/new', { fetchImpl, read }), { ok: true });
 
-  const put = calls[1];
+  assert.equal(calls.length, 1, 'the only REST call is the commit');
+  const put = calls[0];
+  assert.equal(put.opts.method, 'PUT');
   assert.equal(put.url, 'https://api.github.com/repos/owner/repo/contents/src/models.json');
   const body = JSON.parse(put.opts.body);
-  assert.equal(body.sha, 'abc');
+  assert.equal(body.sha, SHA);
   assert.equal(body.branch, 'main');
   assert.deepEqual(JSON.parse(Buffer.from(body.content, 'base64').toString()), { conversation: 'a/new', development: 'b/dev' });
 });
@@ -26,9 +36,17 @@ test('saveModel commits src/models.json with only the one key changed', async ()
 test('saveModel refuses unsafe ids and reports GitHub failures without throwing', async () => {
   assert.equal((await saveModel(repoConfig, 'conversation', 'a\nOWNER=1')).ok, false);
   const failing = async () => ({ ok: false, status: 403 });
-  const result = await saveModel(repoConfig, 'conversation', 'a/new', { fetchImpl: failing });
+  const result = await saveModel(repoConfig, 'conversation', 'a/new', { fetchImpl: failing, read: mcpFile({ conversation: 'a/old' }) });
   assert.equal(result.ok, false);
   assert.match(result.error, /403/);
+
+  const unreadable = await saveModel(repoConfig, 'conversation', 'a/new', {
+    read: async () => {
+      throw new Error('GitHub MCP get_file_contents: not found');
+    },
+  });
+  assert.equal(unreadable.ok, false);
+  assert.match(unreadable.error, /not found/);
 });
 
 test('switchModel goes live only after the choice is saved', async () => {

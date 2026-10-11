@@ -8,7 +8,7 @@ import { PRIVATE_MESSAGE } from '../privateMode.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
-import { githubCall } from '../agent/tools/github.js';
+import { githubReadJson } from '../agent/tools/githubMcp.js';
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
 import { setDevelopmentModel } from '../configManager.js';
@@ -76,8 +76,7 @@ export const commandDefs = [
     ),
   new SlashCommandBuilder()
     .setName('github')
-    .setDescription('Call the GitHub API (writes/private repos are owner only)')
-    .addStringOption((o) => o.setName('body').setDescription('Optional JSON body / request details')),
+    .setDescription('List your GitHub repositories (owner only)'),
   new SlashCommandBuilder()
     .setName('self_fix')
     .setDescription('Patch Panda’s own source code and restart (owner only)')
@@ -403,23 +402,17 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         if (!isOwner) {
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
         }
-        const endpoint = '/user/repos';
-        const method = 'GET';
-        const bodyRaw = interaction.options.getString('body');
-
-        let body;
-        if (bodyRaw) {
-          try {
-            body = JSON.parse(bodyRaw);
-          } catch {
-            return await interaction.reply({
-              content: '⚠️ `body` must be valid JSON.',
-              flags: MessageFlags.Ephemeral,
-            });
-          }
-        }
         await interaction.deferReply();
-        const result = await githubCall({ method, endpoint, body, auth: true }, buildInvocation());
+        // A read, so it goes through the GitHub MCP server like every other one.
+        let result;
+        try {
+          const { login } = await githubReadJson('get_me', {}, { config });
+          const found = await githubReadJson('search_repositories', { query: `user:${login}`, sort: 'updated', perPage: 50, minimal_output: false }, { config });
+          const lines = (found.items || []).map((repo) => `${repo.private ? '🔒' : '🌐'} [${repo.full_name}](<${repo.html_url}>)`);
+          result = lines.length ? `**${login}'s repositories**\n${lines.join('\n')}` : `No repositories found for ${login}.`;
+        } catch (err) {
+          result = `❌ Could not read GitHub: ${String(err.message || err).slice(0, 200)}`;
+        }
         return await sendToolResult(result);
       }
 
