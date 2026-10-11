@@ -61,7 +61,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       # Fail here, before the model call, when the job could never open a pull
       # request. A late failure wastes an OpenRouter request and leaves Panda
       # waiting for a PR that is never coming.

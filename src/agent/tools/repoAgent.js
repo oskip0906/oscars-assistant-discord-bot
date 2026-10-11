@@ -199,7 +199,9 @@ const preview = (value, limit = 80) => String(value ?? '').replace(/\s+/g, ' ').
 // Drives the model through the checkout: it reads what it wants, writes what it
 // decides to change, and says when it is done. Replaces asking for the whole
 // repository up front and hoping one reply contains every finished file.
-export async function runRepoAgent({ instruction, root, tracked = [], callModel, log = console.log, maxSteps = DEFAULT_MAX_STEPS, extraTools = [], callExtraTool = null }) {
+// `check(changed)` runs when the model calls finish: null passes, a string is
+// the failure handed back so the model can fix its own broken edit.
+export async function runRepoAgent({ instruction, root, tracked = [], callModel, log = console.log, maxSteps = DEFAULT_MAX_STEPS, extraTools = [], callExtraTool = null, check = null }) {
   const extraNames = new Set(extraTools.map((tool) => tool?.function?.name).filter(Boolean));
   const workspace = createWorkspace(path.resolve(root), tracked);
   const messages = [
@@ -260,9 +262,15 @@ export async function runRepoAgent({ instruction, root, tracked = [], callModel,
           result = 'You have not written any file yet, so nothing would change. Make the edit with write_file, then call finish.';
           log(`[sandbox] step ${step + 1}: finish rejected — no edits written yet`);
         } else {
-          done = { summary: args.summary || 'Automated development change.', description: args.description || '' };
-          result = 'Finished.';
-          log(`[sandbox] step ${step + 1}: finish — ${preview(done.summary)}`);
+          const failure = check ? await check(workspace.changed) : null;
+          if (failure) {
+            result = `Verification failed, so this is not finished. Fix the cause, then call finish again:\n${failure}`;
+            log(`[sandbox] step ${step + 1}: finish rejected — verification failed`);
+          } else {
+            done = { summary: args.summary || 'Automated development change.', description: args.description || '' };
+            result = 'Finished.';
+            log(`[sandbox] step ${step + 1}: finish — ${preview(done.summary)}`);
+          }
         }
       } else if (callExtraTool && extraNames.has(name)) {
         // Deliberately not recorded as a change: these reach GitHub, not the

@@ -79,3 +79,24 @@ test('an MCP call alone never satisfies finish — only a local file write does'
     'edits made outside the checkout bypass verification and must not count',
   );
 });
+
+test('a finish that fails verification goes back to the model, which can fix it and finish again', async () => {
+  let conversation = [];
+  let checks = 0;
+  const plan = await runRepoAgent({
+    instruction: 'x',
+    root: repo(),
+    tracked: ['a.js'],
+    log: () => {},
+    check: async () => (++checks === 1 ? 'npm test failed:\nnot ok 3 - names are unique' : null),
+    callModel: async (messages) => {
+      conversation = messages;
+      return { tool_calls: [call(String(messages.length), 'write_file', { path: 'a.js', content: 'export const a = 2;\n' }), call(`f${messages.length}`, 'finish', { summary: 's', description: 'd' })] };
+    },
+  });
+
+  assert.equal(checks, 2);
+  const toolReplies = conversation.filter((m) => m.role === 'tool').map((m) => m.content);
+  assert.ok(toolReplies.some((r) => r.startsWith('Verification failed') && r.includes('names are unique')), 'the failure must reach the model');
+  assert.equal(plan.completed, true);
+});

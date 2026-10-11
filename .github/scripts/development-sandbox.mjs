@@ -147,7 +147,15 @@ if (!env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not configur
 console.log(`::notice::Repository has ${tracked.length} tracked file(s). The model reads what it needs.`);
 
 const { extraTools, callExtraTool } = await githubMcp();
-const plan = await runRepoAgent({ instruction: env.INSTRUCTION, root, tracked, callModel, extraTools, callExtraTool });
+const check = (changed) => {
+  try {
+    verify(changed);
+    return null;
+  } catch (error) {
+    return error.message;
+  }
+};
+const plan = await runRepoAgent({ instruction: env.INSTRUCTION, root, tracked, callModel, extraTools, callExtraTool, check });
 const changed = plan.changed;
 console.log(`::notice::${changed.length} file(s) changed: ${changed.join(', ')}`);
 const checks = verify(changed);
