@@ -81,6 +81,11 @@ jobs:
             echo "::error::OPENROUTER_API_KEY is not set as a repository Actions secret in $GITHUB_REPOSITORY."
             exit 1
           fi
+          # A deleted key only surfaces later as OpenRouter's cryptic "User not found".
+          if ! curl -sf -o /dev/null -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/key; then
+            echo "::error::OpenRouter rejected OPENROUTER_API_KEY in $GITHUB_REPOSITORY (deleted, revoked, or mistyped key). Replace the secret with a live key."
+            exit 1
+          fi
           if ! gh api "repos/$TARGET_REPO" --jq .full_name > /dev/null; then
             echo "::error::The sandbox token cannot read $TARGET_REPO. Check that the repository exists and that the token grants it Contents and Pull requests access."
             exit 1
