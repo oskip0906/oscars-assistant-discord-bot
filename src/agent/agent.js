@@ -44,7 +44,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     { role: 'user', content: userContent },
   ];
   const plan = await triage(allTools, turnText, invocation, decideImpl);
-  log(contextKey, `triage: signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'}`);
+  log(contextKey, `triage: signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'} lookup=${plan.needsContext}`);
   // A goodbye gets a wave and nothing else, so the conversation can end.
   if (plan.signOff) {
     await invocation.message.react('👋').then(() => (invocation.reacted = true), () => {});
@@ -69,7 +69,9 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   if (offered.length) {
     const pickNote = {
       role: 'user',
-      content: `[TOOLS] Picked for this turn: ${[...picked].join(', ')}. Call the ones that help, all in this one reply, with the arguments the turn needs. There is no second round: you answer from their results.`,
+      content: `[TOOLS] Picked for this turn: ${[...picked].join(', ')}. Call the ones that help, all in this one reply, with the arguments the turn needs. There is no second round: you answer from their results.${
+        plan.needsContext ? ' `message` refers to something the recent messages do not explain: call fetch_history with a `query` of its key words (e.g. "event") to find what was said about it.' : ''
+      }`,
     };
     const msg = await ask([...messages, pickNote], offered, 'required');
     // Only Jev's picks run, whatever else the model tries to call.
@@ -123,6 +125,7 @@ async function runTool(call, invocation, contextKey) {
 // (forPanda in messageHandler.js). Its answers are applied in order by runAgent:
 // 1. is it a sign-off?
 // 2. which tools does it need? One yes/no per tool, so several can run at once.
+//    A reference nothing shown explains ("the event") adds fetch_history.
 // 3. should Panda react, reply in text, or both?
 // Jev down, or unsure of an answer, means no tools and a text reply.
 async function triage(tools, message, invocation, decideImpl) {
@@ -137,6 +140,11 @@ async function triage(tools, message, invocation, decideImpl) {
   };
   const questions = {
     bye: { type: 'noul', instructions: 'Is `message` a sign-off that ends the conversation without asking for or offering anything more?' },
+    unexplained: {
+      type: 'noul',
+      instructions:
+        'Does `message` refer to something specific that neither `message` nor `recent_messages` explain — an event, plan, person, place, thing or earlier conversation ("the event", "that game", "what she said") — so the assistant cannot know what it means without looking further back in the chat?',
+    },
     respond_with: {
       type: 'choice',
       instructions: 'How should the assistant respond to `message`?',
@@ -160,8 +168,13 @@ async function triage(tools, message, invocation, decideImpl) {
   const sureOf = (a) => a?.probabilities?.[a.choice] ?? a?.confidence ?? 0;
 
   const picked = asked.map((t) => t.function.name).filter((name) => answers?.[`use_${name}`]?.noul >= TOOL_THRESHOLD);
+  // Tuned against jev-1.13: references nothing shown explains score 0.90–0.97,
+  // plain chat ≤ 0.45, "fix that" right under the bug report 0.73. fetch_history's
+  // search reads what was remembered, then the last 1000 messages if nothing was.
+  const needsContext = answers?.unexplained?.noul >= PICK_THRESHOLD && asked.some((t) => t.function.name === 'fetch_history');
+  if (needsContext && !picked.includes('fetch_history')) picked.push('fetch_history');
   // A wrong "reaction only" leaves a question unanswered, so that one needs Jev to be sure.
   const form = answers?.respond_with;
   const valid = ['reaction', 'message', 'both'].includes(form?.choice) && (form.choice !== 'reaction' || sureOf(form) >= PICK_THRESHOLD);
-  return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: picked, form: valid ? form.choice : null };
+  return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: picked, form: valid ? form.choice : null, needsContext };
 }

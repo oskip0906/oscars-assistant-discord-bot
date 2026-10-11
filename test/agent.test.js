@@ -113,6 +113,24 @@ test('Jev gets one yes/no per tool (react excepted) and the recent messages', as
   assert.ok(!seen.questions.use_react);
 });
 
+test('a reference nothing shown explains sends the model to search history, though Jev did not pick the tool', async () => {
+  const seen = [];
+  const replies = [step('fetch_history'), { content: 'the hackathon? yes!' }];
+  const chat = async ({ messages, tools, toolChoice }) => (seen.push({ note: messages.at(-1).content, tools: tools.map((t) => t.function.name), toolChoice }), replies.shift());
+  const invocation = { contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' }, message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' } } };
+  const text = await runAgent(invocation, 'q', 'are you excited for the event', { chat, decideImpl: async () => ({ unexplained: { noul: 0.95 }, use_fetch_history: { noul: 0.1 }, respond_with: sure('message') }) });
+  assert.equal(text, 'the hackathon? yes!');
+  assert.deepEqual(seen[0].tools, ['fetch_history']);
+  assert.equal(seen[0].toolChoice, 'required');
+  assert.match(seen[0].note, /fetch_history with a `query`/);
+  assert.deepEqual(invocation.toolsUsed, ['fetch_history']);
+});
+
+test('a reference the recent messages explain does not search history', async () => {
+  const { calls } = await turn({ unexplained: { noul: 0.73 }, respond_with: sure('message') }, [{ content: 'on it' }]);
+  assert.deepEqual(calls, [{ tools: [], toolChoice: 'none' }]);
+});
+
 test('saysNothing only matches text without letters or digits', () => {
   assert.ok(saysNothing('👍🔥'));
   assert.ok(saysNothing('<a:spin:42>'));
