@@ -7,11 +7,15 @@ import dotenv from 'dotenv';
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 dotenv.config({ path: path.join(projectRoot, '.env'), quiet: true });
 
-// Oscar's Discord user id. OWNER_DISCORD_ID in .env sets it; this constant is
-// the fallback, so a missing or malformed value can never leave the bot with no
-// owner, or with whatever junk was typed there as its owner.
-export const OWNER_ID = '767525911695851550';
+// Oscar's Discord user id comes only from OWNER_DISCORD_ID (.env, or the host's
+// env vars). A missing or malformed value stops the boot in validateConfig rather
+// than leaving junk as the owner.
 const envOwnerId = process.env.OWNER_DISCORD_ID?.trim() || '';
+
+// The chat and development models live in src/models.json, committed to the repo:
+// the host has no disk, so /set_model saves a choice by committing that file.
+export const MODELS_FILE = path.join(projectRoot, 'src', 'models.json');
+const models = JSON.parse(fs.readFileSync(MODELS_FILE, 'utf8'));
 
 // Containers have no file mounts, so the cookies can also come base64-encoded in
 // YT_COOKIES_B64. yt-dlp only reads a file, so they are written to one.
@@ -34,19 +38,13 @@ export const config = {
 
   discordToken: process.env.DISCORD_TOKEN || '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
-  model: process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
+  model: models.conversation,
   // Dual model configuration: conversation vs. development. configManager seeds
-  // its selection from these; /set_dev_model overrides the development one and
-  // writes OPENROUTER_DEV_MODEL back here so the choice survives a restart.
-  //
-  // Both fall back to the model already running rather than to a placeholder id:
-  // a fallback OpenRouter does not actually serve fails the whole sandbox run at
-  // the model call, minutes after the request looked accepted.
-  defaultModelName:
-    process.env.OPENROUTER_DEFAULT_MODEL || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
-  developmentModelName:
-    process.env.OPENROUTER_DEV_MODEL || process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
-  ownerId: /^\d{17,20}$/.test(envOwnerId) ? envOwnerId : OWNER_ID,
+  // its selection from these; /set_model and /set_dev_model apply a new one live
+  // and commit it to src/models.json so the next deploy boots with it.
+  defaultModelName: models.conversation,
+  developmentModelName: models.development || models.conversation,
+  ownerId: /^\d{17,20}$/.test(envOwnerId) ? envOwnerId : '',
   githubPat: process.env.GITHUB_PAT || '',
   // GitHub's hosted MCP server, read-only path. Owner-gated at the tool list, so
   // a guest never sees these and never spends tokens on them. Off automatically
@@ -95,6 +93,7 @@ export function validateConfig() {
   const missing = [];
   if (!config.discordToken) missing.push('DISCORD_TOKEN');
   if (!config.openrouterApiKey) missing.push('OPENROUTER_API_KEY');
+  if (!config.ownerId) missing.push('OWNER_DISCORD_ID (a Discord user id)');
   if (missing.length) {
     throw new Error(`Missing required env vars: ${missing.join(', ')} — fill them in ${path.join(projectRoot, '.env')}`);
   }

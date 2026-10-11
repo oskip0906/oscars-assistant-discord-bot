@@ -1,73 +1,46 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { EmbedBuilder } from 'discord.js';
 import { randomEmbedColor } from './colors.js';
+import { setDefaultModel } from '../configManager.js';
 
-// The model the RUNNING process uses is config.model (loaded from .env at
-// startup). Re-read .env live so we can flag an edited-but-not-applied value.
-export function readEnvModel(config) {
-  try {
-    const raw = fs.readFileSync(path.join(config.projectRoot, '.env'), 'utf8');
-    const line = raw.split('\n').find((l) => l.trim().startsWith('OPENROUTER_MODEL='));
-    if (!line) return null;
-    const value = line.slice(line.indexOf('=') + 1).split('#')[0].trim();
-    return value || null;
-  } catch {
-    return null;
-  }
-}
-
-// A model id is written straight into .env, so it has to be inert: anything
-// outside this charset (a newline especially) could smuggle in another
-// assignment and quietly rewrite a secret on the next boot.
+// A model id is committed into src/models.json, so it has to be inert: nothing
+// outside this charset gets into the file.
 const SAFE_MODEL_ID = /^[A-Za-z0-9._\-/:]+$/;
 
-// Point `key` (OPENROUTER_MODEL, or OPENROUTER_DEV_MODEL for /set_dev_model) at
-// `model`, leaving the rest of .env byte-identical. For the conversation model
-// the running process keeps using the old value until it restarts — which is
-// exactly what /switch_model does next; the development model is applied live
-// and persisted here only so a restart re-seeds the same choice. Never throws.
-export function writeEnvModel(config, model, key = 'OPENROUTER_MODEL') {
+// Save `key` ('conversation' or 'development') as `model` by committing
+// src/models.json to the bot's repo. The host has no disk to write to; the commit
+// triggers CI, whose deploy boots the bot with the new file. Never throws.
+export async function saveModel(config, key, model, { fetchImpl = fetch } = {}) {
   const value = String(model ?? '').trim();
   if (!value || !SAFE_MODEL_ID.test(value)) {
     return { ok: false, error: `\`${value.slice(0, 80) || '(empty)'}\` is not a valid model id.` };
   }
+  if (!config.githubPat) return { ok: false, error: 'GITHUB_PAT is not set, so src/models.json cannot be committed.' };
 
-  const file = path.join(config.projectRoot, '.env');
-  let tmp = null;
+  const url = `https://api.github.com/repos/${config.developmentSandboxRepo}/contents/src/models.json`;
+  const headers = {
+    Authorization: `Bearer ${config.githubPat}`,
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'panda-bot',
+  };
   try {
-    const raw = fs.readFileSync(file, 'utf8');
-    const lines = raw.split('\n');
-    const index = lines.findIndex((l) => l.trim().startsWith(`${key}=`));
-    if (index === -1) {
-      // Keep a trailing newline if the file had one, rather than gluing the new
-      // assignment onto the last line.
-      if (lines[lines.length - 1] !== '') lines.push('');
-      lines[lines.length - 1] = `${key}=${value}`;
-      lines.push('');
-    } else {
-      lines[index] = `${key}=${value}`;
-    }
-    // Write via a temp file + rename so a crash mid-write can't leave Oscar
-    // with a truncated .env and a bot that won't boot. The temp name is unique
-    // per write: a shared `.env.tmp` means two writers (two bot processes on one
-    // token both handling the same command, say) race, and the loser's rename
-    // fails with ENOENT after the winner has already moved that path away.
-    tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-    fs.writeFileSync(tmp, lines.join('\n'), { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    const current = await fetchImpl(`${url}?ref=main`, { headers });
+    if (!current.ok) throw new Error(`GitHub HTTP ${current.status} reading src/models.json`);
+    const { sha, content } = await current.json();
+    const models = { ...JSON.parse(Buffer.from(content, 'base64').toString('utf8')), [key]: value };
+    const res = await fetchImpl(url, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `Set the ${key} model to ${value}`,
+        content: Buffer.from(`${JSON.stringify(models, null, 2)}\n`).toString('base64'),
+        sha,
+        branch: 'main',
+      }),
+    });
+    if (!res.ok) throw new Error(`GitHub HTTP ${res.status} committing src/models.json`);
     return { ok: true };
   } catch (err) {
-    // A rename that failed leaves the temp copy behind, and it holds the same
-    // secrets as .env — don't litter the project root with them.
-    if (tmp) {
-      try {
-        fs.unlinkSync(tmp);
-      } catch {
-        /* nothing written, or already gone */
-      }
-    }
-    return { ok: false, error: `Could not write .env: ${String(err.message || err).slice(0, 200)}` };
+    return { ok: false, error: `Could not save src/models.json: ${String(err.message || err).slice(0, 200)}` };
   }
 }
 
@@ -128,60 +101,46 @@ export async function modelChoices(
     .map((id) => ({ name: id.slice(0, 100), value: id.slice(0, 100) }));
 }
 
-// The /switch_model flow: validate against OpenRouter's catalog, persist, and
-// tell the caller whether a restart is needed to actually load it.
-export async function switchModel({ model, config }, { listModels = listOpenRouterModels, write = writeEnvModel } = {}) {
+// The /set_model flow: validate against OpenRouter's catalog, commit the choice,
+// then switch the running process to it.
+export async function switchModel({ model, config }, { listModels = listOpenRouterModels, save = saveModel } = {}) {
   const value = String(model ?? '').trim();
 
   if (value === config.model) {
-    return { ok: true, restart: false, summary: `🧠 Already running \`${value}\` — nothing to change.` };
+    return { ok: true, summary: `🧠 Already running \`${value}\` — nothing to change.` };
   }
 
-  // A typo'd model id would restart the bot into a state where every reply
-  // fails, so check the catalog first. If OpenRouter itself is unreachable we
-  // proceed anyway and say so — refusing would strand Oscar on the old model.
+  // A typo'd model id would leave every reply failing, so check the catalog
+  // first. If OpenRouter itself is unreachable we proceed anyway and say so —
+  // refusing would strand Oscar on the old model.
   let caveat = '';
   try {
     const catalog = await listModels(config);
     if (!catalog.includes(value)) {
-      return {
-        ok: false,
-        restart: false,
-        summary: `❌ OpenRouter doesn’t serve \`${value}\`. Still running \`${config.model}\`.`,
-      };
+      return { ok: false, summary: `❌ OpenRouter doesn’t serve \`${value}\`. Still running \`${config.model}\`.` };
     }
   } catch (err) {
     caveat = `\n⚠️ Couldn’t verify the id with OpenRouter (${String(err.message || err).slice(0, 120)}) — switching anyway.`;
   }
 
-  const written = write(config, value);
-  if (!written.ok) {
-    return { ok: false, restart: false, summary: `❌ ${written.error} Still running \`${config.model}\`.` };
+  const saved = await save(config, 'conversation', value);
+  if (!saved.ok) {
+    return { ok: false, summary: `❌ ${saved.error} Still running \`${config.model}\`.` };
   }
 
+  const previous = config.model;
+  config.model = value;
+  setDefaultModel(value);
   return {
     ok: true,
-    restart: true,
-    summary: `🧠 Model switched: \`${config.model}\` → \`${value}\`.${caveat}\n🔁 Restarting now to load it.`,
+    summary: `🧠 Model switched: \`${previous}\` → \`${value}\`, live now and saved to src/models.json.${caveat}`,
   };
 }
 
 export function buildModelEmbed(client, config) {
-  const envModel = readEnvModel(config);
-  const pendingChange = envModel && envModel !== config.model;
-
   return new EmbedBuilder()
     .setColor(randomEmbedColor())
     .setTitle('🧠 Model')
     .setThumbnail(client.user.displayAvatarURL({ size: 256 }))
-    .addFields({
-      name: '🐼 Currently running',
-      value: [
-        `\`${config.model}\``,
-        ...(pendingChange
-          ? [`⚠️ \`.env\` now says \`${envModel}\` — restart me to apply it.`]
-          : []),
-      ].join('\n'),
-      inline: false,
-    });
+    .addFields({ name: '🐼 Currently running', value: `\`${config.model}\``, inline: false });
 }

@@ -45,4 +45,50 @@ jobs:
           context: searxng
           file: searxng/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/panda-searxng:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/panda-searxng:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/panda-searxng:${{ github.sha }}
+
+      # Swap the PMS containers onto the images just pushed, which redeploys them.
+      # PMS has no API tokens yet, so this signs in with the account's email and
+      # password, the same Supabase sign-in `pms login --email` does. The key is
+      # the CLI's public publishable key, not a secret.
+      - name: Deploy to PMS
+        env:
+          PMS_EMAIL: ${{ secrets.PMS_EMAIL }}
+          PMS_PASSWORD: ${{ secrets.PMS_PASSWORD }}
+          PMS_AUTH: https://wwickoajouezsoodlllo.supabase.co/auth/v1/token?grant_type=password
+          PMS_AUTH_KEY: sb_publishable_RzVjSg1pNdV_cBQvowjAuw_7OY467iw
+          PMS_PROJECT: https://api.pmservers.org/v1/projects/prj_d6zd0y6e3t41
+          HUB: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          if [ -z "$PMS_EMAIL" ] || [ -z "$PMS_PASSWORD" ]; then
+            echo "::warning::PMS_EMAIL / PMS_PASSWORD are not set, so nothing was deployed to PMS."
+            exit 0
+          fi
+          token=$(jq -n --arg email "$PMS_EMAIL" --arg password "$PMS_PASSWORD" '{$email, $password}' |
+            curl -sS -X POST "$PMS_AUTH" -H "apikey: $PMS_AUTH_KEY" -H 'Content-Type: application/json' -d @- |
+            jq -r '.access_token // empty')
+          if [ -z "$token" ]; then echo "::error::PMS sign-in failed: check PMS_EMAIL and PMS_PASSWORD."; exit 1; fi
+          echo "::add-mask::$token"
+          auth="Authorization: Bearer $token"
+
+          # deploy <container name> <container id> <image>: point it at the image,
+          # then wait until that image is running (or show why it failed).
+          deploy() {
+            url="$PMS_PROJECT/containers/$2"
+            jq -n --arg image "$3" '{$image}' | curl -fsS -X PATCH "$url" -H "$auth" -H 'Content-Type: application/json' -d @- >/dev/null
+            sleep 15 # let the old container's "running" give way to the redeploy
+            for _ in $(seq 60); do
+              sleep 5
+              status=$(curl -fsS "$url" -H "$auth" | jq -r --arg image "$3" 'if .image == $image then .status else "updating" end' || echo unreachable)
+              echo "$1: $status"
+              case "$status" in
+                running) return 0 ;;
+                failed) curl -fsS "$url/logs?tail=40" -H "$auth" | jq -r '.lines[].message'; return 1 ;;
+              esac
+            done
+            echo "::error::$1 was not running after 5 minutes."; return 1
+          }
+          deploy panda-searxng ctr_30a2nhctz7kh "$HUB/panda-searxng:$GITHUB_SHA"
+          deploy panda-bot ctr_b01e7aw6var8 "$HUB/oscars-assistant-discord-bot:$GITHUB_SHA"

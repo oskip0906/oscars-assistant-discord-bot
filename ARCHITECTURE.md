@@ -192,7 +192,7 @@ These never edit the running bot.
 - `index_chat` only reads channels of this server that the person asking can read.
 - `web_fetch` refuses loopback, LAN, link-local and cloud-metadata addresses, on every DNS lookup and redirect.
 - GitHub MCP uses GitHub's read-only endpoint.
-- `/set_model` only writes safe model-id characters to `.env`, atomically.
+- `/set_model` and `/set_dev_model` only commit safe model-id characters to `src/models.json`.
 
 ## Running and deploying
 

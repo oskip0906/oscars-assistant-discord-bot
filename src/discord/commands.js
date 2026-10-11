@@ -1,7 +1,7 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { buildMenuEmbed } from './menu.js';
 import { buildUsageEmbed } from './usage.js';
-import { buildModelEmbed, switchModel, modelChoices, writeEnvModel } from './model.js';
+import { buildModelEmbed, switchModel, modelChoices, saveModel } from './model.js';
 import { chunkMessage } from './chunk.js';
 import { suppressLinkEmbeds } from './messageHandler.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
@@ -25,7 +25,7 @@ export const commandDefs = [
   new SlashCommandBuilder().setName('model').setDescription('Show which AI model Panda is running on'),
   new SlashCommandBuilder()
     .setName('set_model')
-    .setDescription('Set the OpenRouter model Panda runs on and restart (owner only)')
+    .setDescription('Set the OpenRouter model Panda runs on (owner only)')
     .addStringOption((o) =>
       o
         .setName('model')
@@ -323,12 +323,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         }
         await interaction.deferReply();
         const result = await switchModel({ model: interaction.options.getString('model', true), config });
-        await interaction.editReply({ content: result.summary, allowedMentions: { parse: [] } });
-        if (result.restart) {
-          console.log('[panda] /set_model requested restart — exiting with code 42');
-          setTimeout(() => process.exit(42), 1500);
-        }
-        return;
+        return await interaction.editReply({ content: result.summary, allowedMentions: { parse: [] } });
       }
 
       if (name === 'set_dev_model') {
@@ -342,16 +337,16 @@ export function createInteractionHandler({ client, config, player, privateMode, 
             flags: MessageFlags.Ephemeral,
           });
         }
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const applied = setDevelopmentModel(model);
-        const written = writeEnvModel(config, applied, 'OPENROUTER_DEV_MODEL');
-        return await interaction.reply({
+        const saved = await saveModel(config, 'development', applied);
+        return await interaction.editReply({
           content: [
             `🛠️ Development-task model set to \`${applied}\`. self_fix and /run_dev use it from now on.`,
-            written.ok ? '' : `⚠️ It is live, but I could not save it — a restart will lose it. ${written.error}`,
+            saved.ok ? '' : `⚠️ It is live, but I could not save it — a restart will lose it. ${saved.error}`,
           ]
             .filter(Boolean)
             .join('\n'),
-          flags: MessageFlags.Ephemeral,
           allowedMentions: { parse: [] },
         });
       }

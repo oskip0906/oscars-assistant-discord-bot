@@ -123,7 +123,13 @@ async function searxngSearch(query, count, config) {
     .filter((r) => r.url)
     .slice(0, count)
     .map((r) => ({ title: stripHtml(r.title || r.url), url: r.url, snippet: stripHtml(r.content || '') }));
-  if (!results.length) throw new Error('SearXNG returned no results');
+  if (!results.length) {
+    // Name the engines that failed (blocked, CAPTCHA, timeout), so "no results"
+    // says why in the logs and to the model.
+    const failing = (data.unresponsive_engines || []).map(([name, why]) => `${name}: ${why}`).join(', ');
+    console.warn(`[search] no results for "${query.slice(0, 80)}"${failing ? `; failing engines: ${failing}` : ''}`);
+    throw new Error(`SearXNG returned no results${failing ? ` (failing engines: ${failing})` : ''}`);
+  }
   return results;
 }
 
