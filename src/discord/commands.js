@@ -17,7 +17,7 @@ import { renderReport } from '../agent/research/render.js';
 import { indexChannel } from '../agent/historyStore.js';
 import { redactSecrets } from '../config.js';
 import { setRule } from '../agent/tools/rules.js';
-import { UI_PREFIX, clickAsMessage } from '../agent/tools/ui.js';
+import { UI_PREFIX, clickAsMessage, createPoll, sendCard } from '../agent/tools/ui.js';
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -112,6 +112,26 @@ export const commandDefs = [
     .setName('set_rule')
     .setDescription('Change Panda’s personality or behavior for good (owner only)')
     .addStringOption((o) => o.setName('instruction').setDescription('What to change, e.g. "be more sarcastic"').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('create_poll')
+    .setDescription('Post a native Discord poll people can vote on')
+    .addStringOption((o) => o.setName('question').setDescription('The question, up to 300 characters').setRequired(true))
+    .addStringOption((o) => o.setName('answers').setDescription('2 to 10 answers, separated by | (e.g. "Yes | No | Maybe")').setRequired(true))
+    .addIntegerOption((o) => o.setName('hours').setDescription('How long voting stays open, 1 to 768 hours (default 24)'))
+    .addBooleanOption((o) => o.setName('multiple').setDescription('Let people pick more than one answer (default false)')),
+  new SlashCommandBuilder()
+    .setName('create_card')
+    .setDescription('Post a rich embed card with optional buttons and dropdown')
+    .addStringOption((o) => o.setName('title').setDescription('Card title, up to 256 characters').setRequired(true))
+    .addStringOption((o) => o.setName('description').setDescription('Main text in Discord markdown, up to 4096 characters'))
+    .addStringOption((o) => o.setName('color').setDescription('Hex color such as #5865F2 (optional)'))
+    .addStringOption((o) => o.setName('url').setDescription('Link for the title (optional)'))
+    .addStringOption((o) => o.setName('image').setDescription('Image URL shown large (optional)'))
+    .addStringOption((o) => o.setName('thumbnail').setDescription('Image URL shown small in the corner (optional)'))
+    .addStringOption((o) => o.setName('footer').setDescription('Small text at the bottom (optional)'))
+    .addStringOption((o) => o.setName('fields').setDescription('Fields as name: value pairs separated by | (e.g. "A: 1 | B: 2")'))
+    .addStringOption((o) => o.setName('buttons').setDescription('Button labels separated by | (e.g. "Yes | No"), up to 5'))
+    .addStringOption((o) => o.setName('menu').setDescription('Dropdown choices separated by | (e.g. "Red | Green | Blue"), 2 to 25')),
 ].map((b) => b.toJSON());
 
 // Answering a button click has a 3-second budget, after which the interaction
@@ -463,6 +483,59 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
         }
         return await runTool(setRule, { instruction: interaction.options.getString('instruction', true) });
+      }
+
+      if (name === 'create_poll') {
+        await interaction.deferReply();
+        const question = interaction.options.getString('question', true);
+        const answersRaw = interaction.options.getString('answers', true);
+        const answers = answersRaw.split('|').map((s) => s.trim()).filter(Boolean);
+        const hours = interaction.options.getInteger('hours');
+        const multiple = interaction.options.getBoolean('multiple');
+        const args = { question, answers };
+        if (hours != null) args.hours = hours;
+        if (multiple != null) args.multiple = multiple;
+        const result = await createPoll(args, buildInvocation());
+        await sendToolResult(result);
+        return;
+      }
+
+      if (name === 'create_card') {
+        await interaction.deferReply();
+        const title = interaction.options.getString('title', true);
+        const description = interaction.options.getString('description');
+        const color = interaction.options.getString('color');
+        const url = interaction.options.getString('url');
+        const image = interaction.options.getString('image');
+        const thumbnail = interaction.options.getString('thumbnail');
+        const footer = interaction.options.getString('footer');
+        const fieldsRaw = interaction.options.getString('fields');
+        const buttonsRaw = interaction.options.getString('buttons');
+        const menuRaw = interaction.options.getString('menu');
+
+        const args = { title };
+        if (description) args.description = description;
+        if (color) args.color = color;
+        if (url) args.url = url;
+        if (image) args.image = image;
+        if (thumbnail) args.thumbnail = thumbnail;
+        if (footer) args.footer = footer;
+        if (fieldsRaw) {
+          args.fields = fieldsRaw.split('|').map((s) => {
+            const [name, ...rest] = s.split(':');
+            return { name: (name || '').trim(), value: rest.join(':').trim() };
+          }).filter((f) => f.name && f.value);
+        }
+        if (buttonsRaw) {
+          args.buttons = buttonsRaw.split('|').map((s) => ({ label: s.trim() })).filter((b) => b.label);
+        }
+        if (menuRaw) {
+          args.menu = { options: menuRaw.split('|').map((s) => s.trim()).filter(Boolean) };
+        }
+
+        const result = await sendCard(args, buildInvocation());
+        await sendToolResult(result);
+        return;
       }
 
       // Music commands below
