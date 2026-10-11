@@ -73,8 +73,8 @@ jobs:
           echo "::add-mask::$token"
           auth="Authorization: Bearer $token"
           # The account that owns the project is the one that can deploy to it.
-          me=$(curl -sS https://api.pmservers.org/v1/me -H "$auth")
-          echo "Signed in to PMS as user $(jq -r '.id // .user_id // "?"' <<<"$me")"
+          echo "Signed in as auth user $(python3 -c 'import sys, json, base64; p = sys.stdin.read().split(".")[1]; print(json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))["sub"])' <<<"$token")"
+          echo "PMS /me: $(curl -sS -w ' (HTTP %{http_code})' https://api.pmservers.org/v1/me -H "$auth")"
           if ! curl -fsS "$PMS_PROJECT" -H "$auth" >/dev/null; then
             echo "::error::This PMS account cannot see the project. PMS_EMAIL / PMS_PASSWORD must belong to the account that owns it."
             exit 1
