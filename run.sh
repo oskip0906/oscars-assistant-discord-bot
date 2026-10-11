@@ -13,18 +13,23 @@
 # node is, and the pull happens strictly between those.
 cd "$(dirname "$0")" || exit 1
 
-# Search needs a private SearXNG on loopback, and a fresh checkout has neither
-# the container nor its (gitignored) settings.yml. Run right before every node
-# start, so a crash-restart revives it too, and only once per start: with Docker
-# hung, each run waits out its deadline. Costs one health probe when it is
-# already up, and never fails the boot — see scripts/ensure-searxng.sh. Run
-# through bash, not ./, because git stores it without the executable bit.
+# Search needs a private SearXNG on loopback. scripts/ensure-searxng.sh installs
+# it on the first start and runs it as a local process; it runs right before
+# every node start, so a crash-restart revives it too, and never fails the boot.
+# Run through bash, not ./, because git stores it without the executable bit.
 ensure_search() {
   [ -f scripts/ensure-searxng.sh ] && bash scripts/ensure-searxng.sh
   return 0
 }
+# The local SearXNG that script started lives exactly as long as the bot: a
+# restart starts a fresh one, and stopping the bot leaves nothing behind.
+stop_search() {
+  [ -f searxng/searxng.pid ] && kill "$(cat searxng/searxng.pid)" 2>/dev/null
+  rm -f searxng/searxng.pid
+}
 
 if [ -n "$PANDA_SUPERVISED" ]; then
+  trap stop_search EXIT
   ensure_search
   node src/index.js
   exit $?
@@ -75,8 +80,10 @@ fi
 
 if [ ! -x start.sh ]; then
   echo "[run.sh] could not create start.sh — booting once, without the pull-and-restart loop" >&2
+  trap stop_search EXIT
   ensure_search
-  exec node src/index.js
+  node src/index.js
+  exit $?
 fi
 
 exec ./start.sh

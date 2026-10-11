@@ -15,3 +15,9 @@ searxng/config/settings.yml
 # YouTube auth cookies — never commit
 cookies.txt
 *cookies*.txt
+
+# local SearXNG (scripts/ensure-searxng.sh): source, venv, log, pid
+searxng/src/
+searxng/.venv/
+searxng/searxng.log
+searxng/searxng.pid

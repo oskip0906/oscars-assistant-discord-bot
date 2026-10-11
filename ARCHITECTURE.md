@@ -197,7 +197,13 @@ These never edit the running bot.
 
 ## Running and deploying
 
-`npm start` runs `run.sh`: it starts a local SearXNG container, then the bot under a supervisor (exit 42 → pull and restart, crash → restart after 3 s, exit 0 → stop). `npm run start:once` runs it without the supervisor; `npm test` runs the tests.
+`npm start` runs `run.sh`: it starts a private SearXNG, then the bot under a supervisor (exit 42 → pull and restart, crash → restart after 3 s, exit 0 → stop). `npm run start:once` runs it without the supervisor; `npm test` runs the tests.
+
+**Local search needs no Docker.** Before every bot start, `scripts/ensure-searxng.sh` makes sure a SearXNG answers on `SEARXNG_URL` (loopback only):
+- **First start:** it fetches SearXNG at a pinned commit into `searxng/src` and installs it into `searxng/.venv` with `uv`, which also fetches Python 3.12 if needed. Later starts reuse the install; bumping the pinned `ref` reinstalls.
+- **Running:** SearXNG runs as a Python process bound to `127.0.0.1` only, even though `settings.yml` says `0.0.0.0` for the deploy container. Its log is `searxng/searxng.log`.
+- **Lifetime:** `run.sh` stops it when the bot stops (`searxng/searxng.pid`), and the next start brings up a fresh one. A SearXNG that was started some other way and is already answering is used and left running.
+- **Failures:** it never blocks or fails the boot. Without `uv`, or after a failed install, the bot starts without search and the next start tries again.
 
 Every push to `main` builds a Docker image and publishes it to Docker Hub (`.github/workflows/docker.yml`). `docker-compose.deploy.yml` runs the bot and SearXNG together; mount a volume on `/app/data` so the private-mode flag and the dev-run log survive restarts. Set `SUPABASE_URL` and `SUPABASE_SECRET_KEY`: without them Panda runs with no prompts and no history.
 
