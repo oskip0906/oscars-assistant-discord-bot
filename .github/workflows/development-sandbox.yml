@@ -50,8 +50,9 @@ jobs:
           BRANCH: ${{ inputs.branch }}
         run: git switch -c "$BRANCH"
 
-      # Nobody can answer a question mid-run: dontAsk denies anything off the
-      # allow list, and --permission-prompts none removes AskUserQuestion.
+      # Nobody can answer mid-run: --dangerously-skip-permissions never asks for
+      # permission, --permission-prompts none removes AskUserQuestion. Claude can
+      # run anything, but its token is read-only and GH_PAT isn't in this step.
       - name: Claude Code
         id: claude
         uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
@@ -61,10 +62,15 @@ jobs:
           prompt: ${{ inputs.instruction }}
           claude_args: |
             --max-turns 60
-            --permission-mode dontAsk
+            --dangerously-skip-permissions
             --permission-prompts none
-            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(npm test *),Bash(node --check *)"
             --append-system-prompt "You are running unattended in CI and nobody can reply. Never ask questions or wait for confirmation: choose the most reasonable reading of the task, finish it, and end with a short summary of what you changed and any assumptions you made. Run npm test before you stop. Do not commit, push, or open a pull request; the workflow does that. Do not edit .github/, .env files, data/, or node_modules/."
+
+      # The action hides Claude's output; its last message says why a run failed
+      # or changed nothing (a bad token, a task it could not act on).
+      - name: Claude's final message
+        if: always() && steps.claude.outcome != 'skipped'
+        run: jq -r 'last(.[] | select(.type == "result")) | .result // empty' "$RUNNER_TEMP/claude-execution-output.json" || true
 
       # Same paths as FORBIDDEN in src/agent/tools/repoAgent.js.
       - name: Check changes
@@ -84,9 +90,8 @@ jobs:
           TITLE: ${{ inputs.commit_title }}
           REQUEST_ID: ${{ inputs.request_id }}
           AUTO_MERGE: ${{ inputs.auto_merge }}
-          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
-          summary=$(jq -r 'last(.[] | select(.type == "result")) | .result // empty' "$EXECUTION_FILE" 2>/dev/null || true)
+          summary=$(jq -r 'last(.[] | select(.type == "result")) | .result // empty' "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
           body="${summary:-Claude Code change.}"$'\n\n'"Self-fix $REQUEST_ID, approved by Oscar in Discord."
           git commit -q -m "$TITLE" -m "$body"
           git push -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"

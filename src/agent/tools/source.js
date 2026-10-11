@@ -18,11 +18,11 @@ export const defs = [
     function: {
       name: 'self_fix',
       description:
-        'OWNER ONLY. Propose a change to YOUR OWN source code. Panda shows Oscar a Discord approval button first. After approval, an isolated GitHub Actions sandbox checks out the repository, uses the configured OpenRouter development model to make and verify the change, opens a PR to main, enables auto-merge, and waits until it lands before Panda restarts. The live bot filesystem is never edited.',
+        'OWNER ONLY. Propose a change to YOUR OWN source code. Panda shows Oscar a Discord approval button first. After approval, an isolated GitHub Actions sandbox checks out the repository, runs Claude Code to make and test the change, opens a PR to main, enables auto-merge, and waits until it lands before Panda restarts. The live bot filesystem is never edited. Claude Code sees only the repository and the instruction — not this chat, earlier runs or GitHub — so the instruction must state the whole change on its own, even when retrying.',
       parameters: {
         type: 'object',
         properties: {
-          instruction: { type: 'string', description: 'What to change or fix about the bot' },
+          instruction: { type: 'string', description: 'The complete change to make, self-contained (never "retry the previous task")' },
         },
         required: ['instruction'],
       },
