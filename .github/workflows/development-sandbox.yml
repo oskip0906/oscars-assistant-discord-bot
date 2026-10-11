@@ -93,7 +93,8 @@ jobs:
         run: |
           summary=$(jq -r 'last(.[] | select(.type == "result")) | .result // empty' "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
           body="${summary:-Claude Code change.}"$'\n\n'"Self-fix $REQUEST_ID, approved by Oscar in Discord."
-          git commit -q -m "$TITLE" -m "$body"
+          # An email no GitHub account owns, so GitHub shows this name instead of github-actions[bot].
+          git -c user.name="very smart agent" -c user.email="very-smart-agent@panda-bot.invalid" commit -q -m "$TITLE" -m "$body"
           git push -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
           gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE" --head "$BRANCH" --title "$TITLE" --body "$body"
           if [ "$AUTO_MERGE" = "true" ]; then
