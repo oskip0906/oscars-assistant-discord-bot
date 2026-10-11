@@ -7,6 +7,7 @@ import * as sourceTools from './source.js';
 import * as musicTools from './music.js';
 import * as historyTools from './history.js';
 import * as aboutTools from './about.js';
+import * as notesTools from './notes.js';
 import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.js';
 
 // Owner-only tools. Gated by the AUTHENTICATED Discord author id
@@ -15,7 +16,7 @@ import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
 export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'github']);
 
-const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools];
+const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -35,6 +36,7 @@ const executors = {
   fetch_history: historyTools.fetchHistory,
   index_chat: historyTools.indexChat,
   how_i_work: aboutTools.howIWork,
+  search_notes: notesTools.searchNotes,
 };
 
 // Async because the GitHub MCP tool list is fetched from GitHub's hosted server

@@ -1,9 +1,9 @@
 import { readPrompt } from './prompts.js';
 
-// Who Panda is and how it behaves lives in Supabase (prompts/identity.md and
-// prompts/soul.md, see prompts.js). Only what can't live there stays here: the
+// Who Panda is and how it behaves lives in the database (identity.md and
+// soul.md in the prompts table, see prompts.js). Only what can't live there stays here: the
 // live facts of this turn, the input layout the message handler produces, and
-// the security rules, which must hold even when Supabase can't be reached.
+// the security rules, which must hold even when the database can't be reached.
 export async function buildSystemPrompt(invocation) {
   const { config, guild, message } = invocation;
   const [identity, soul] = await Promise.all([readPrompt(config, 'identity.md'), readPrompt(config, 'soul.md')]);

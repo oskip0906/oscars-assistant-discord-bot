@@ -27,18 +27,18 @@ Reply with ONLY the file content, with no code fences and no comments.`;
 
 const stripFences = (text) => String(text ?? '').trim().replace(/^```(?:markdown|md)?\n([\s\S]*?)\n```$/i, '$1').trim();
 
-// Oscar only (OWNER_ONLY_TOOLS). The replaced soul.md is kept in prompts/history/
+// Oscar only (OWNER_ONLY_TOOLS). The replaced soul.md is kept as history/soul-….md
 // before anything is written, so a bad rewrite can always be undone.
-export async function setRule({ instruction = '' } = {}, invocation, { chat = chatCompletion, fetchImpl = fetch } = {}) {
+export async function setRule({ instruction = '' } = {}, invocation, { chat = chatCompletion } = {}) {
   const ask = String(instruction).trim();
   if (!ask) return 'Tell me what to change about my personality or behavior.';
   const { config } = invocation;
   let current;
   let identity;
   try {
-    [current, identity] = await Promise.all([loadPrompt(config, 'soul.md', { fetchImpl }), loadPrompt(config, 'identity.md', { fetchImpl })]);
+    [current, identity] = await Promise.all([loadPrompt(config, 'soul.md'), loadPrompt(config, 'identity.md')]);
   } catch (err) {
-    return `I couldn't read my prompts from Supabase, so nothing changed: ${String(err.message || err).slice(0, 200)}`;
+    return `I couldn't read my prompts from the database, so nothing changed: ${String(err.message || err).slice(0, 200)}`;
   }
 
   const { model } = getAIConfig('development');
@@ -61,10 +61,10 @@ export async function setRule({ instruction = '' } = {}, invocation, { chat = ch
 
   const backup = `history/soul-${new Date().toISOString().replace(/[:.]/g, '-')}.md`;
   try {
-    await writePrompt(config, backup, current, { fetchImpl });
-    await writePrompt(config, 'soul.md', `${next}\n`, { fetchImpl });
+    await writePrompt(config, backup, current);
+    await writePrompt(config, 'soul.md', `${next}\n`);
   } catch (err) {
     return `I couldn't save soul.md, so nothing changed: ${String(err.message || err).slice(0, 200)}`;
   }
-  return `✅ soul.md updated with \`${model}\`. The old version is saved as \`prompts/${backup}\`.\n\nNew soul.md:\n${next}`;
+  return `✅ soul.md updated with \`${model}\`. The old version is saved as \`${backup}\`.\n\nNew soul.md:\n${next}`;
 }

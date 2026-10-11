@@ -7,7 +7,10 @@ import { commandDefs } from '../src/discord/commands.js';
 test('every slash command builds, with /set_rule in and the memory commands gone', () => {
   const names = commandDefs.map((c) => c.name);
   assert.ok(names.includes('set_rule'));
-  assert.ok(names.includes('index_chat'));
+  assert.ok(!names.includes('index_chat'), 'bulk indexing is gone: context is saved selectively');
+  for (const name of ['save_note', 'display_notes', 'open_note', 'delete_note', 'add_reminder', 'show_reminders', 'delete_reminder']) {
+    assert.ok(names.includes(name), name);
+  }
   assert.ok(names.includes('create_poll'));
   assert.ok(names.includes('create_card'));
   assert.ok(!names.includes('clear') && !names.includes('clearall'));

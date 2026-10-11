@@ -71,19 +71,25 @@ export const config = {
   ytCookiesFile: cookiesFile(),
   ytCookiesFromBrowser: process.env.YT_COOKIES_FROM_BROWSER || '',
   searxngUrl: (process.env.SEARXNG_URL || 'http://127.0.0.1:8888').replace(/\/$/, ''),
-  // Supabase Postgres holding every message sent to Panda plus whatever
-  // /index_chat scrapes, read back by the fetch_history tool. Unset = nothing is
-  // stored or searched. Server-side secret key only: it bypasses row-level security.
-  supabaseUrl: (process.env.SUPABASE_URL || '').replace(/\/$/, ''),
-  supabaseKey: process.env.SUPABASE_SECRET_KEY || '',
+  // The PMS Postgres (db-1): persona prompts, hidden chat context, notes and
+  // reminders (src/schema.sql). Unset = none of those work, but chat still does.
+  databaseUrl: process.env.DATABASE_URL || '',
 };
 
 // The bot's secrets only ever go into auth headers; none is put in front of the
 // model or into a message. redactSecrets guarantees it at both boundaries anyway,
 // so no bug, error message or tool output can hand one to whoever asks.
+const dbPassword = () => {
+  try {
+    return decodeURIComponent(new URL(config.databaseUrl).password);
+  } catch {
+    return '';
+  }
+};
+
 export function redactSecrets(text) {
   let out = String(text ?? '');
-  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.supabaseKey, process.env.YT_COOKIES_B64]) {
+  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.databaseUrl, dbPassword(), process.env.YT_COOKIES_B64]) {
     if (secret && secret.length >= 8) out = out.split(secret).join('[redacted]');
   }
   return out;
@@ -97,7 +103,7 @@ export function validateConfig() {
   if (missing.length) {
     throw new Error(`Missing required env vars: ${missing.join(', ')} — fill them in ${path.join(projectRoot, '.env')}`);
   }
-  if (!config.supabaseUrl || !config.supabaseKey) {
-    console.warn('[panda] SUPABASE_URL / SUPABASE_SECRET_KEY are not set: running without the prompts in Supabase (identity.md, soul.md) and without stored history.');
+  if (!config.databaseUrl) {
+    console.warn('[panda] DATABASE_URL is not set: running without the prompts (identity.md, soul.md), context, notes and reminders.');
   }
 }

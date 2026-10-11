@@ -9,7 +9,7 @@ export function buildMenuEmbed(client, config) {
     .setDescription(
       `Hi, I'm **${config.botName}** — Oscar's AI familiar, rebuilt fully from scratch. ` +
         `**Mention me** (<@${client.user.id}>) or **reply to my messages** and I'll answer. ` +
-        `I keep a searchable history of our chats. Here's everything I can do:`,
+        `I remember what matters from our chats. Here's everything I can do:`,
     )
     .setThumbnail(client.user.displayAvatarURL({ size: 256 }))
     .addFields(
@@ -37,9 +37,20 @@ export function buildMenuEmbed(client, config) {
         ].join('\n'),
       },
       {
-        name: '🗂️ History (Oscar only)',
+        name: '📝 Notes',
         value: [
-          '`/index_chat` : Save this channel’s new messages to my history database (saved ones stay as they are)',
+          '`/save_note` : Save an organized summary of the recent conversation here, filed into folders',
+          '`/display_notes` : Browse every saved note, folder by folder',
+          '`/open_note <title>` : Open a note by its title, or the closest match',
+          '`/delete_note <note>` : Delete one of your notes',
+        ].join('\n'),
+      },
+      {
+        name: '⏰ Reminders',
+        value: [
+          '`/add_reminder <name> <repeat> <when> [timezone]` : Get a DM from me once, or every day, week or month',
+          '`/show_reminders` : See every active reminder',
+          '`/delete_reminder <reminder>` : Delete one of your reminders',
         ].join('\n'),
       },
       {

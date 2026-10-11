@@ -9,8 +9,13 @@ import { devRunStore } from './agent/tools/developmentSandbox.js';
 import { githubReadJson } from './agent/tools/githubMcp.js';
 import { resolveInterruptedRun } from './devRunStore.js';
 import { dmOwner } from './discord/notify.js';
+import { ensureSchema } from './db.js';
+import { startReminders } from './reminders.js';
+import { watchStorage } from './storage.js';
 
 validateConfig();
+// A database that is down at boot leaves chat working; its features fail on use.
+await ensureSchema(config).catch((err) => console.error('[panda] could not apply the database schema:', err.message));
 
 const BASE_INTENTS = [
   GatewayIntentBits.Guilds,
@@ -54,6 +59,8 @@ async function boot(intents) {
     // lived to send. A self-fix ends in a restart, so this is the normal path
     // for reporting one — not an edge case.
     await approvalCard.retireStale(readyClient).catch(() => {});
+    startReminders(readyClient, config);
+    watchStorage(readyClient, config);
     await resolveInterruptedRun({
       store: devRunStore,
       read: (name, args) => githubReadJson(name, args, { config }),

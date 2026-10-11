@@ -1,6 +1,7 @@
 import { PermissionFlagsBits } from 'discord.js';
-import { searchHistory, formatHistory, saveMessages } from '../historyStore.js';
+import { searchContext, formatContext, saveContext, pickRelevant, relevantTo } from '../historyStore.js';
 import { formatEnvelope } from '../../discord/envelope.js';
+import { configured } from '../../db.js';
 
 const MAX_COUNT = 100;
 const MAX_SKIP = 500;
@@ -13,7 +14,7 @@ export const defs = [
     function: {
       name: 'fetch_history',
       description:
-        'Get more context than the few messages you were shown. Two modes. (1) No `query` and no `author`, scope "channel": read a range of this channel straight from Discord, newest-first counting back from the message you are answering — `count` messages after skipping the `skip` most recent. Use it whenever the shown messages are not enough to follow the conversation ("as I said", "that one", a thread that started earlier, your own earlier replies). E.g. {count: 30} for the run-up, then {skip: 30, count: 50} to go further back. (2) `query` and/or `author`, or scope "server": search older stored conversations ("what did we decide", "remember when", "what did X say about Y"). To find what a person said, put their name in `author`, not in `query`: `query` only searches message text. Results are oldest first.',
+        'Get more context than the few messages you were shown. Two modes. (1) No `query` and no `author`: read a range of this channel straight from Discord, newest-first counting back from the message you are answering — `count` messages after skipping the `skip` most recent. Use it whenever the shown messages are not enough to follow the conversation ("as I said", "that one", a thread that started earlier, your own earlier replies). E.g. {count: 30} for the run-up, then {skip: 30, count: 50} to go further back. (2) `query` and/or `author`: search what you remember from earlier chats anywhere ("what did we decide", "remember when", "what did X say about Y"); when nothing is remembered yet, the last 100 messages of this channel are searched instead. To find what a person said, put their name in `author`, not in `query`: `query` only searches message text. Results are oldest first.',
       parameters: {
         type: 'object',
         properties: {
@@ -31,12 +32,7 @@ export const defs = [
           },
           author: {
             type: 'string',
-            description: 'Search mode: only match messages sent by this person (their display name, or part of it), e.g. "DerpZ". Combine with query for "what did X say about Y".',
-          },
-          scope: {
-            type: 'string',
-            enum: ['channel', 'server'],
-            description: 'Search only this channel (default) or every channel in this server. "server" always searches the database.',
+            description: 'Search mode: only match messages sent by this person (their display name, a <@mention>, or their id), e.g. "DerpZ". Combine with query for "what did X say about Y".',
           },
         },
       },
@@ -47,7 +43,7 @@ export const defs = [
     function: {
       name: 'index_chat',
       description:
-        `Read the messages around one specific past Discord message (up to ${AROUND}) and save them to your history database. Use it when someone replies to, links, or points at an old message you have not seen and you need what was said around it. Pass its message link (https://discord.com/channels/…/…/…) or its id; an id alone means this channel. Messages already saved are never overwritten; only new ones are added.`,
+        `Read the messages around one specific past Discord message (up to ${AROUND}) and remember the ones that matter for this conversation. Use it when someone replies to, links, or points at an old message you have not seen and you need what was said around it. Pass its message link (https://discord.com/channels/…/…/…) or its id; an id alone means this channel.`,
       parameters: {
         type: 'object',
         properties: {
@@ -78,12 +74,28 @@ export async function readChannelRange(message, { skip = 0, count = 30 } = {}) {
   return out.reverse();
 }
 
+// A <@mention> or id is used as is; a name is looked up among this server's members.
+async function authorId(author, guild) {
+  const raw = String(author).trim();
+  const id = raw.match(/^<@!?(\d+)>$/)?.[1] || raw.match(/^(\d{15,})$/)?.[1];
+  if (id) return id;
+  const name = raw.replace(/^@+/, '');
+  if (!name || !guild) return null;
+  const found = await guild.members.search({ query: name, limit: 1 }).catch(() => null);
+  return found?.first()?.id ?? null;
+}
+
+const nameIs = (m, author) => {
+  const want = String(author).replace(/^@+/, '').toLowerCase();
+  return [m.member?.displayName, m.author.displayName, m.author.username].some((n) => n?.toLowerCase().includes(want));
+};
+
 // Never fails the turn: no match or a broken lookup both tell the model to go on without it.
-export async function fetchHistory({ query = '', author = '', scope = 'channel', skip, count } = {}, invocation) {
+export async function fetchHistory({ query = '', author = '', skip, count } = {}, invocation) {
   const message = invocation.message;
   if (!message) return 'Stored history is only available in chat — answer without it.';
   try {
-    if (!query && !author && scope !== 'server') {
+    if (!query && !author) {
       const range = { skip: clamp(skip, 0, MAX_SKIP), count: clamp(count, 30, MAX_COUNT) || 1 };
       const msgs = await readChannelRange(message, range);
       if (!msgs.length) return 'No earlier messages in this channel.';
@@ -93,14 +105,22 @@ export async function fetchHistory({ query = '', author = '', scope = 'channel',
         ...msgs.map((m) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`),
       ].join('\n');
     }
-    const rows = await searchHistory(invocation.config, {
-      guildId: message.guildId ?? null,
-      // A DM has no server to widen to; widening there would read every DM.
-      channelId: scope === 'server' && message.guildId ? null : message.channelId,
-      query,
-      author,
-    });
-    return rows.length ? formatHistory(rows) : 'No earlier conversations matched — answer without them.';
+    const config = invocation.config;
+    const id = author ? await authorId(author, message.guild) : null;
+    // A name nobody here has can still match in the channel scan below.
+    let rows = !configured(config) || (author && !id) ? [] : await searchContext(config, { query, authorId: id });
+    if (!rows.length) {
+      // Not remembered yet: look through this channel and keep only what answers the question.
+      const recent = (await readChannelRange(message, { count: 100 })).filter(
+        (m) => m.content && (!author || m.author.id === id || nameIs(m, author)),
+      );
+      // Only lines Jev matched to the query are worth remembering; a bare author lookup saves nothing.
+      const found = query ? await pickRelevant(config, recent, relevantTo, query) : recent.slice(-40);
+      if (query) await saveContext(config, found).catch((err) => console.error('[history] save failed:', String(err.message || err).slice(0, 200)));
+      rows = found.map((m) => ({ author_id: m.author.id, content: m.content, created_at: m.createdAt }));
+    }
+    const users = invocation.client?.users?.cache;
+    return rows.length ? formatContext(rows, (uid) => users?.get(uid)?.username) : 'No earlier conversations matched — answer without them.';
   } catch (err) {
     console.error('[history] fetch failed:', String(err.message || err).slice(0, 200));
     return 'Stored history is unavailable right now — answer without it.';
@@ -140,10 +160,11 @@ export async function indexChat({ message: ref = '' } = {}, invocation) {
     if (!msgs.length) return 'No messages there.';
     let saved;
     try {
-      saved = `${await saveMessages(invocation.config, msgs.filter((m) => m.content), { keepExisting: true })} newly saved to history`;
+      const relevant = await pickRelevant(invocation.config, msgs.filter((m) => m.content), relevantTo, here.content);
+      saved = `${await saveContext(invocation.config, relevant)} newly remembered`;
     } catch (err) {
       console.error('[history] index_chat save failed:', String(err.message || err).slice(0, 200));
-      saved = 'not saved: the history database is unavailable';
+      saved = 'not remembered: the context database is unavailable';
     }
     const self = invocation.client?.user?.id;
     return [

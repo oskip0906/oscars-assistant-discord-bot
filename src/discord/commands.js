@@ -14,10 +14,14 @@ import { selfFixState } from '../selfFixState.js';
 import { setDevelopmentModel } from '../configManager.js';
 import { runResearch } from '../agent/research/pipeline.js';
 import { renderReport } from '../agent/research/render.js';
-import { indexChannel } from '../agent/historyStore.js';
 import { redactSecrets } from '../config.js';
 import { setRule } from '../agent/tools/rules.js';
 import { UI_PREFIX, clickAsMessage, createPoll, sendCard } from '../agent/tools/ui.js';
+import { saveNote, loadTree, openNote, getNote, relatedNotes, noteChoices, deleteNote, folderPath } from '../agent/notes.js';
+import { NOTES_PREFIX, noteMessage, folderView, deleteNoteConfirm } from './notes.js';
+import { addReminder, activeReminders, reminderChoices, deleteReminder, timezoneChoices, repeatText } from '../reminders.js';
+import { remindersEmbed } from './reminders.js';
+import { STORAGE_PREFIX, cleanup, dismiss, SECTIONS, mb } from '../storage.js';
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -95,9 +99,43 @@ export const commandDefs = [
           { name: 'status', value: 'status' },
         ),
     ),
+  new SlashCommandBuilder().setName('save_note').setDescription('Save a summary of the recent conversation here as a note'),
+  new SlashCommandBuilder().setName('display_notes').setDescription('Browse every saved note, folder by folder'),
   new SlashCommandBuilder()
-    .setName('index_chat')
-    .setDescription('Save this channel’s new messages to Panda’s history; saved ones are kept (owner only)'),
+    .setName('open_note')
+    .setDescription('Open a note by its title, or the closest match')
+    .addStringOption((o) => o.setName('title').setDescription('Note title — start typing to search').setRequired(true).setAutocomplete(true)),
+  new SlashCommandBuilder()
+    .setName('delete_note')
+    .setDescription('Delete one of your notes (Oscar can delete any)')
+    .addStringOption((o) => o.setName('note').setDescription('Start typing the title').setRequired(true).setAutocomplete(true)),
+  new SlashCommandBuilder()
+    .setName('add_reminder')
+    .setDescription('Get a DM from Panda at a set time, once or on repeat')
+    .addStringOption((o) => o.setName('name').setDescription('What to remind you about').setRequired(true).setMaxLength(200))
+    .addStringOption((o) =>
+      o
+        .setName('repeat')
+        .setDescription('Once, or how often')
+        .setRequired(true)
+        .addChoices(
+          { name: 'once', value: 'once' },
+          { name: 'every day', value: 'daily' },
+          { name: 'every week', value: 'weekly' },
+          { name: 'every month', value: 'monthly' },
+        ),
+    )
+    .addStringOption((o) =>
+      o.setName('when').setDescription('once: 2026-10-20 18:30 · daily: 18:30 · weekly: mon 18:30 · monthly: 15 18:30').setRequired(true),
+    )
+    .addStringOption((o) =>
+      o.setName('timezone').setDescription('Your timezone — needed the first time, then remembered').setAutocomplete(true),
+    ),
+  new SlashCommandBuilder().setName('show_reminders').setDescription('Show every active reminder'),
+  new SlashCommandBuilder()
+    .setName('delete_reminder')
+    .setDescription('Delete one of your reminders (Oscar can delete any)')
+    .addStringOption((o) => o.setName('reminder').setDescription('Start typing its name').setRequired(true).setAutocomplete(true)),
   new SlashCommandBuilder()
     .setName('set_rule')
     .setDescription('Change Panda’s personality or behavior for good (owner only)')
@@ -151,6 +189,58 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       return;
     }
 
+    // Oscar's answer to a "storage is full" DM.
+    if (interaction.isButton?.() && interaction.customId?.startsWith(STORAGE_PREFIX)) {
+      const [, action, section] = interaction.customId.split(':');
+      if (interaction.user.id !== config.ownerId || !SECTIONS[section]) {
+        return await interaction.reply({ content: '⛔ Only Oscar can answer this.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
+      const { label } = SECTIONS[section];
+      if (action !== 'clean') {
+        dismiss(section);
+        return await answerApproval(interaction, `⏸️ Left **${label}** as it is. It stays full, and I'll ask again in an hour.`);
+      }
+      await answerApproval(interaction, `🧹 Deleting the oldest **${label}** entries…`);
+      try {
+        const { deleted, used } = await cleanup(config, section);
+        await interaction.message?.edit(`✅ Deleted ${deleted} of the oldest **${label}** entries. It now holds ${mb(used)} of ${mb(SECTIONS[section].budget)}.`);
+      } catch (err) {
+        await interaction.message?.edit(`❌ Cleanup failed, nothing more was deleted: ${redactSecrets(err.message).slice(0, 200)}`).catch(() => {});
+      }
+      return;
+    }
+
+    // The notes browser (display_notes) and the delete confirmation (delete_note).
+    if ((interaction.isButton?.() || interaction.isStringSelectMenu?.()) && interaction.customId?.startsWith(NOTES_PREFIX)) {
+      if (privateMode?.isOn() && interaction.user.id !== config.ownerId) {
+        return await interaction.reply({ content: PRIVATE_MESSAGE, flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
+      try {
+        const [, action, arg] = interaction.customId.split(':');
+        if (action === 'keep') return await interaction.update({ content: '👍 Kept it.', components: [] });
+        if (action === 'del') {
+          const title = await deleteNote(config, Number(arg), interaction.user.id, interaction.user.id === config.ownerId);
+          return await interaction.update({ content: title ? `🗑️ Deleted **${title}**.` : 'That note is gone, or it isn’t yours to delete.', components: [] });
+        }
+        if (action === 'up') return await interaction.update(folderView(await loadTree(config), arg === 'root' ? null : Number(arg)));
+        if (action === 'nav') {
+          const value = interaction.values?.[0] || '';
+          const id = Number(value.slice(1));
+          if (value.startsWith('f')) return await interaction.update(folderView(await loadTree(config), id));
+          const note = await getNote(config, id);
+          if (!note) return await interaction.reply({ content: 'That note was deleted.', flags: MessageFlags.Ephemeral });
+          const { folders } = await loadTree(config);
+          const { embeds, rest } = noteMessage(note, folders, await relatedNotes(config, id));
+          await interaction.reply({ embeds, allowedMentions: { parse: [] } });
+          for (const part of rest) await interaction.followUp({ content: part, allowedMentions: { parse: [] } });
+        }
+      } catch (err) {
+        console.error('[notes] interaction failed:', err.message);
+        await interaction.reply({ content: `⚠️ ${redactSecrets(err.message).slice(0, 200)}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
+      return;
+    }
+
     if (interaction.isButton?.()) {
       const approval = parseApprovalButtonId(interaction.customId);
       if (!approval) return;
@@ -190,13 +280,30 @@ export function createInteractionHandler({ client, config, player, privateMode, 
     // Autocomplete is a separate interaction type with a 3s budget and no
     // deferral — answer it from the cached catalog and return.
     if (interaction.isAutocomplete()) {
-      if (interaction.user.id !== config.ownerId) return await interaction.respond([]).catch(() => {});
       const focused = interaction.options.getFocused(true);
-      if (interaction.commandName === 'set_model' || interaction.commandName === 'set_dev_model') {
-        const choices = await modelChoices(config, focused.value);
+      const owner = interaction.user.id === config.ownerId;
+      const short = (text) => (text.length > 100 ? `${text.slice(0, 99)}…` : text);
+      try {
+        let choices = [];
+        if (interaction.commandName === 'set_model' || interaction.commandName === 'set_dev_model') {
+          choices = owner ? await modelChoices(config, focused.value) : [];
+        } else if (interaction.commandName === 'open_note') {
+          choices = (await noteChoices(config, focused.value)).map((n) => ({ name: short(n.title), value: short(n.title) }));
+        } else if (interaction.commandName === 'delete_note') {
+          choices = (await noteChoices(config, focused.value, owner ? null : interaction.user.id)).map((n) => ({ name: short(n.title), value: String(n.id) }));
+        } else if (interaction.commandName === 'delete_reminder') {
+          choices = (await reminderChoices(config, focused.value, interaction.user.id, owner)).map((r) => ({
+            name: short(`${r.name} — ${r.active ? `next ${new Date(r.next_at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'done'}`),
+            value: String(r.id),
+          }));
+        } else if (interaction.commandName === 'add_reminder' && focused.name === 'timezone') {
+          choices = timezoneChoices(focused.value).map((tz) => ({ name: tz, value: tz }));
+        }
         return await interaction.respond(choices).catch(() => {});
+      } catch (err) {
+        console.error('[panda] autocomplete failed:', err.message);
+        return await interaction.respond([]).catch(() => {});
       }
-      return await interaction.respond([]).catch(() => {});
     }
 
     if (!interaction.isChatInputCommand()) return;
@@ -431,15 +538,84 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         return;
       }
 
-      if (name === 'index_chat') {
-        if (!isOwner) {
-          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+      // --- Notes and reminders (anyone) ---------------------------------
+
+      if (name === 'save_note') {
+        if (!interaction.channel?.messages) {
+          return await interaction.reply({ content: 'I can only save a note from a channel I can read.', flags: MessageFlags.Ephemeral });
         }
+        await interaction.deferReply();
+        const page = await interaction.channel.messages.fetch({ limit: 50 });
+        const messages = [...page.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+        const saved = await saveNote(config, { messages, authorId: interaction.user.id });
+        if (saved.error) return await interaction.editReply(`⚠️ ${saved.error}`);
+        return await interaction.editReply({
+          content: `📝 Saved **${saved.note.title}** in 📁 ${saved.path.join(' / ')}\n> ${saved.note.description}\nOpen it with \`/open_note\`.`,
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      if (name === 'display_notes') {
+        await interaction.deferReply();
+        return await interaction.editReply(folderView(await loadTree(config)));
+      }
+
+      if (name === 'open_note') {
+        await interaction.deferReply();
+        const note = await openNote(config, interaction.options.getString('title', true));
+        if (!note) return await interaction.editReply('No note matches that. Browse them with `/display_notes`.');
+        const { folders } = await loadTree(config);
+        const { embeds, rest } = noteMessage(note, folders, await relatedNotes(config, note.id));
+        await interaction.editReply({ embeds, allowedMentions: { parse: [] } });
+        for (const part of rest) await interaction.followUp({ content: part, allowedMentions: { parse: [] } });
+        return;
+      }
+
+      if (name === 'delete_note') {
+        const raw = interaction.options.getString('note', true).trim();
+        // Picked from the list it is an id; typed by hand it is a title.
+        const note = /^\d+$/.test(raw) ? await getNote(config, Number(raw)) : await openNote(config, raw);
+        if (!note || (note.author_id !== interaction.user.id && !isOwner)) {
+          return await interaction.reply({ content: 'I can’t find a note of yours with that title.', flags: MessageFlags.Ephemeral });
+        }
+        const { folders } = await loadTree(config);
+        const confirm = deleteNoteConfirm(note);
+        confirm.content += `\n📁 ${folderPath(folders, note.folder_id).join(' / ')}`;
+        return await interaction.reply({ ...confirm, flags: MessageFlags.Ephemeral });
+      }
+
+      if (name === 'add_reminder') {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const added = await indexChannel(config, interaction.channel);
-        const done = `✅ Added ${added} new messages from <#${interaction.channelId}>. Messages saved before were left as they are.`;
-        // A big channel can outlive the 15-minute interaction token; DM the result instead.
-        return await interaction.editReply(done).catch(() => interaction.user.send(done));
+        const added = await addReminder(config, {
+          userId: interaction.user.id,
+          name: interaction.options.getString('name', true),
+          repeat: interaction.options.getString('repeat', true),
+          when: interaction.options.getString('when', true),
+          timezone: interaction.options.getString('timezone'),
+        });
+        if (added.error) return await interaction.editReply(`⚠️ ${added.error}`);
+        const at = Math.floor(new Date(added.next_at).getTime() / 1000);
+        return await interaction.editReply(
+          `⏰ Got it: **${added.name}**, ${repeatText(added)}. First DM <t:${at}:F> (<t:${at}:R>). Make sure your DMs from server members are open.`,
+        );
+      }
+
+      if (name === 'show_reminders') {
+        await interaction.deferReply();
+        return await interaction.editReply({ embeds: [remindersEmbed(await activeReminders(config))], allowedMentions: { parse: [] } });
+      }
+
+      if (name === 'delete_reminder') {
+        const raw = interaction.options.getString('reminder', true).trim();
+        if (!/^\d+$/.test(raw)) {
+          return await interaction.reply({ content: 'Pick the reminder from the list as you type.', flags: MessageFlags.Ephemeral });
+        }
+        const removed = await deleteReminder(config, Number(raw), interaction.user.id, isOwner);
+        return await interaction.reply({
+          content: removed ? `🗑️ Deleted the reminder **${removed}**.` : 'That reminder is gone, or it isn’t yours to delete.',
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] },
+        });
       }
 
       if (name === 'set_rule') {

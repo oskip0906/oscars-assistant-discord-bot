@@ -17,7 +17,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # App source, and ARCHITECTURE.md, which the how_i_work tool reads to answer
-# questions about the bot. The prompts live in Supabase, not in the image.
+# questions about the bot. The prompts live in the database, not in the image.
 COPY src ./src
 COPY ARCHITECTURE.md ./
 

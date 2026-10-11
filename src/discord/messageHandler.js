@@ -4,7 +4,7 @@ import { chunkMessage } from './chunk.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
 import { selfFixState, SELF_FIX_MESSAGE } from '../selfFixState.js';
 import { decide } from '../agent/jev.js';
-import { saveMessages } from '../agent/historyStore.js';
+import { rememberTurn } from '../agent/historyStore.js';
 import { attachmentParts, gifPreviews } from './attachments.js';
 import { modelInputs } from './model.js';
 import { redactSecrets } from '../config.js';
@@ -253,7 +253,8 @@ export function createMessageHandler({ client, config, player, privateMode, self
         }
 
         // Saved after the reply is out, so the database can never delay or break it.
-        saveMessages(config, [...messages, ...sent]).catch((err) =>
+        // Only the lines Jev picks as worth remembering are kept; DMs never are.
+        rememberTurn(config, [...messages, ...sent], decideImpl).catch((err) =>
           console.error('[history] save failed:', String(err.message || err).slice(0, 200)),
         );
 

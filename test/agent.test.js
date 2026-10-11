@@ -123,11 +123,11 @@ test('saysNothing only matches text without letters or digits', () => {
 test("the bot's secrets never reach the model or a message, however they leak", async () => {
   const { config, redactSecrets } = await import('../src/config.js');
   const saved = { ...config };
-  Object.assign(config, { discordToken: 'MTIz.discord.token', openrouterApiKey: 'sk-or-v1-abcdef', githubPat: 'ghp_abcdefgh', supabaseKey: 'sb_secret_abcdefgh' });
+  Object.assign(config, { discordToken: 'MTIz.discord.token', openrouterApiKey: 'sk-or-v1-abcdef', githubPat: 'ghp_abcdefgh', databaseUrl: 'postgresql://app:pg_pass_1234@db:5432/app' });
   try {
     assert.equal(
-      redactSecrets('key sk-or-v1-abcdef, pat ghp_abcdefgh, db sb_secret_abcdefgh, bot MTIz.discord.token'),
-      'key [redacted], pat [redacted], db [redacted], bot [redacted]',
+      redactSecrets('key sk-or-v1-abcdef, pat ghp_abcdefgh, db postgresql://app:pg_pass_1234@db:5432/app, pw pg_pass_1234, bot MTIz.discord.token'),
+      'key [redacted], pat [redacted], db [redacted], pw [redacted], bot [redacted]',
     );
     // A tool whose output contains a secret: the model only ever sees it redacted.
     const seen = [];
