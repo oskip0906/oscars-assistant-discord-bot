@@ -16,3 +16,19 @@ test('OWNER_DISCORD_ID sets the owner, and anything that is not a Discord id fal
     else process.env.OWNER_DISCORD_ID = saved;
   }
 });
+
+test('YT_COOKIES_B64 is decoded into a private cookies file that wins over YT_COOKIES_FILE', async () => {
+  const saved = { b64: process.env.YT_COOKIES_B64, file: process.env.YT_COOKIES_FILE };
+  try {
+    process.env.YT_COOKIES_B64 = Buffer.from('# Netscape HTTP Cookie File\n').toString('base64');
+    process.env.YT_COOKIES_FILE = './cookies.txt';
+    const { config } = await import('../src/config.js?cookies');
+    assert.notEqual(config.ytCookiesFile, './cookies.txt');
+    assert.equal((await import('node:fs')).readFileSync(config.ytCookiesFile, 'utf8'), '# Netscape HTTP Cookie File\n');
+  } finally {
+    for (const [key, value] of [['YT_COOKIES_B64', saved.b64], ['YT_COOKIES_FILE', saved.file]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});

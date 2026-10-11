@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
@@ -10,6 +12,16 @@ dotenv.config({ path: path.join(projectRoot, '.env'), quiet: true });
 // owner, or with whatever junk was typed there as its owner.
 export const OWNER_ID = '767525911695851550';
 const envOwnerId = process.env.OWNER_DISCORD_ID?.trim() || '';
+
+// Containers have no file mounts, so the cookies can also come base64-encoded in
+// YT_COOKIES_B64. yt-dlp only reads a file, so they are written to one.
+function cookiesFile() {
+  const b64 = process.env.YT_COOKIES_B64;
+  if (!b64) return process.env.YT_COOKIES_FILE || '';
+  const file = path.join(os.tmpdir(), 'panda-yt-cookies.txt');
+  fs.writeFileSync(file, Buffer.from(b64, 'base64'), { mode: 0o600 });
+  return file;
+}
 
 function bool(value, fallback) {
   if (value === undefined || value === '') return fallback;
@@ -58,7 +70,7 @@ export const config = {
   dmEnabled: false,
   // YouTube now bot-walls unauthenticated stream extraction under load; a cookies
   // file (or browser) lets yt-dlp authenticate and play reliably.
-  ytCookiesFile: process.env.YT_COOKIES_FILE || '',
+  ytCookiesFile: cookiesFile(),
   ytCookiesFromBrowser: process.env.YT_COOKIES_FROM_BROWSER || '',
   searxngUrl: (process.env.SEARXNG_URL || 'http://127.0.0.1:8888').replace(/\/$/, ''),
   // Supabase Postgres holding every message sent to Panda plus whatever
@@ -73,7 +85,7 @@ export const config = {
 // so no bug, error message or tool output can hand one to whoever asks.
 export function redactSecrets(text) {
   let out = String(text ?? '');
-  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.supabaseKey]) {
+  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.supabaseKey, process.env.YT_COOKIES_B64]) {
     if (secret && secret.length >= 8) out = out.split(secret).join('[redacted]');
   }
   return out;
