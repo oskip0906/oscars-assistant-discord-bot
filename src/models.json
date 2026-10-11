@@ -1,4 +1,4 @@
 {
-  "conversation": "deepseek/deepseek-v4.1-flash",
+  "conversation": "openai/gpt-6-luna",
   "development": "deepseek/deepseek-v4-pro"
 }
