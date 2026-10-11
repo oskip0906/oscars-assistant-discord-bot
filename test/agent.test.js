@@ -131,3 +131,14 @@ test("the bot's secrets never reach the model or a message, however they leak", 
     Object.assign(config, saved);
   }
 });
+
+test('every tool a turn calls is recorded, in order, for the line above the reply', async () => {
+  const { toolsLine } = await import('../src/discord/messageHandler.js');
+  const step = (name) => ({ content: '', tool_calls: [{ id: name, function: { name, arguments: '{}' } }] });
+  const invocation = { contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', maxToolIterations: 4, ownerId: '1' }, message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' } } };
+  const replies = [step('get_message_sender'), step('get_user_id'), step('get_message_sender'), { content: 'done' }];
+  await runAgent(invocation, 'q', 'q', { chat: async () => replies.shift(), decideImpl: async () => null });
+  assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id', 'get_message_sender']);
+  assert.equal(toolsLine(invocation.toolsUsed), '-# 🔧 get_message_sender ×2 · get_user_id');
+  assert.equal(toolsLine([]), '');
+});

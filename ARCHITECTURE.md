@@ -43,6 +43,7 @@ The model is called with all tools, except as step 4 above says. Jev's tool, if 
 
 **6. Sending the reply.**
 - Reactions are already on the message by now, one or several.
+- The first message of a text reply starts with the tools the turn called, as small grey subtext: `-# 🔧 web_search ×2 · send_card`. A turn with no tools has no line. A reply that is only a reaction, poll or card has no text to carry the line.
 - Tool embeds (image results) go first, then the text. Text over Discord's **2,000-character** limit is split into several messages (`src/discord/chunk.js`), at a paragraph, line, sentence or word break, in that order of preference, with code fences closed and reopened so each part renders.
 - Bare links are wrapped in `<>` so they don't unfurl; image URLs stay bare.
 - Polls and cards (below) are posted by their tools as the loop runs, so they land before the text.

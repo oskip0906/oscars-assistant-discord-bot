@@ -198,3 +198,26 @@ test('a card posted on the last allowed step is the answer, not a tool-limit war
   const nothingPosted = { ...invocation, posted: false, message: { channel: channel(), author: { id: '2', username: 'someone' } } };
   assert.match(await runAgent(nothingPosted, 'q', 'q', { chat: async () => searchOnly, decideImpl: async () => null }), /tool-use limit/);
 });
+
+test('the reply starts with the tools the turn used, and has no line when it used none', async () => {
+  for (const [toolsUsed, expected] of [
+    [['web_search', 'web_search', 'send_card'], '-# 🔧 web_search ×2 · send_card\nHere you go.'],
+    [[], 'Here you go.'],
+  ]) {
+    const handler = createMessageHandler({
+      client: { user: { id: 'bot' } },
+      config: { ownerId: '1', allowBots: false, dmEnabled: true },
+      player: null,
+      privateMode: { isOn: () => false },
+      selfFix: { isActive: () => false },
+      runAgentImpl: async (invocation) => {
+        invocation.toolsUsed.push(...toolsUsed);
+        return 'Here you go.';
+      },
+    });
+    const ui = click();
+    await handler(clickAsMessage(ui));
+    for (let i = 0; i < 50 && !ui.calls.some(([k]) => k === 'followUp'); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(ui.calls.find(([k]) => k === 'followUp')[1].content, expected);
+  }
+});

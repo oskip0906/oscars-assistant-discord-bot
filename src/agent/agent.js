@@ -89,6 +89,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     for (const call of msg.tool_calls) {
       let result;
       const toolStart = Date.now();
+      (invocation.toolsUsed ??= []).push(call.function.name);
       log(contextKey, `→ ${call.function.name}(${clip(call.function.arguments || '{}', 300)})`);
       try {
         const args = JSON.parse(call.function.arguments || '{}');

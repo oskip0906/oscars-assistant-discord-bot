@@ -70,6 +70,14 @@ export function mentionsPanda(text, config) {
 // bare on purpose — for image_search results the embed IS the answer. Skips
 // URLs already wrapped, inside markdown links, or in inline code.
 const IMAGE_URL = /\.(png|jpe?g|gif|webp|avif)(\?\S*)?$/i;
+// "-# 🔧 web_search ×2 · send_card": the tools a turn called, as Discord's small
+// grey subtext above the reply. No tools, no line.
+export function toolsLine(names = []) {
+  const counts = new Map();
+  for (const name of names) counts.set(name, (counts.get(name) || 0) + 1);
+  return counts.size ? `-# 🔧 ${[...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ')}` : '';
+}
+
 export function suppressLinkEmbeds(text) {
   return String(text ?? '').replace(/(?<![<(`])\bhttps?:\/\/\S+/g, (url) =>
     IMAGE_URL.test(url) ? url : `<${url}>`,
@@ -164,6 +172,8 @@ export function createMessageHandler({ client, config, player, privateMode, self
           reacted: false,
           // A poll or card a tool posted (create_poll, send_card) counts as a response.
           posted: false,
+          // Every tool the agent calls this turn, in order; shown above the reply.
+          toolsUsed: [],
           batchedCount: messages.length,
           // Collect any Discord embeds produced by tool calls (e.g. image_search)
           // so they can be sent alongside the text reply.
@@ -213,7 +223,8 @@ export function createMessageHandler({ client, config, player, privateMode, self
         const sent = [];
         if (replyText.trim()) {
           replyText = suppressLinkEmbeds(redactSecrets(replyText));
-          const parts = chunkMessage(replyText);
+          const tools = toolsLine(invocation.toolsUsed);
+          const parts = chunkMessage(tools ? `${tools}\n${replyText}` : replyText);
           let first = true;
           for (const chunk of parts) {
             const payload = { content: chunk, allowedMentions: { parse: ['users'], repliedUser: true } };
