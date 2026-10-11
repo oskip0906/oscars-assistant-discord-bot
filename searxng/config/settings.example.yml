@@ -14,9 +14,10 @@ search:
     - json                # <-- enables the JSON API the bot uses
 
 # PMS's sandboxed network is slower than a laptop's: at the 3s default even
-# Wikipedia timed out there.
+# Wikipedia timed out there, and at 8s a cold start (Google CSE fetches a token
+# first) running 4 parallel searches timed out every engine at once.
 outgoing:
-  request_timeout: 8.0
+  request_timeout: 12.0
   max_request_timeout: 15.0
 
 engines:
