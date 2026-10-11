@@ -196,6 +196,13 @@ function parseArgs(raw) {
 
 const preview = (value, limit = 80) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
 
+// TAP prints the failing test above pages of passing ones, so a plain tail of
+// the output tells the model a test failed but never which one.
+export function failureExcerpt(output, limit = 4000) {
+  const at = output.search(/^[ \t]*not ok /m);
+  return at === -1 ? output.slice(-limit) : output.slice(at, at + limit);
+}
+
 // Drives the model through the checkout: it reads what it wants, writes what it
 // decides to change, and says when it is done. Replaces asking for the whole
 // repository up front and hoping one reply contains every finished file.
@@ -265,7 +272,7 @@ export async function runRepoAgent({ instruction, root, tracked = [], callModel,
           const failure = check ? await check(workspace.changed) : null;
           if (failure) {
             result = `Verification failed, so this is not finished. Fix the cause, then call finish again:\n${failure}`;
-            log(`[sandbox] step ${step + 1}: finish rejected — verification failed`);
+            log(`[sandbox] step ${step + 1}: finish rejected — verification failed: ${preview(failure, 200)}`);
           } else {
             done = { summary: args.summary || 'Automated development change.', description: args.description || '' };
             result = 'Finished.';

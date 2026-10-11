@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { runRepoAgent } from '../../src/agent/tools/repoAgent.js';
+import { failureExcerpt, runRepoAgent } from '../../src/agent/tools/repoAgent.js';
 
 function repo() {
   const root = mkdtempSync(path.join(tmpdir(), 'panda-sandbox-'));
@@ -99,4 +99,13 @@ test('a finish that fails verification goes back to the model, which can fix it 
   const toolReplies = conversation.filter((m) => m.role === 'tool').map((m) => m.content);
   assert.ok(toolReplies.some((r) => r.startsWith('Verification failed') && r.includes('names are unique')), 'the failure must reach the model');
   assert.equal(plan.completed, true);
+});
+
+test('a failed test run reaches the model from its first failure, not a tail of passing tests', () => {
+  const passing = Array.from({ length: 500 }, (_, i) => `ok ${i + 3} - fine`);
+  const tap = ['ok 1 - a', 'not ok 2 - names are unique', "  error: 'duplicate'", ...passing, '# fail 1'].join('\n');
+  const excerpt = failureExcerpt(tap);
+  assert.ok(excerpt.startsWith('not ok 2 - names are unique') && excerpt.includes('duplicate'));
+  assert.ok(excerpt.length <= 4000);
+  assert.equal(failureExcerpt('SyntaxError: Unexpected token'), 'SyntaxError: Unexpected token');
 });

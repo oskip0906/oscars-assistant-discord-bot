@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 // From the sandbox repository's own checkout, not the target's — this script and
 // the module are versioned together.
-import { runRepoAgent } from '../../src/agent/tools/repoAgent.js';
+import { failureExcerpt, runRepoAgent } from '../../src/agent/tools/repoAgent.js';
 import { McpClient, toOpenRouterTools } from '../../src/agent/mcp.js';
 
 const root = path.resolve(process.argv[2] || 'target');
@@ -17,7 +17,7 @@ function attempt(command, args, options = {}) {
 
 function run(command, args, options = {}) {
   const result = attempt(command, args, options);
-  if (!result.ok) throw new Error(`${command} ${args.join(' ')} failed:\n${result.output.slice(-4000)}`);
+  if (!result.ok) throw new Error(`${command} ${args.join(' ')} failed:\n${failureExcerpt(result.output)}`);
   return result.stdout;
 }
 
