@@ -102,5 +102,11 @@ jobs:
             done
             echo "::error::$1 was not running after 5 minutes."; return 1
           }
-          deploy panda-searxng ctr_30a2nhctz7kh "$HUB/panda-searxng:$GITHUB_SHA"
-          deploy panda-bot ctr_b01e7aw6var8 "$HUB/oscars-assistant-discord-bot:$GITHUB_SHA"
+          # Ids are looked up by name: a container that is recreated gets a new id.
+          containers=$(curl -fsS "$PMS_PROJECT/containers" -H "$auth" -A "$PMS_UA")
+          id_of() { jq -r --arg name "$1" '[.. | objects | select(.name? == $name and ((.id? // "") | tostring | startswith("ctr_")))][0].id // empty' <<<"$containers"; }
+          for name in panda-searxng panda-bot; do
+            [ -n "$(id_of "$name")" ] || { echo "::error::No container named $name in the PMS project."; exit 1; }
+          done
+          deploy panda-searxng "$(id_of panda-searxng)" "$HUB/panda-searxng:$GITHUB_SHA"
+          deploy panda-bot "$(id_of panda-bot)" "$HUB/oscars-assistant-discord-bot:$GITHUB_SHA"
