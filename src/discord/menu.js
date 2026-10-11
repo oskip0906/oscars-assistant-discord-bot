@@ -46,7 +46,6 @@ export function buildMenuEmbed(client, config) {
         name: '🛠️ Power Tools (Oscar only)',
         value: [
           '`/self_fix <instruction>` : Approve a remote-sandbox self-fix PR, then restart after it merges',
-          '`/run_dev <instruction> [repo]` : Approve a remote-sandbox development PR',
           '`/set_dev_model <model>` : Choose the OpenRouter model used for development work',
           '`/set_model <model>` : Switch me to another OpenRouter model',
           '`/set_rule <instruction>` : Change my personality or behavior for good',

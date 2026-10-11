@@ -164,7 +164,7 @@ export async function runDevelopmentSandbox(
   // From here the run outlives this process: a self-fix ends by restarting the
   // bot that is waiting on it. Recorded so the next boot can report what became
   // of it instead of the run finishing in silence.
-  store?.begin({ kind: selfFix ? 'self_fix' : 'run_dev', repo: targetRepo, branch, base: targetBase, requestId });
+  store?.begin({ kind: selfFix ? 'self_fix' : 'development', repo: targetRepo, branch, base: targetBase, requestId });
 
   const waited = await waitForPullRequest({
     gh,

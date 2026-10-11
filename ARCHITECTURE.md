@@ -105,7 +105,7 @@ Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), re
 | Role | Used for |
 |------|----------|
 | **Conversation** model | Chat replies, `/research` |
-| **Development** model | `self_fix` / `/run_dev`: the sandbox agent and commit messages; `set_rule`: rewriting `soul.md` |
+| **Development** model | `self_fix`: the sandbox agent and commit messages; `set_rule`: rewriting `soul.md` |
 | **Jev** (`typesafe/jev-1.13`) | Fast yes/no and pick-one decisions |
 
 `/set_model` and `/set_dev_model` (Oscar) switch models; `/model` shows the current one; `/usage` shows OpenRouter spend.
@@ -141,7 +141,7 @@ Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is o
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |
 | GitHub MCP tools | Read-only GitHub (**Oscar only**) |
 | `github` | GitHub REST API with Oscar's token (**Oscar only**) |
-| `create_pr` / `self_fix` | Development tasks ending in a PR (**Oscar only**) |
+| `self_fix` | Change Panda's own code through a merged PR (**Oscar only**) |
 | `set_rule` | Change Panda's personality (`soul.md`) for good (**Oscar only**) |
 
 "Oscar only" is checked in code against the sender's Discord user id, never against what the message says.
@@ -151,7 +151,7 @@ Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is o
 - **Music:** `/play`, `/skip`, `/pause`, `/resume`, `/stop`, `/queue`
 - **Skills:** `/research <query> [quick|normal|deep]`, `/web_search`, `/web_fetch`, `/image_search`
 - **Info:** `/menu`, `/usage`, `/model`
-- **Oscar only:** `/set_rule`, `/index_chat`, `/self_fix`, `/run_dev`, `/set_model`, `/set_dev_model`, `/private on|off|status`, `/github`
+- **Oscar only:** `/set_rule`, `/index_chat`, `/self_fix`, `/set_model`, `/set_dev_model`, `/private on|off|status`, `/github`
 
 ## Deep research
 
@@ -173,16 +173,16 @@ If nothing could be verified, the report says so.
 
 Each source is cited as a masked link with no `<>` around it, so Discord shows its preview card under the message. Research is the one place where previews stay on; links in chat replies are still wrapped in `<>`.
 
-## The development sandbox (`self_fix`, `/run_dev`, `create_pr`)
+## The development sandbox (`self_fix`)
 
-These never edit the running bot.
+`self_fix` is the only way Panda changes code, and only its own repo. It never edits the running bot.
 
 1. **Approval.** Panda posts an Approve / Cancel card. Only Oscar's click starts anything, and it waits as long as needed.
 2. **Dispatch.** `.github/workflows/development-sandbox.yml` clones the target repo into a throwaway Actions runner.
 3. **Agent loop.** The development model uses `list_files`, `read_file`, `write_file`, `delete_file`, `finish` and read-only GitHub MCP tools. It must read before writing, can't touch `.git`, `node_modules`, `data/`, `.env` or `.github/`, and has at most 40 steps.
 4. **Verify.** `node --check`, import resolution, `npm ci`, `npm test`, then a `panda-dev-*` branch and a PR.
 
-`self_fix` (Panda's own repo) enables auto-merge, waits for the merge, then exits with code 42 so the supervisor pulls and restarts. Others get the "rebuilding" message meanwhile; the lock frees itself after 30 min. `/run_dev` / `create_pr` return once the PR is open, and Oscar merges by hand.
+`self_fix` enables auto-merge and waits for the merge. The merge to main triggers the CI deploy, which restarts Panda on the fix; under `run.sh` it also exits with code 42 so the supervisor pulls and restarts. Others get the "rebuilding" message meanwhile; the lock frees itself after 30 min.
 
 ## Safety
 

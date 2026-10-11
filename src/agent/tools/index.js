@@ -13,7 +13,7 @@ import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.
 // (invocation.isOwner) — never by anything a message could claim, so no one can
 // impersonate Oscar into these. github is here because it acts with Oscar's
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
-export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'github', 'create_pr']);
+export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'github']);
 
 const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools];
 
@@ -29,7 +29,6 @@ const executors = {
   web_fetch: searchTools.webFetch,
   image_search: searchTools.imageSearch,
   github: githubTools.githubApi,
-  create_pr: githubTools.createPr,
   set_rule: rulesTools.setRule,
   self_fix: sourceTools.selfFix,
   play_music: musicTools.playMusic,

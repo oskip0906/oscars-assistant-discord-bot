@@ -58,7 +58,7 @@ export async function resolveInterruptedRun({ store, gh, log = console.log, noti
 
   log(
     [
-      `[panda] ${run.kind || 'run_dev'} finish outcome=${outcome}`,
+      `[panda] ${run.kind || 'self_fix'} finish outcome=${outcome}`,
       `repo=${run.repo}`,
       pr?.number ? `pr=${pr.number}` : '',
       pr?.html_url ? `url=${pr.html_url}` : '',

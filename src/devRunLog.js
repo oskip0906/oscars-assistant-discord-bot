@@ -1,7 +1,7 @@
-// Start/finish log lines for the two development surfaces, self_fix and
-// /run_dev. Both begin as a Discord interaction and end minutes later inside a
-// GitHub Actions sandbox, so stdout is the only place their whole lifecycle
-// lands on one timeline. self_fix in particular ends by restarting the process:
+// Start/finish log lines for self_fix, the one development surface. It begins
+// as a Discord interaction and ends minutes later inside a GitHub Actions
+// sandbox, so stdout is the only place its whole lifecycle lands on one
+// timeline. It ends by restarting the process:
 // without a finish line there is no record of why the bot went away, or of a
 // run that was approved and then died in the sandbox.
 
