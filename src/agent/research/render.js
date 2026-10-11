@@ -36,9 +36,9 @@ const trim = (text, limit) => {
 // linked earlier in the same block is not linked again — four repeats of the
 // same domain in one paragraph is noise, not attribution.
 //
-// The url is wrapped in <> inside the parens: suppressLinkEmbeds deliberately
-// skips anything preceded by '(', so without this every link renders its own
-// preview card and the report ends in a wall of them.
+// The url is left bare inside the parens, so Discord shows a preview card for
+// each source under the message: research is where those previews earn their
+// place. suppressLinkEmbeds skips anything preceded by '(', so they survive.
 export function linkify(text, claims, sources) {
   const sourceOf = new Map(claims.map((claim) => [claim.id, claim.sourceId]));
   const byId = new Map(sources.map((source) => [source.id, source]));
@@ -56,7 +56,7 @@ export function linkify(text, claims, sources) {
         const source = byId.get(sourceOf.get(id));
         if (!source || alreadyCited.has(source.id)) continue;
         alreadyCited.add(source.id);
-        links.push(`[${safe(source.domain) || 'source'}](<${source.url}>)`);
+        links.push(`[${safe(source.domain) || 'source'}](${source.url})`);
       }
       // Nothing new to point at: drop the marker rather than leave a bare [c7]
       // or a third link to a page already cited two sentences ago.

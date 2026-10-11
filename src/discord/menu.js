@@ -31,7 +31,7 @@ export function buildMenuEmbed(client, config) {
           '`/web_search <query>` : Search the web and cite links',
           '`/web_fetch <url>` : Read a full page',
           '`/image_search <query>` : Find pictures of anything',
-          '_…or just ask me in chat — I still use these skills myself, plus `get_user_id` and `react`._',
+          '_…or just ask me in chat — I still use these skills myself, plus polls, cards with buttons, and reactions._',
         ].join('\n'),
       },
       {

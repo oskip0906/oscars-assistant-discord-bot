@@ -45,7 +45,7 @@ test('names the angles that found nothing instead of only counting them', () => 
 
 test('claim markers become clickable links outside the code boxes', () => {
   const out = renderReport(report({ sections: twoSections }));
-  assert.ok(out.includes('(<https://cs.stanford.edu/x>)'), 'c1 should resolve to its source link');
+  assert.ok(out.includes('(https://cs.stanford.edu/x)'), 'c1 should resolve to its source link, bare so Discord previews it');
   assert.ok(!/\[c\d+\]/.test(out), `unresolved marker left in output: ${out}`);
 });
 

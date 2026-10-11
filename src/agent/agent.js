@@ -80,8 +80,9 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
       // the handler then sends nothing. Otherwise fall back to a placeholder.
       const text = msg.content?.trim() || '';
       log(contextKey, `turn done in ${Date.now() - turnStart}ms after ${iteration + 1} model call(s)`);
-      // After a reaction, a reply with no words (usually the same emoji echoed) is dropped.
-      if (invocation.reacted && saysNothing(text)) return '';
+      // After a reaction, poll or card, a reply with no words (usually the same
+      // emoji echoed) is dropped: something was already sent.
+      if ((invocation.reacted || invocation.posted) && saysNothing(text)) return '';
       return text || '🐼 …';
     }
 
@@ -112,7 +113,8 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   }
 
   log(contextKey, `hit tool-use limit (${config.maxToolIterations}) after ${Date.now() - turnStart}ms`);
-  return '⚠️ I hit my tool-use limit before finishing that. Ask again, maybe a narrower version.';
+  // A card or poll posted on the last step is the answer; a warning under it reads as a failure.
+  return invocation.posted ? '' : '⚠️ I hit my tool-use limit before finishing that. Ask again, maybe a narrower version.';
   } catch (err) {
     log(contextKey, `turn failed after ${Date.now() - turnStart}ms: ${err.message || err}`);
     throw err;

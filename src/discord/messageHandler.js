@@ -162,6 +162,8 @@ export function createMessageHandler({ client, config, player, privateMode, self
           privateMode,
           requestRestart: false,
           reacted: false,
+          // A poll or card a tool posted (create_poll, send_card) counts as a response.
+          posted: false,
           batchedCount: messages.length,
           // Collect any Discord embeds produced by tool calls (e.g. image_search)
           // so they can be sent alongside the text reply.
@@ -199,7 +201,7 @@ export function createMessageHandler({ client, config, player, privateMode, self
 
         // A response is MANDATORY (reaction or text — never none). If the model
         // produced neither, fall back to a reaction, then to text.
-        if (!replyText.trim() && !invocation.reacted) {
+        if (!replyText.trim() && !invocation.reacted && !invocation.posted) {
           try {
             await anchor.react('👀');
             invocation.reacted = true;

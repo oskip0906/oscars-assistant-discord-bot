@@ -14,7 +14,8 @@ export function formatEnvelope(message, refMsg = null) {
   const header = [`${display} (@${author.username}, id:${author.id})`];
   if (author.bot) header.push('[BOT]');
   if (refMsg?.author) {
-    const quote = String(refMsg.content || '')
+    // A card (send_card) has no text of its own; its title says what it was.
+    const quote = String(refMsg.content || refMsg.embeds?.[0]?.title || refMsg.embeds?.[0]?.description || '')
       .replace(/\s+/g, ' ')
       .slice(0, 180);
     // The message id lets the model pull in what surrounded it with index_chat.

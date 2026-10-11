@@ -65,8 +65,9 @@ async function boot(intents) {
   client.on(Events.GuildCreate, (guild) => {
     guild.commands.set(commandDefs).catch(() => {});
   });
-  client.on(Events.MessageCreate, createMessageHandler({ client, config, player, privateMode }));
-  client.on(Events.InteractionCreate, createInteractionHandler({ client, config, player, privateMode }));
+  const onMessage = createMessageHandler({ client, config, player, privateMode });
+  client.on(Events.MessageCreate, onMessage);
+  client.on(Events.InteractionCreate, createInteractionHandler({ client, config, player, privateMode, onMessage }));
   client.on(Events.Error, (err) => console.error('[panda] client error:', err));
 
   try {

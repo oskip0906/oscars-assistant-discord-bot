@@ -17,6 +17,7 @@ import { renderReport } from '../agent/research/render.js';
 import { indexChannel } from '../agent/historyStore.js';
 import { redactSecrets } from '../config.js';
 import { setRule } from '../agent/tools/rules.js';
+import { UI_PREFIX, clickAsMessage } from '../agent/tools/ui.js';
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -129,8 +130,17 @@ async function answerApproval(interaction, content) {
   }
 }
 
-export function createInteractionHandler({ client, config, player, privateMode, state = selfFixState }) {
+export function createInteractionHandler({ client, config, player, privateMode, state = selfFixState, onMessage }) {
   return async (interaction) => {
+    // A click on a button or menu Panda sent (send_card). Acknowledge now, since
+    // Discord's 3-second deadline would pass during batching, then hand it to the
+    // message handler as a message from whoever clicked.
+    if ((interaction.isButton?.() || interaction.isStringSelectMenu?.()) && interaction.customId?.startsWith(UI_PREFIX)) {
+      await interaction.deferUpdate().catch(() => {});
+      if (interaction.channel && onMessage) await onMessage(clickAsMessage(interaction));
+      return;
+    }
+
     if (interaction.isButton?.()) {
       const approval = parseApprovalButtonId(interaction.customId);
       if (!approval) return;

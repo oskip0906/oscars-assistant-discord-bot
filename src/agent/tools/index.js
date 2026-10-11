@@ -2,6 +2,7 @@ import * as discordTools from './discord.js';
 import * as searchTools from './search.js';
 import * as githubTools from './github.js';
 import * as rulesTools from './rules.js';
+import * as uiTools from './ui.js';
 import * as sourceTools from './source.js';
 import * as musicTools from './music.js';
 import * as historyTools from './history.js';
@@ -14,7 +15,7 @@ import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
 export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'github', 'create_pr']);
 
-const modules = [discordTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools];
+const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -22,6 +23,8 @@ const executors = {
   get_user_id: discordTools.getUserId,
   get_message_sender: discordTools.getMessageSender,
   react: discordTools.react,
+  create_poll: uiTools.createPoll,
+  send_card: uiTools.sendCard,
   web_search: searchTools.webSearch,
   web_fetch: searchTools.webFetch,
   image_search: searchTools.imageSearch,

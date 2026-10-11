@@ -45,7 +45,16 @@ The model is called with all tools, except as step 4 above says. Jev's tool, if 
 - Reactions are already on the message by now, one or several.
 - Tool embeds (image results) go first, then the text. Text over Discord's **2,000-character** limit is split into several messages (`src/discord/chunk.js`), at a paragraph, line, sentence or word break, in that order of preference, with code fences closed and reopened so each part renders.
 - Bare links are wrapped in `<>` so they don't unfurl; image URLs stay bare.
-- A response is mandatory: with no text and no reaction, Panda reacts 👀.
+- Polls and cards (below) are posted by their tools as the loop runs, so they land before the text.
+- A response is mandatory: with no text, no reaction and no poll or card, Panda reacts 👀. After a poll or card, a reply with no words is dropped, and so is the tool-limit warning: the poll or card is the answer.
+
+**Discord UI.** Panda can post UI on its own when it reads better than text (`src/agent/tools/ui.js`). `identity.md` says when.
+- `create_poll`: a native Discord poll with 2–10 answers, open 1–768 hours (default 24), single or multi-choice. Discord counts the votes.
+- `send_card`: an embed box with a title, text, up to 25 fields, an image and a footer. Under it go up to 5 buttons and an optional dropdown of 2–25 choices.
+  - A button with a url is a **link button**.
+  - Buttons without one, and the dropdown, are **clickable**. Their ids start with `ui:`.
+- **A click is a message.** The click is acknowledged at once, because Discord allows 3 seconds. It then goes through the message handler as a message from whoever clicked: `[clicked "Spicy miso ramen"]`, replying to the card, whose title the model sees. So a click gets the same batching, Jev triage, owner checks (against the clicker) and private mode as typed text, and the answer goes out as a follow-up to the click. Anyone who can see the card can click it.
+- Both tools check their input first (answer counts, http(s) links, button and choice limits). They hand Discord's own validation errors back to the model to fix, and pass everything they send through `redactSecrets`.
 - The batch and the reply are saved to the message database after sending.
 
 **7. Bot-to-bot conversations.**
@@ -122,6 +131,8 @@ Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is o
 |------|--------------|
 | `get_user_id` / `get_message_sender` | Find a member's or bot's id; who sent this message |
 | `react` | React with an emoji, one or several (Jev decides whether text follows) |
+| `create_poll` | Post a native Discord poll |
+| `send_card` | Post an embed card, with link buttons, clickable buttons or a dropdown |
 | `web_search` / `web_fetch` | Search via SearXNG; read a public page |
 | `image_search` | Up to 3 images, shown as embeds |
 | `fetch_history` | Read further back in the channel, or search older conversations |
@@ -159,6 +170,8 @@ Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is o
 | `deep` | 5 | 32 | 2 | 10 min |
 
 If nothing could be verified, the report says so.
+
+Each source is cited as a masked link with no `<>` around it, so Discord shows its preview card under the message. Research is the one place where previews stay on; links in chat replies are still wrapped in `<>`.
 
 ## The development sandbox (`self_fix`, `/run_dev`, `create_pr`)
 

@@ -9,7 +9,7 @@ export const GITHUB_MCP_READONLY_URL = 'https://api.githubcopilot.com/mcp/readon
 // Built-ins win a name clash. An MCP tool called web_search would otherwise
 // shadow ours in the executor lookup and silently break a working tool.
 const RESERVED = new Set([
-  'get_user_id', 'get_message_sender', 'react', 'web_search', 'web_fetch', 'image_search',
+  'get_user_id', 'get_message_sender', 'react', 'create_poll', 'send_card', 'web_search', 'web_fetch', 'image_search',
   'github', 'create_pr', 'set_rule', 'self_fix', 'play_music',
   'fetch_history', 'index_chat', 'how_i_work',
 ]);

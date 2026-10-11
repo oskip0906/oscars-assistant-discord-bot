@@ -12,6 +12,7 @@
 - **Search** the web and images through a private SearXNG, and read any public page.
 - **Research** a question in depth and write a cited, fact-checked report (`/research`).
 - **Play music** in voice channels.
+- **Post polls and embed cards** with link buttons, clickable buttons and dropdowns, on its own when it fits; a click is answered like a message.
 - **Read GitHub** and **change its own code** behind an approval button (Oscar only).
 - **Change its personality** for good when Oscar says so, in chat or with `/set_rule` (Oscar only).
 
