@@ -103,7 +103,7 @@ function detailedBody(plan, changed, checks) {
     ...(plan.completed === false ? ['', '⚠️ The model hit its step limit before summarising; the edits it had written are included.'] : []),
     '',
     `Model: \`${env.MODEL}\` (agent loop: it read and wrote files directly)`,
-    ...(env.PANDA_MCP_PAT ? [`GitHub MCP: ${env.SANDBOX_MCP_WRITE === 'true' ? 'read/write' : 'read-only'} (orientation only; every edit above was written and verified in the checkout)`] : []),
+    ...(env.GH_PAT ? [`GitHub MCP: ${env.SANDBOX_MCP_WRITE === 'true' ? 'read/write' : 'read-only'} (orientation only; every edit above was written and verified in the checkout)`] : []),
   ].join('\n');
 }
 
@@ -117,11 +117,11 @@ function detailedBody(plan, changed, checks) {
 // itself; SANDBOX_MCP_WRITE=true opts into that with eyes open.
 //
 // api.githubcopilot.com does not accept the Actions GITHUB_TOKEN, so this needs
-// PANDA_MCP_PAT. Without it the sandbox simply runs as it did before.
+// GH_PAT. Without it the sandbox simply runs as it did before.
 async function githubMcp() {
-  const token = env.PANDA_MCP_PAT;
+  const token = env.GH_PAT;
   if (!token) {
-    console.log('::notice::PANDA_MCP_PAT is not set — running with the file tools only.');
+    console.log('::notice::GH_PAT is not set — running with the file tools only.');
     return { extraTools: [], callExtraTool: null };
   }
   const write = env.SANDBOX_MCP_WRITE === 'true';

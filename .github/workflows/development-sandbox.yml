@@ -37,9 +37,9 @@ on:
         type: boolean
 
 # Development happens in a separate checkout of the target repository, never in
-# this one. PANDA_DEV_GITHUB_TOKEN is a repository secret with access to the
-# target repos; it is never exposed to the OpenRouter request or to the checked
-# out target files. When that secret is missing the job falls back to the
+# this one. GH_PAT is the same GitHub token the bot runs on (GITHUB_PAT; Actions
+# secret names can't start with GITHUB_). It is never exposed to the OpenRouter
+# request or to the checked out target files. When that secret is missing the job falls back to the
 # built-in GITHUB_TOKEN, which can only reach this repository — hence the write
 # permissions below.
 permissions:
@@ -54,9 +54,9 @@ jobs:
     env:
       # Empty secrets are falsy in expressions, so this resolves to the built-in
       # token whenever the PAT has not been configured.
-      SANDBOX_TOKEN: ${{ secrets.PANDA_DEV_GITHUB_TOKEN || github.token }}
-      GH_TOKEN: ${{ secrets.PANDA_DEV_GITHUB_TOKEN || github.token }}
-      HAS_SANDBOX_PAT: ${{ secrets.PANDA_DEV_GITHUB_TOKEN != '' }}
+      SANDBOX_TOKEN: ${{ secrets.GH_PAT || github.token }}
+      GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+      HAS_SANDBOX_PAT: ${{ secrets.GH_PAT != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -72,10 +72,10 @@ jobs:
         run: |
           if [ "$HAS_SANDBOX_PAT" != "true" ]; then
             if [ "$TARGET_REPO" != "$GITHUB_REPOSITORY" ]; then
-              echo "::error::PANDA_DEV_GITHUB_TOKEN is not set in $GITHUB_REPOSITORY. Add it as a repository Actions secret (fine-grained PAT with Contents and Pull requests read/write on $TARGET_REPO) to develop repositories other than this one."
+              echo "::error::GH_PAT is not set in $GITHUB_REPOSITORY. Add it as a repository Actions secret (fine-grained PAT with Contents and Pull requests read/write on $TARGET_REPO) to develop repositories other than this one."
               exit 1
             fi
-            echo "::warning::PANDA_DEV_GITHUB_TOKEN is not set; using the built-in GITHUB_TOKEN. Pull requests it opens or merges do not trigger other workflows."
+            echo "::warning::GH_PAT is not set; using the built-in GITHUB_TOKEN. Pull requests it opens or merges do not trigger other workflows."
           fi
           if [ -z "${OPENROUTER_API_KEY:-}" ]; then
             echo "::error::OPENROUTER_API_KEY is not set as a repository Actions secret in $GITHUB_REPOSITORY."
@@ -116,7 +116,7 @@ jobs:
           SELF_FIX: ${{ inputs.self_fix }}
           # GitHub's hosted MCP server needs a user PAT; the Actions GITHUB_TOKEN
           # is not accepted there. Absent, the sandbox runs with file tools only.
-          PANDA_MCP_PAT: ${{ secrets.PANDA_MCP_PAT }}
+          GH_PAT: ${{ secrets.GH_PAT }}
           # Remote writes bypass node --check, npm test, and the FORBIDDEN path
           # guard, so they stay off unless the repository variable says otherwise.
           SANDBOX_MCP_WRITE: ${{ vars.SANDBOX_MCP_WRITE }}

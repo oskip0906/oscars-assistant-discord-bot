@@ -72,12 +72,21 @@ jobs:
           if [ -z "$token" ]; then echo "::error::PMS sign-in failed: check PMS_EMAIL and PMS_PASSWORD."; exit 1; fi
           echo "::add-mask::$token"
           auth="Authorization: Bearer $token"
+          # The account that owns the project is the one that can deploy to it.
+          me=$(curl -sS https://api.pmservers.org/v1/me -H "$auth")
+          echo "Signed in to PMS as user $(jq -r '.id // .user_id // "?"' <<<"$me")"
+          if ! curl -fsS "$PMS_PROJECT" -H "$auth" >/dev/null; then
+            echo "::error::This PMS account cannot see the project. PMS_EMAIL / PMS_PASSWORD must belong to the account that owns it."
+            exit 1
+          fi
 
           # deploy <container name> <container id> <image>: point it at the image,
           # then wait until that image is running (or show why it failed).
           deploy() {
             url="$PMS_PROJECT/containers/$2"
-            jq -n --arg image "$3" '{$image}' | curl -fsS -X PATCH "$url" -H "$auth" -H 'Content-Type: application/json' -d @- >/dev/null
+            res=$(jq -n --arg image "$3" '{$image}' | curl -sS -w '\n%{http_code}' -X PATCH "$url" -H "$auth" -H 'Content-Type: application/json' -d @-)
+            code=$(tail -n1 <<<"$res")
+            if [ "${code:0:1}" != 2 ]; then echo "::error::PMS refused to update $1 (HTTP $code): $(sed '$d' <<<"$res")"; return 1; fi
             sleep 15 # let the old container's "running" give way to the redeploy
             for _ in $(seq 60); do
               sleep 5
