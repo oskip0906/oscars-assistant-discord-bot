@@ -60,6 +60,9 @@ jobs:
           PMS_AUTH: https://wwickoajouezsoodlllo.supabase.co/auth/v1/token?grant_type=password
           PMS_AUTH_KEY: sb_publishable_RzVjSg1pNdV_cBQvowjAuw_7OY467iw
           PMS_PROJECT: https://api.pmservers.org/v1/projects/prj_d6zd0y6e3t41
+          # Cloudflare in front of api.pmservers.org challenges plain curl from
+          # GitHub's runners; identify as the official CLI does.
+          PMS_UA: pms/0.5.0
           HUB: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           if [ -z "$PMS_EMAIL" ] || [ -z "$PMS_PASSWORD" ]; then
@@ -74,8 +77,8 @@ jobs:
           auth="Authorization: Bearer $token"
           # The account that owns the project is the one that can deploy to it.
           echo "Signed in as auth user $(python3 -c 'import sys, json, base64; p = sys.stdin.read().split(".")[1]; print(json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))["sub"])' <<<"$token")"
-          echo "PMS /me: $(curl -sS -w ' (HTTP %{http_code})' https://api.pmservers.org/v1/me -H "$auth")"
-          if ! curl -fsS "$PMS_PROJECT" -H "$auth" >/dev/null; then
+          echo "PMS /me: $(curl -sS -w ' (HTTP %{http_code})' https://api.pmservers.org/v1/me -H "$auth" -A "$PMS_UA")"
+          if ! curl -fsS "$PMS_PROJECT" -H "$auth" -A "$PMS_UA" >/dev/null; then
             echo "::error::This PMS account cannot see the project. PMS_EMAIL / PMS_PASSWORD must belong to the account that owns it."
             exit 1
           fi
@@ -84,17 +87,17 @@ jobs:
           # then wait until that image is running (or show why it failed).
           deploy() {
             url="$PMS_PROJECT/containers/$2"
-            res=$(jq -n --arg image "$3" '{$image}' | curl -sS -w '\n%{http_code}' -X PATCH "$url" -H "$auth" -H 'Content-Type: application/json' -d @-)
+            res=$(jq -n --arg image "$3" '{$image}' | curl -sS -w '\n%{http_code}' -X PATCH "$url" -H "$auth" -A "$PMS_UA" -H 'Content-Type: application/json' -d @-)
             code=$(tail -n1 <<<"$res")
             if [ "${code:0:1}" != 2 ]; then echo "::error::PMS refused to update $1 (HTTP $code): $(sed '$d' <<<"$res")"; return 1; fi
             sleep 15 # let the old container's "running" give way to the redeploy
             for _ in $(seq 60); do
               sleep 5
-              status=$(curl -fsS "$url" -H "$auth" | jq -r --arg image "$3" 'if .image == $image then .status else "updating" end' || echo unreachable)
+              status=$(curl -fsS "$url" -H "$auth" -A "$PMS_UA" | jq -r --arg image "$3" 'if .image == $image then .status else "updating" end' || echo unreachable)
               echo "$1: $status"
               case "$status" in
                 running) return 0 ;;
-                failed) curl -fsS "$url/logs?tail=40" -H "$auth" | jq -r '.lines[].message'; return 1 ;;
+                failed) curl -fsS "$url/logs?tail=40" -H "$auth" -A "$PMS_UA" | jq -r '.lines[].message'; return 1 ;;
               esac
             done
             echo "::error::$1 was not running after 5 minutes."; return 1
