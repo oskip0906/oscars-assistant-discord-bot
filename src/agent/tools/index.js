@@ -23,6 +23,7 @@ const allDefs = modules.flatMap((m) => m.defs);
 const executors = {
   get_user_id: discordTools.getUserId,
   get_message_sender: discordTools.getMessageSender,
+  server_info: discordTools.serverInfo,
   react: discordTools.react,
   create_poll: uiTools.createPoll,
   send_card: uiTools.sendCard,

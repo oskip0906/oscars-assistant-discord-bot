@@ -1,3 +1,5 @@
+import { ChannelType, PermissionFlagsBits, GuildScheduledEventStatus } from 'discord.js';
+
 export const defs = [
   {
     type: 'function',
@@ -26,6 +28,22 @@ export const defs = [
           emoji: { type: 'string', description: 'The emoji to react with' },
         },
         required: ['emoji'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'server_info',
+      description:
+        "Look up anything about this Discord server as it is right now: its channels, roles, scheduled events, members and users, emojis, stickers and threads. Use it for any question about the server or the people in it. Sections: 'overview' (name, owner, counts, boosts, created), 'channels' (every category, channel and topic the sender can see), 'roles' (color, member count, key permissions), 'events' (scheduled events: start/end, where, status, how many are interested), 'members' (who is here and their roles; `query` filters by name), 'user' (one member in detail: roles, nickname, joined, account age, voice; `query` is a name, @mention or id), 'emojis' (custom emojis and stickers), 'threads' (active threads).",
+      parameters: {
+        type: 'object',
+        properties: {
+          section: { type: 'string', enum: ['overview', 'channels', 'roles', 'events', 'members', 'user', 'emojis', 'threads'] },
+          query: { type: 'string', description: "For 'members': a name filter. For 'user': the member's name, @mention or id (default: the sender)." },
+        },
+        required: ['section'],
       },
     },
   },
@@ -110,4 +128,134 @@ export function getMessageSender(_args, invocation) {
     isOwner: author.id === invocation.config.ownerId,
     pingWith: `<@${author.id}>`,
   });
+}
+
+// --- server_info --------------------------------------------------------------
+
+const LIST_MAX = 100;
+const KEY_PERMISSIONS = ['Administrator', 'ManageGuild', 'ManageChannels', 'ManageRoles', 'ManageMessages', 'KickMembers', 'BanMembers', 'ModerateMembers', 'MentionEveryone'];
+// A Discord timestamp renders in each reader's own timezone.
+const when = (date) => (date ? `<t:${Math.floor(date.getTime() / 1000)}:F>` : 'unknown');
+const capped = (lines, what) => (lines.length > LIST_MAX ? [...lines.slice(0, LIST_MAX), `…and ${lines.length - LIST_MAX} more ${what}`] : lines);
+// Only what the sender could see themselves, so a private channel's name or topic never leaks.
+const visible = (channel, viewer) => channel?.permissionsFor?.(viewer)?.has(PermissionFlagsBits.ViewChannel) ?? false;
+const memberLine = (m) => `${m.displayName} (@${m.user.username}) id:${m.id}${m.user.bot ? ' [BOT]' : ''}`;
+const roleNames = (m, guild) =>
+  [...m.roles.cache.values()].filter((r) => r.id !== guild.id).sort((a, b) => b.position - a.position).map((r) => r.name);
+
+// The full list needs the Server Members intent (index.js falls back without
+// it); then only the members Discord already sent are known.
+async function allMembers(guild) {
+  if (guild.client?.options?.intents?.has?.('GuildMembers')) await guild.members.fetch().catch(() => null);
+  return [...guild.members.cache.values()];
+}
+
+async function findMember(guild, query) {
+  const raw = String(query).trim();
+  const id = raw.match(/^<@!?(\d+)>$/)?.[1] || raw.match(/^(\d{15,})$/)?.[1];
+  if (id) return guild.members.fetch(id).catch(() => null);
+  const name = raw.replace(/^@+/, '').toLowerCase();
+  const found = await guild.members.search({ query: name, limit: 1 }).catch(() => null);
+  return (
+    found?.first?.() ??
+    [...guild.members.cache.values()].find((m) => m.user.username.toLowerCase().includes(name) || m.displayName.toLowerCase().includes(name)) ??
+    null
+  );
+}
+
+export async function serverInfo({ section, query = '' }, invocation) {
+  const guild = invocation.guild;
+  if (!guild) return 'This is a DM, not a server: there are no channels, roles or events to read.';
+  const viewer = invocation.member ?? guild.roles.everyone;
+  const q = String(query || '').trim();
+
+  switch (section) {
+    case 'overview': {
+      const owner = await guild.fetchOwner().catch(() => null);
+      return [
+        `${guild.name} (id:${guild.id})${guild.description ? `: ${guild.description}` : ''}`,
+        `Owner: ${owner ? memberLine(owner) : `id:${guild.ownerId}`}`,
+        `Members: ${guild.memberCount} · Channels: ${guild.channels.cache.size} · Roles: ${guild.roles.cache.size} · Custom emojis: ${guild.emojis.cache.size}`,
+        `Boost level ${guild.premiumTier} with ${guild.premiumSubscriptionCount ?? 0} boosts`,
+        `Created ${when(guild.createdAt)}`,
+      ].join('\n');
+    }
+    case 'channels': {
+      const channels = [...(await guild.channels.fetch()).values()].filter((c) => c && visible(c, viewer));
+      const byPosition = (a, b) => a.rawPosition - b.rawPosition;
+      const voice = [ChannelType.GuildVoice, ChannelType.GuildStageVoice];
+      const line = (c) => `${voice.includes(c.type) ? '🔊' : '#'}${c.name} (${ChannelType[c.type]}) id:${c.id}${c.topic ? ` — ${c.topic.slice(0, 150)}` : ''}`;
+      const categories = channels.filter((c) => c.type === ChannelType.GuildCategory).sort(byPosition);
+      const shown = new Set(categories.map((c) => c.id));
+      // A channel whose category the sender can't see is listed on its own.
+      const out = channels.filter((c) => c.type !== ChannelType.GuildCategory && !shown.has(c.parentId)).sort(byPosition).map(line);
+      for (const cat of categories) out.push(`[${cat.name}]`, ...channels.filter((c) => c.parentId === cat.id).sort(byPosition).map((c) => `  ${line(c)}`));
+      return out.length ? capped(out, 'channels').join('\n') : 'No channels the sender can see.';
+    }
+    case 'roles': {
+      const roles = [...(await guild.roles.fetch()).values()].sort((a, b) => b.position - a.position);
+      await allMembers(guild);
+      const lines = roles.map((r) => {
+        const granted = r.permissions.toArray();
+        const perms = KEY_PERMISSIONS.filter((p) => granted.includes(p));
+        return `${r.name} id:${r.id} · ${r.hexColor} · ${r.members.size} member(s)${r.managed ? ' · managed by an integration' : ''}${perms.length ? ` · ${perms.join(', ')}` : ''}`;
+      });
+      return capped(lines, 'roles').join('\n');
+    }
+    case 'events': {
+      const events = [...(await guild.scheduledEvents.fetch()).values()]
+        .filter((e) => !e.channelId || visible(guild.channels.cache.get(e.channelId), viewer))
+        .sort((a, b) => a.scheduledStartTimestamp - b.scheduledStartTimestamp);
+      if (!events.length) return 'No scheduled events in this server.';
+      return events
+        .map((e) =>
+          [
+            `${e.name} (id:${e.id}) — ${GuildScheduledEventStatus[e.status] ?? e.status}`,
+            `  Starts ${when(e.scheduledStartAt)}${e.scheduledEndAt ? `, ends ${when(e.scheduledEndAt)}` : ''}`,
+            `  Where: ${e.channelId ? `<#${e.channelId}>` : e.entityMetadata?.location || 'not set'} · ${e.userCount ?? '?'} interested`,
+            ...(e.description ? [`  ${e.description.slice(0, 300)}`] : []),
+            ...(e.url ? [`  ${e.url}`] : []),
+          ].join('\n'),
+        )
+        .join('\n');
+    }
+    case 'members': {
+      const pool = new Map((await allMembers(guild)).map((m) => [m.id, m]));
+      if (q) for (const m of (await guild.members.search({ query: q, limit: 100 }).catch(() => null))?.values() ?? []) pool.set(m.id, m);
+      const lower = q.toLowerCase();
+      const members = [...pool.values()]
+        .filter((m) => !q || m.displayName.toLowerCase().includes(lower) || m.user.username.toLowerCase().includes(lower))
+        .sort((a, b) => a.displayName.localeCompare(b.displayName));
+      if (!members.length) return q ? `No member matching "${q}".` : 'No members are loaded.';
+      const partial = !q && guild.memberCount > members.length ? ` of ${guild.memberCount} (the rest are not loaded)` : '';
+      const lines = members.map((m) => [memberLine(m), ...roleNames(m, guild)].join(' · '));
+      return [`${members.length} member(s)${partial}:`, ...capped(lines, 'members')].join('\n');
+    }
+    case 'user': {
+      const member = q ? await findMember(guild, q) : invocation.member;
+      if (!member) return q ? `No member matching "${q}" in this server.` : 'Say whose details to look up.';
+      const voiceChannel = member.voice?.channel;
+      return [
+        memberLine(member),
+        `Nickname: ${member.nickname || 'none'} · Roles: ${roleNames(member, guild).join(', ') || 'none'}`,
+        `Joined the server ${when(member.joinedAt)} · Account created ${when(member.user.createdAt)}`,
+        ...(member.premiumSince ? [`Boosting since ${when(member.premiumSince)}`] : []),
+        ...(member.communicationDisabledUntil > new Date() ? [`Timed out until ${when(member.communicationDisabledUntil)}`] : []),
+        ...(voiceChannel && visible(voiceChannel, viewer) ? [`In voice: 🔊${voiceChannel.name}`] : []),
+        ...(member.displayAvatarURL ? [`Avatar: ${member.displayAvatarURL()}`] : []),
+      ].join('\n');
+    }
+    case 'emojis': {
+      const emojis = [...(await guild.emojis.fetch()).values()].map((e) => `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>`);
+      const stickers = [...(await guild.stickers.fetch()).values()].map((s) => `${s.name} id:${s.id}`);
+      return [`Emojis (${emojis.length}): ${emojis.join(' ') || 'none'}`, `Stickers (${stickers.length}): ${stickers.join(', ') || 'none'}`].join('\n');
+    }
+    case 'threads': {
+      const { threads } = await guild.channels.fetchActiveThreads();
+      const lines = [...threads.values()].filter((t) => visible(t, viewer)).map((t) => `${t.name} id:${t.id} in <#${t.parentId}> · ${t.messageCount ?? '?'} messages`);
+      return lines.length ? capped(lines, 'threads').join('\n') : 'No active threads the sender can see.';
+    }
+    default:
+      return `Unknown section "${section}". Use one of: overview, channels, roles, events, members, user, emojis, threads.`;
+  }
 }

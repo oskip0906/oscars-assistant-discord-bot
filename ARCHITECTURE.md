@@ -158,6 +158,7 @@ Jev sees every message Panda can read in a server (with the 2 before it), so ord
 | Tool | What it does |
 |------|--------------|
 | `get_user_id` / `get_message_sender` | Find a member's or bot's id; who sent this message |
+| `server_info` | Read the server right now: overview, channels, roles, scheduled events, members, one user in detail, emojis and stickers, active threads. Read only. Channels, threads and events in channels the sender can't see are left out |
 | `react` | React with an emoji, one or several (Jev decides whether text follows) |
 | `create_poll` | Post a native Discord poll |
 | `send_card` | Post an embed card, with link buttons, clickable buttons or a dropdown |
