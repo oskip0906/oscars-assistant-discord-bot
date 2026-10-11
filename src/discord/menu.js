@@ -52,6 +52,7 @@ export function buildMenuEmbeds(client, config) {
         '`/display_notes` : Browse every saved note, folder by folder',
         '`/open_note <title>` : Open a note by its title, or the closest match',
         '`/delete_note <note>` : Delete one of your notes',
+        '_…or just ask me in chat to save, find or delete a note._',
       ].join('\n'),
     ),
     sectionEmbed(
@@ -60,6 +61,7 @@ export function buildMenuEmbeds(client, config) {
         '`/add_reminder <name> <repeat> <when> [timezone]` : Get a DM from me once, or every day, week or month',
         '`/show_reminders` : See every active reminder',
         '`/delete_reminder <reminder>` : Delete one of your reminders',
+        '_…or just tell me in chat what to remind you of and when._',
       ].join('\n'),
     ),
     sectionEmbed(
