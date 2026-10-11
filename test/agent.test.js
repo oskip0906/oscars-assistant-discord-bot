@@ -7,7 +7,7 @@ async function turn(answers, replies, extra = {}) {
   const reactions = [];
   const invocation = {
     contextKey: 'g',
-    config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', maxToolIterations: 4, ownerId: '1' },
+    config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' },
     message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' }, react: async (e) => { reactions.push(e); } },
     isOwner: false,
     reacted: false,
@@ -19,59 +19,65 @@ async function turn(answers, replies, extra = {}) {
     return replies.shift() ?? { content: 'done' };
   };
   const text = await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => answers });
-  return { text, calls, reactions };
+  return { text, calls, reactions, invocation };
 }
 
 const sure = (choice, p = 0.95) => ({ choice, probabilities: { [choice]: p } });
+const yes = (...names) => Object.fromEntries(names.map((name) => [`use_${name}`, { noul: 0.9 }]));
+const step = (...names) => ({ content: '', tool_calls: names.map((name, i) => ({ id: String(i), function: { name, arguments: '{}' } })) });
 const reactCall = (...emojis) => ({
   content: '',
   tool_calls: emojis.map((emoji, i) => ({ id: String(i), function: { name: 'react', arguments: JSON.stringify({ emoji }) } })),
 });
-const force = (name) => ({ type: 'function', function: { name } });
 
-test('reaction only: the model must react, and the turn ends before it can add "Got it"', async () => {
+test('reaction only: one call that may only react, and the turn ends before it can add "Got it"', async () => {
   const { text, calls, reactions } = await turn({ respond_with: sure('reaction') }, [reactCall('🎲', '🔥'), { content: 'Got it' }]);
   assert.equal(text, '');
-  assert.deepEqual(reactions, ['🎲', '🔥']);
+  assert.deepEqual(reactions, ['🎲', '🔥'], 'reactions keep their order');
+  assert.deepEqual(calls, [{ tools: ['react'], toolChoice: 'required' }]);
+});
+
+test("reaction only with a tool: Jev's tool and the reaction go in the same single call", async () => {
+  const reactAndLook = { content: '', tool_calls: [...step('get_message_sender').tool_calls, { id: 'r', function: { name: 'react', arguments: '{"emoji":"👍"}' } }] };
+  const { text, calls, reactions } = await turn({ ...yes('get_message_sender'), respond_with: sure('reaction') }, [reactAndLook, { content: 'Got it' }]);
+  assert.equal(text, '');
+  assert.deepEqual(reactions, ['👍']);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].toolChoice, 'required');
+  assert.deepEqual([...calls[0].tools].sort(), ['get_message_sender', 'react']);
 });
 
-test("reaction only with a tool: Jev's tool runs first, then the reaction ends the turn", async () => {
-  const tool = { content: '', tool_calls: [{ id: 't', function: { name: 'get_message_sender', arguments: '{}' } }] };
-  const { text, calls } = await turn(
-    { needs_tool: { noul: 0.9 }, tool: sure('get_message_sender'), respond_with: sure('reaction') },
-    [tool, reactCall('👍'), { content: 'Got it' }],
-  );
-  assert.equal(text, '');
-  assert.deepEqual(calls.map((c) => c.toolChoice), [force('get_message_sender'), 'required']);
-});
-
-test('reaction only: the model may look something up first, and the turn ends at the reaction', async () => {
-  const lookup = { content: '', tool_calls: [{ id: 't', function: { name: 'get_message_sender', arguments: '{}' } }] };
-  const { text, calls } = await turn({ respond_with: sure('reaction') }, [lookup, reactCall('⛅'), { content: 'Got it' }]);
-  assert.equal(text, '');
-  assert.deepEqual(calls.map((c) => c.toolChoice), ['required', 'required']);
-});
-
-test('message only: the model gets no react tool and its text is sent', async () => {
+test('no tools picked: one call, nothing to call, and its text is sent', async () => {
   const { text, calls } = await turn({ respond_with: sure('message') }, [{ content: '391' }]);
   assert.equal(text, '391');
-  assert.ok(!calls[0].tools.includes('react'));
-  assert.equal(calls[0].toolChoice, 'auto');
+  assert.deepEqual(calls, [{ tools: [], toolChoice: 'none' }]);
 });
 
-test('both: the model must react first, then answers in text', async () => {
+test('Jev picks several tools: they run in one round, then the model answers with nothing left to call', async () => {
+  const { text, calls, invocation } = await turn({ ...yes('get_message_sender', 'get_user_id'), respond_with: sure('message') }, [
+    step('get_message_sender', 'get_user_id', 'play_music'),
+    { content: 'you are someone' },
+  ]);
+  assert.equal(text, 'you are someone');
+  assert.equal(calls.length, 2);
+  assert.deepEqual([...calls[0].tools].sort(), ['get_message_sender', 'get_user_id']);
+  assert.equal(calls[0].toolChoice, 'required');
+  assert.equal(calls[1].toolChoice, 'none');
+  assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id'], 'a tool Jev did not pick never runs');
+});
+
+test('both: the model reacts, then answers in text, and an echoed emoji is dropped', async () => {
   const { text, calls, reactions } = await turn({ respond_with: sure('both') }, [reactCall('🔥'), { content: '17 × 23 = 391' }]);
   assert.equal(text, '17 × 23 = 391');
   assert.deepEqual(reactions, ['🔥']);
-  assert.deepEqual(calls.map((c) => c.toolChoice), ['required', 'auto']);
+  assert.deepEqual(calls.map((c) => c.toolChoice), ['required', 'none']);
+  assert.equal((await turn({ respond_with: sure('both') }, [reactCall('🎲'), { content: '🎲' }])).text, '');
 });
 
-test('an unsure "reaction only" leaves the choice to the model', async () => {
-  const { calls } = await turn({ respond_with: sure('reaction', 0.6) }, [{ content: 'hi' }]);
-  assert.equal(calls[0].toolChoice, 'auto');
-  assert.ok(calls[0].tools.includes('react'));
+test('an unsure "reaction only" becomes a text reply', async () => {
+  const { text, calls } = await turn({ respond_with: sure('reaction', 0.6) }, [{ content: 'hi' }]);
+  assert.equal(text, 'hi');
+  assert.deepEqual(calls, [{ tools: [], toolChoice: 'none' }]);
 });
 
 test('a sign-off gets a wave and no model call', async () => {
@@ -82,19 +88,29 @@ test('a sign-off gets a wave and no model call', async () => {
 });
 
 test('a request that needs an Oscar-only tool stops for anyone else', async () => {
-  const answers = { needs_tool: { noul: 0.9 }, tool: sure('set_rule'), respond_with: sure('message') };
+  const answers = { ...yes('set_rule'), respond_with: sure('message') };
   const guest = await turn(answers, []);
   assert.equal(guest.text, 'Only Oscar can use `set_rule`.');
   assert.equal(guest.calls.length, 0);
   const owner = await turn(answers, [{ content: 'done' }], { isOwner: true });
-  assert.deepEqual(owner.calls[0].toolChoice, force('set_rule'));
+  assert.deepEqual(owner.calls[0], { tools: ['set_rule'], toolChoice: 'required' });
 });
 
-test('with Jev down the model decides, and an emoji echoed after a reaction is dropped', async () => {
-  const { text, calls } = await turn(null, [reactCall('🎲'), { content: '🎲' }]);
-  assert.equal(text, '');
-  assert.deepEqual(calls.map((c) => c.toolChoice), ['auto', 'auto']);
-  assert.equal((await turn(null, [reactCall('🎲'), { content: 'rolled a 4' }])).text, 'rolled a 4');
+test('with Jev down there are no tools: one call answers from what it was shown', async () => {
+  const { text, calls } = await turn(null, [{ content: 'rolled a 4' }]);
+  assert.equal(text, 'rolled a 4');
+  assert.deepEqual(calls, [{ tools: [], toolChoice: 'none' }]);
+});
+
+test('Jev gets one yes/no per tool (react excepted) and the recent messages', async () => {
+  let seen;
+  const invocation = { contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' }, message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' } }, recent: 'Rice: the menu is broken' };
+  await runAgent(invocation, 'q', 'fix that', { chat: async () => ({ content: 'ok' }), decideImpl: async (_config, state, questions) => ((seen = { state, questions }), null) });
+  assert.equal(seen.state.message, 'fix that');
+  assert.equal(seen.state.recent_messages, 'Rice: the menu is broken');
+  assert.equal(seen.questions.use_play_music.type, 'noul');
+  assert.ok(seen.questions.use_self_fix, 'owner-only tools are asked about too, so a guest gets told no');
+  assert.ok(!seen.questions.use_react);
 });
 
 test('saysNothing only matches text without letters or digits', () => {
@@ -115,15 +131,15 @@ test("the bot's secrets never reach the model or a message, however they leak", 
     );
     // A tool whose output contains a secret: the model only ever sees it redacted.
     const seen = [];
-    const leaky = { content: '', tool_calls: [{ id: 't', function: { name: 'get_message_sender', arguments: '{}' } }] };
+    const leaky = step('get_message_sender');
     const invocation = {
       contextKey: 'g',
-      config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', maxToolIterations: 4, ownerId: '1' },
+      config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' },
       message: { channel: { name: 'general' }, author: { id: '2', username: 'sk-or-v1-abcdef' } },
       isOwner: false,
     };
     const replies = [leaky, { content: 'done' }];
-    await runAgent(invocation, 'q', 'q', { chat: async ({ messages }) => (seen.push(...messages), replies.shift()), decideImpl: async () => null });
+    await runAgent(invocation, 'q', 'q', { chat: async ({ messages }) => (seen.push(...messages), replies.shift()), decideImpl: async () => yes('get_message_sender') });
     const toolResult = seen.find((m) => m.role === 'tool').content;
     assert.match(toolResult, /\[redacted\]/);
     assert.ok(!toolResult.includes('sk-or-v1-abcdef'));
@@ -134,10 +150,7 @@ test("the bot's secrets never reach the model or a message, however they leak", 
 
 test('every tool a turn calls is recorded, in order, for the line above the reply', async () => {
   const { toolsLine } = await import('../src/discord/messageHandler.js');
-  const step = (name) => ({ content: '', tool_calls: [{ id: name, function: { name, arguments: '{}' } }] });
-  const invocation = { contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', maxToolIterations: 4, ownerId: '1' }, message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' } } };
-  const replies = [step('get_message_sender'), step('get_user_id'), step('get_message_sender'), { content: 'done' }];
-  await runAgent(invocation, 'q', 'q', { chat: async () => replies.shift(), decideImpl: async () => null });
+  const { invocation } = await turn(yes('get_message_sender', 'get_user_id'), [step('get_message_sender', 'get_user_id', 'get_message_sender'), { content: 'done' }]);
   assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id', 'get_message_sender']);
   assert.equal(toolsLine(invocation.toolsUsed), '-# 🔧 get_message_sender ×2 · get_user_id');
   assert.equal(toolsLine([]), '');

@@ -26,39 +26,36 @@ function turn(answers, extra = {}) {
   const invocation = {
     ...extra,
     contextKey: 'g',
-    config: { ...config, model: 'm', maxToolIterations: 4, ownerId: '1' },
+    config: { ...config, model: 'm', ownerId: '1' },
     isOwner: false,
     guild: null,
     message: { channel: { name: 'general' }, author: { id: '2', username: 'someone', displayName: 'Someone' } },
   };
   const calls = [];
-  const replies = [
-    { content: '', tool_calls: [{ id: '1', function: { name: 'get_user_id', arguments: '{}' } }] },
-    { content: 'done' },
-  ];
+  // Asked to call tools, it calls get_user_id; asked to answer, it says "done".
   const chat = async ({ tools, toolChoice }) => {
     calls.push({ tools: tools.map((t) => t.function.name), toolChoice });
-    return replies.shift() ?? { content: 'done' };
+    return toolChoice === 'required' ? { content: '', tool_calls: [{ id: '1', function: { name: 'get_user_id', arguments: '{}' } }] } : { content: 'done' };
   };
   return runAgent(invocation, 'q', 'q', { chat, decideImpl: jev(answers) }).then((reply) => Object.assign(calls, { reply, invocation }));
 }
 
 const mention = { mayDecline: true };
-const addressed = { addressed: { noul: 0.9 }, needs_tool: { noul: 0.9 } };
+const addressed = { addressed: { noul: 0.9 } };
 
-test('a confident Jev pick forces that tool on the first call only', async () => {
-  const calls = await turn({ ...addressed, tool: { choice: 'get_user_id', probabilities: { get_user_id: 0.9 } } }, mention);
-  assert.deepEqual(calls[0].toolChoice, { type: 'function', function: { name: 'get_user_id' } });
-  assert.ok(calls[0].tools.includes('play_music'), 'forcing a tool never hides the others');
-  assert.equal(calls[1].toolChoice, 'auto');
+test("only the tools Jev says yes to are offered, then the model answers with none", async () => {
+  const calls = await turn({ ...addressed, use_get_user_id: { noul: 0.9 }, use_play_music: { noul: 0.2 } }, mention);
+  assert.deepEqual(calls[0], { tools: ['get_user_id'], toolChoice: 'required' });
+  assert.equal(calls[1].toolChoice, 'none');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.invocation.toolsUsed, ['get_user_id']);
 });
 
-test('an unsure or unknown pick, or one Jev says is not needed, leaves the model to choose', async () => {
-  for (const answers of [
-    { ...addressed, tool: { choice: 'get_user_id', probabilities: { get_user_id: 0.5 } } },
-    { ...addressed, tool: { choice: 'made_up_tool', probabilities: { made_up_tool: 0.99 } } },
-    { ...addressed, needs_tool: { noul: 0.3 }, tool: { choice: 'get_user_id', probabilities: { get_user_id: 0.99 } } },
-  ]) assert.equal((await turn(answers, mention))[0].toolChoice, 'auto');
+test('a tool Jev is unsure of, or does not know, is never offered', async () => {
+  for (const answers of [{ ...addressed, use_get_user_id: { noul: 0.4 } }, { ...addressed, use_made_up_tool: { noul: 0.99 } }]) {
+    const calls = await turn(answers, mention);
+    assert.deepEqual([...calls], [{ tools: [], toolChoice: 'none' }]);
+  }
 });
 
 // --- sign-offs and name calls ----------------------------------------------
@@ -96,12 +93,11 @@ test('a ping or reply is triaged by Jev but never turned down', async () => {
   let asked = 0;
   const invocation = {
     contextKey: 'g',
-    config: { ...config, model: 'm', maxToolIterations: 4, ownerId: '1' },
+    config: { ...config, model: 'm', ownerId: '1' },
     message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' } },
   };
-  const chat = async ({ toolChoice }) => ({ content: `auto=${toolChoice === 'auto'}` });
-  const reply = await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => (asked++, null) });
-  assert.equal(reply, 'auto=true');
+  const reply = await runAgent(invocation, 'q', 'q', { chat: async () => ({ content: 'hi' }), decideImpl: async () => (asked++, null) });
+  assert.equal(reply, 'hi');
   assert.equal(asked, 1);
 });
 

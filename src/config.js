@@ -56,7 +56,6 @@ export const config = {
   // DM functionality is disabled and has no env switch: the bot ignores direct
   // messages. See messageHandler's `isDM && !config.dmEnabled` guard.
   dmEnabled: false,
-  maxToolIterations: Math.max(1, parseInt(process.env.MAX_TOOL_ITERATIONS || '12', 10) || 12),
   // YouTube now bot-walls unauthenticated stream extraction under load; a cookies
   // file (or browser) lets yt-dlp authenticate and play reliably.
   ytCookiesFile: process.env.YT_COOKIES_FILE || '',

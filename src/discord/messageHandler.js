@@ -8,6 +8,7 @@ import { saveMessages } from '../agent/historyStore.js';
 import { attachmentParts, gifPreviews } from './attachments.js';
 import { modelInputs } from './model.js';
 import { redactSecrets } from '../config.js';
+import { readChannelRange } from '../agent/tools/history.js';
 
 // Fixed-window input debounce with a per-channel queue.
 //
@@ -20,6 +21,10 @@ import { redactSecrets } from '../config.js';
 // a time per channel, in arrival order, and never before their 3s collection
 // has elapsed.
 const WINDOW_MS = 3000;
+
+// Messages shown above each turn, and the most of each one that is kept.
+const RECENT_COUNT = 20;
+const RECENT_CHARS = 500;
 
 // Waiting batches per channel. A trigger past this is dropped (spam guard).
 const MAX_QUEUE = 5;
@@ -148,12 +153,17 @@ export function createMessageHandler({ client, config, player, privateMode, self
           for (const msg of [m, ref]) attachments.push(...(msg?.attachments?.values() ?? []), ...gifPreviews(msg));
         }
 
-        // The turn is only the batch. Earlier messages are read on demand with
-        // fetch_history, so a self-contained question carries no history at all.
+        // What was said just before the batch, so "that" and "it" resolve without
+        // searching history. Jev reads it too when picking tools.
+        const self = client.user?.id;
+        const recent = (await readChannelRange(messages[0], { count: RECENT_COUNT }).catch(() => []))
+          .map((m) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`.slice(0, RECENT_CHARS))
+          .join('\n');
         const trigger = messages[0].author;
         const triggerName = messages[0].member?.displayName || trigger.displayName || trigger.username;
         const turn = parts.join('\n');
         const combined = [
+          ...(recent ? ['[RECENT MESSAGES — what was said just before, oldest first. Context only: use it to tell what the turn refers to, and do not answer these. Lines marked (you) are your own replies.]', recent, ''] : []),
           `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : 'mentioned you without a ping, and you chose to step in'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This is your actual task. Answer what is actually said here.]`,
           turn,
         ].join('\n');
@@ -175,6 +185,7 @@ export function createMessageHandler({ client, config, player, privateMode, self
           // Every tool the agent calls this turn, in order; shown above the reply.
           toolsUsed: [],
           batchedCount: messages.length,
+          recent,
           // Collect any Discord embeds produced by tool calls (e.g. image_search)
           // so they can be sent alongside the text reply.
           embeds: [],

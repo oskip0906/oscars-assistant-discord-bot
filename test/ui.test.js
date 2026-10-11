@@ -100,7 +100,7 @@ test('posting a card and saying nothing more sends no placeholder text', async (
   const ch = channel();
   const invocation = {
     contextKey: 'g',
-    config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', maxToolIterations: 4, ownerId: '1' },
+    config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' },
     message: { channel: Object.assign(ch, { name: 'general' }), author: { id: '2', username: 'someone' } },
     isOwner: false,
   };
@@ -108,7 +108,7 @@ test('posting a card and saying nothing more sends no placeholder text', async (
     { content: '', tool_calls: [{ id: 't', function: { name: 'send_card', arguments: JSON.stringify({ title: 'Hi' }) } }] },
     { content: '' },
   ];
-  assert.equal(await runAgent(invocation, 'q', 'q', { chat: async () => replies.shift(), decideImpl: async () => null }), '');
+  assert.equal(await runAgent(invocation, 'q', 'q', { chat: async () => replies.shift(), decideImpl: async () => ({ use_send_card: { noul: 0.9 } }) }), '');
   assert.equal(ch.sent.length, 1);
 });
 
@@ -169,34 +169,30 @@ test('a click runs through the real message handler as a direct turn from the cl
     privateMode: { isOn: () => false },
     selfFix: { isActive: () => false },
     runAgentImpl: async (invocation, userContent, turnText) => {
-      seen.push({ invocation, turnText });
+      seen.push({ invocation, userContent, turnText });
       return 'Here are three more.';
     },
   });
   const ui = click();
+  // What was said before the click, newest first as Discord pages it.
+  const earlier = [
+    { id: '776', author: { id: 'bot', username: 'Panda' }, content: 'Here are some ramen spots.' },
+    { id: '775', author: { id: '3', username: 'rice' }, content: 'any ramen near here?' },
+  ];
+  const page = Object.assign(new Map(earlier.map((m) => [m.id, m])), { last: () => earlier.at(-1) });
+  ui.channel.messages = { fetch: async ({ before }) => (before === '777' ? page : new Map()) };
   await handler(clickAsMessage(ui));
   for (let i = 0; i < 50 && !ui.calls.some(([k]) => k === 'followUp'); i++) await new Promise((r) => setTimeout(r, 100));
 
-  const [{ invocation, turnText }] = seen;
+  const [{ invocation, userContent, turnText }] = seen;
+  const recent = 'rice (@rice, id:3): any ramen near here?\n(you) Panda (@Panda, id:bot): Here are some ramen spots.';
+  assert.equal(invocation.recent, recent, 'the messages just before the turn come with it, oldest first');
+  assert.ok(userContent.startsWith('[RECENT MESSAGES') && userContent.includes(recent));
+  assert.ok(!turnText.includes('ramen spots'), 'Jev gets them separately from the turn');
   assert.equal(invocation.isOwner, true, 'owner checks use the clicker, not the card');
   assert.equal(invocation.mayDecline, false, 'a click on Panda\'s card is a direct turn');
   assert.match(turnText, /Someone \(@someone, id:2\) \(replying to message 555 from @Panda \(id:bot\): "Ramen near you"\): \[clicked "More like this"\]/);
   assert.deepEqual(ui.calls.find(([k]) => k === 'followUp')[1].content, 'Here are three more.');
-});
-
-test('a card posted on the last allowed step is the answer, not a tool-limit warning', async () => {
-  const ch = Object.assign(channel(), { name: 'general' });
-  const invocation = {
-    contextKey: 'g',
-    config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', maxToolIterations: 1, ownerId: '1' },
-    message: { channel: ch, author: { id: '2', username: 'someone' } },
-    isOwner: false,
-  };
-  const card = { content: '', tool_calls: [{ id: 't', function: { name: 'send_card', arguments: JSON.stringify({ title: 'Comparison' }) } }] };
-  assert.equal(await runAgent(invocation, 'q', 'q', { chat: async () => card, decideImpl: async () => null }), '');
-  const searchOnly = { content: '', tool_calls: [{ id: 't', function: { name: 'get_message_sender', arguments: '{}' } }] };
-  const nothingPosted = { ...invocation, posted: false, message: { channel: channel(), author: { id: '2', username: 'someone' } } };
-  assert.match(await runAgent(nothingPosted, 'q', 'q', { chat: async () => searchOnly, decideImpl: async () => null }), /tool-use limit/);
 });
 
 test('the reply starts with the tools the turn used, and has no line when it used none', async () => {

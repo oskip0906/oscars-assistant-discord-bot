@@ -21,8 +21,8 @@ The first trigger opens a **3-second batch** for that sender. Everything they se
 
 **3. Building the prompt.**
 - **System prompt** (`src/agent/systemPrompt.js`): only what can't live in Supabase: today's date, server, channel, sender and owner id, the private-mode note, how the input is laid out, and the security rules. Then the two prompt files from Supabase, `identity.md` and `soul.md` (see "Prompts" below).
-- **The turn:** only the batch, labelled `[RESPOND TO THIS]`. No earlier messages, no transcript, no summary.
-- **Context on demand.** If the turn leans on something said before ("as I said", "that one", a thread that started earlier), the model calls `fetch_history` to read as far back as it needs. If it points at one specific old message (a reply to it, or a link), the model calls `index_chat` to read and save the messages around it. A self-contained question gets no history at all.
+- **The turn:** the batch, labelled `[RESPOND TO THIS]`, under `[RECENT MESSAGES]`: the 20 messages just before it in the channel (each cut to 500 characters, Panda's own marked `(you)`). That is how "that", "it" or "the bug" get resolved, by the model and by Jev. No transcript, no summary.
+- **Older context.** Anything further back is only read when Jev picks `fetch_history` (search older conversations) or `index_chat` (the messages around one specific old message, from a reply or a link).
 - Every message is written as `Name (@username, id:NNN): text`, so the model knows who said what and can ping anyone with `<@id>`. A reply also shows the message it replies to, with that message's id.
 - **Attachments** (`src/discord/attachments.js`) go to the model for this turn only: images (if the model accepts them, up to 5 MB), PDFs, text and code files (up to 200 KB), Tenor/Giphy GIF frames, and the picture a message replies to.
 
@@ -30,24 +30,23 @@ The first trigger opens a **3-second batch** for that sender. Everything they se
 Every turn starts with one Jev call (`triage` in `src/agent/agent.js`). It asks all of its questions at once, and code applies the answers in this order:
 1. **For Panda?** Only asked of mention-only messages; a ping or reply skips it. Not addressed and no reason to step in (both < 0.8): silence, nothing saved.
 2. **Sign-off?** (≥ 0.8) Panda reacts 👋 and the turn ends with no model call.
-3. **Is a tool needed** (≥ 0.5), and **which one first** (≥ 0.8)? Jev picks some tool even for "thanks", so a pick only counts when it also says a tool is needed. `react` is never picked here; step 4 decides it. If the tool is Oscar-only and the sender isn't Oscar, the turn stops with "Only Oscar can use `<tool>`."
-4. **Reaction, message, or both?**
-   - **Reaction:** the model has to make a tool call (`tool_choice: required`) until it has reacted. It can look things up first and react several times in one step. The turn ends at the first successful reaction, so the model never gets to add "Got it". Needs Jev at ≥ 0.8, since a wrong "reaction only" would leave a question unanswered.
-   - **Message:** the model doesn't get the `react` tool, so it can only answer in text.
-   - **Both:** the same, but the turn goes on after the reaction and the model answers in text.
+3. **Which tools?** One yes/no per tool, read with the recent messages, so several can be picked at once. A tool runs only at ≥ 0.5: plain chat scores every tool under that, and a clear request scores the right one well above it. `react` is never asked about; step 4 decides it. If a picked tool is Oscar-only and the sender isn't Oscar, the turn stops with "Only Oscar can use `<tool>`."
+4. **Reaction, message, or both?** Reaction needs Jev at ≥ 0.8, since a wrong "reaction only" would leave a question unanswered. Reaction and both add `react` to the picked tools.
 
-Any answer Jev is unsure of, or a Jev outage, leaves that decision to the model. The exception is step 1: there a mention-only message gets no answer.
+Any answer Jev is unsure of means no tools and a text reply; a Jev outage means the same. The exception is step 1: there a mention-only message gets no answer.
 
-**5. The agent loop.**
-The model is called with all tools, except as step 4 above says. Jev's tool, if any, is forced on the first call. Each tool call is executed and its result fed back (capped at 12,000 characters) until the model answers in plain text or hits the tool-call limit (default 12). A reply after a reaction that has no letters or digits (usually the same emoji echoed back) is dropped.
+**5. Running the tools.**
+The model never chooses tools; it only fills in arguments. A turn is at most two model calls:
+1. **Tool call** (only if Jev picked any): the model is offered just the picked tools (`tool_choice: required`) and calls the ones that help, all in one reply. A call to anything else is ignored. They all run at once, except reactions, which run in order. Results are capped at 12,000 characters. A reaction-only turn ends here, so the model never gets to add "Got it".
+2. **Answer:** the model writes the reply from the results, with no tools it can call (`tool_choice: none`). There is no second round of tools. A reply after a reaction that has no letters or digits (usually the same emoji echoed back) is dropped.
 
 **6. Sending the reply.**
 - Reactions are already on the message by now, one or several.
 - The first message of a text reply starts with the tools the turn called, as small grey subtext: `-# 🔧 web_search ×2 · send_card`. A turn with no tools has no line. A reply that is only a reaction, poll or card has no text to carry the line.
 - Tool embeds (image results) go first, then the text. Text over Discord's **2,000-character** limit is split into several messages (`src/discord/chunk.js`), at a paragraph, line, sentence or word break, in that order of preference, with code fences closed and reopened so each part renders.
 - Bare links are wrapped in `<>` so they don't unfurl; image URLs stay bare.
-- Polls and cards (below) are posted by their tools as the loop runs, so they land before the text.
-- A response is mandatory: with no text, no reaction and no poll or card, Panda reacts 👀. After a poll or card, a reply with no words is dropped, and so is the tool-limit warning: the poll or card is the answer.
+- Polls and cards (below) are posted by their tools before the answer is written, so they land before the text.
+- A response is mandatory: with no text, no reaction and no poll or card, Panda reacts 👀. After a poll or card, a reply with no words is dropped: the poll or card is the answer.
 
 **Discord UI.** Panda can post UI on its own when it reads better than text (`src/agent/tools/ui.js`). `identity.md` says when.
 - `create_poll`: a native Discord poll with 2–10 answers, open 1–768 hours (default 24), single or multi-choice. Discord counts the votes.
@@ -115,14 +114,14 @@ Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), re
 1. **Triage every turn** (step 4 of "How a message becomes a reply"). One call answers:
    - for mention-only messages, whether Panda is addressed or should step in (≥ 0.8);
    - whether the message is a sign-off (≥ 0.8);
-   - whether a tool is needed (≥ 0.5), and which tool to call first (≥ 0.8), including whether it is Oscar-only;
+   - which tools to run, one yes/no each (≥ 0.5), including whether one is Oscar-only;
    - whether to respond with a reaction (≥ 0.8), a text message, or both.
 2. **Detect sign-offs from other bots**, per message, including "aight gn" or other languages.
 3. **Fact-check research**: drop claims whose quote likely doesn't support them (< 0.3).
 
 Jev only sees messages that trigger Panda. Calls time out after 5 s. If Jev is off or down:
 - Panda doesn't answer mention-only messages.
-- The model decides tools and react/reply on its own.
+- No tools run, and the model answers in text.
 - Bot sign-offs use the regex.
 - All research claims are kept.
 
@@ -212,7 +211,7 @@ Every push to `main` builds a Docker image and publishes it to Docker Hub (`.git
 ```
 src/index.js              boot, intents, slash-command registration
 src/discord/              message handler (batching), slash commands, embeds, chunking
-src/agent/agent.js        the tool-calling loop and Jev triage
+src/agent/agent.js        Jev triage, one round of tools, the answer
 src/agent/prompts.js      identity.md / soul.md from Supabase Storage
 src/agent/historyStore.js Supabase message database
 src/agent/jev.js          Jev decision calls
