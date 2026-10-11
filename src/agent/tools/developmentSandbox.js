@@ -188,7 +188,9 @@ export async function runDevelopmentSandbox(
     },
   });
   if (dispatch.status !== 204) {
-    return { ok: false, summary: `❌ Could not start the remote development sandbox (HTTP ${dispatch.status}): ${responseText(dispatch.json)}` };
+    // A fine-grained PAT that can read the repo still gets 403 here without the Actions permission.
+    const hint = dispatch.status === 403 ? `\nGive GITHUB_PAT "Actions: Read and write" on \`${sandboxRepo}\` (github.com/settings/personal-access-tokens).` : '';
+    return { ok: false, summary: `❌ Could not start the remote development sandbox (HTTP ${dispatch.status}): ${responseText(dispatch.json)}${hint}` };
   }
 
   // From here the run outlives this process: a self-fix ends by restarting the
