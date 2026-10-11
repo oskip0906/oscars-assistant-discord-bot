@@ -56,9 +56,12 @@ function run({ root, bin }, env = {}) {
       ...env,
     },
   });
-  // Stop the stand-in SearXNG the script left running.
+  // Stop the stand-in SearXNG the script left running, once it has logged how it
+  // was started: with SEARXNG_WAIT=0 the script returns before that on a slow
+  // runner, and killing it first left the log empty in CI.
   const pidFile = path.join(root, 'searxng', 'searxng.pid');
   if (existsSync(pidFile)) {
+    for (let i = 0; i < 100 && !read(root, 'searxng/python.log').includes('args '); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     result.pid = Number(readFileSync(pidFile, 'utf8'));
     try { process.kill(result.pid); } catch {}
   }

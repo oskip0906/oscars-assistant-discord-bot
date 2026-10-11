@@ -196,10 +196,11 @@ function parseArgs(raw) {
 
 const preview = (value, limit = 80) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
 
-// TAP prints the failing test above pages of passing ones, so a plain tail of
-// the output tells the model a test failed but never which one.
+// A plain tail of test output can tell the model a test failed but not which
+// one: TAP (Node 22) prints it above pages of passing tests. Start at the first
+// `not ok`, or at the spec reporter's (Node 24) closing failure summary.
 export function failureExcerpt(output, limit = 4000) {
-  const at = output.search(/^[ \t]*not ok /m);
+  const at = output.search(/^[ \t]*not ok |^✖ failing tests:/m);
   return at === -1 ? output.slice(-limit) : output.slice(at, at + limit);
 }
 

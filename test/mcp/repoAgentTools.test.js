@@ -108,4 +108,6 @@ test('a failed test run reaches the model from its first failure, not a tail of 
   assert.ok(excerpt.startsWith('not ok 2 - names are unique') && excerpt.includes('duplicate'));
   assert.ok(excerpt.length <= 4000);
   assert.equal(failureExcerpt('SyntaxError: Unexpected token'), 'SyntaxError: Unexpected token');
+  const spec = [...passing.map((l) => `✔ ${l}`), '✖ names are unique (1ms)', '✖ failing tests:', '', "✖ names are unique (1ms)\n  AssertionError: 'duplicate'"].join('\n');
+  assert.ok(failureExcerpt(spec).startsWith('✖ failing tests:') && failureExcerpt(spec).includes('duplicate'));
 });
