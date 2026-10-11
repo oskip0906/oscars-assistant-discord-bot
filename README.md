@@ -17,3 +17,4 @@
 - **Change its personality** for good when Oscar says so, in chat or with `/set_rule` (Oscar only).
 
 How all of it works (message flow, prompts, history, models, tools, research, the sandbox, safety, deployment) is in **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+<!-- sandbox smoke test -->
