@@ -31,6 +31,8 @@ export function buildMenuEmbed(client, config) {
           '`/web_search <query>` : Search the web and cite links',
           '`/web_fetch <url>` : Read a full page',
           '`/image_search <query>` : Find pictures of anything',
+          '`/create_poll <question> <answers>` : Post a native Discord poll people can vote on',
+          '`/create_card <title> [description] ...` : Post a rich embed card with optional buttons and dropdown',
           '_…or just ask me in chat — I still use these skills myself, plus polls, cards with buttons, and reactions._',
         ].join('\n'),
       },
