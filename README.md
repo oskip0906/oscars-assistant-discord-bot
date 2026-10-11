@@ -63,7 +63,6 @@ The same groups as `/menu`. Everything except the Power Tools also works by just
 | `/set_model <model>` | Switch the conversation model (OpenRouter); saved in the database |
 | `/set_rule <instruction>` | Change Panda's personality or behavior for good |
 | `/private on\|off\|status` | Only respond to Oscar |
-| `/github` | List Oscar's GitHub repositories |
 
 **📖 Info**
 | Command | What it does |
@@ -71,5 +70,16 @@ The same groups as `/menu`. Everything except the Power Tools also works by just
 | `/menu` | Show the menu |
 | `/usage` | How much money Panda has spent |
 | `/model` | Which model Panda is running on |
+
+## Tools
+
+Beyond the slash commands, Panda calls these on its own while chatting (details in [ARCHITECTURE.md](ARCHITECTURE.md#tools)):
+
+- **Discord:** look up members and message senders, read server info (channels, roles, events, emojis, threads), react with emoji, post polls and embed cards (link buttons, clickable buttons, dropdowns).
+- **Web:** search the web and images, read any public page.
+- **Memory:** read further back in a channel, search what it remembered, index the messages around an old one, and find saved notes.
+- **Music:** play, skip, pause, resume, stop and show the queue.
+- **Self-knowledge:** read ARCHITECTURE.md to explain how it works.
+- **Oscar only:** read GitHub (files, commits, issues, PRs, code search, Actions runs), make GitHub writes such as issues and comments, change its own code through an approved `self_fix` PR, and change its personality with `set_rule`.
 
 Everything else — how a message becomes a reply, how Jev makes Panda's decisions, the prompts, memory, models, tools, the research pipeline, the sandbox, safety and deployment — lives in **[ARCHITECTURE.md](ARCHITECTURE.md)**.

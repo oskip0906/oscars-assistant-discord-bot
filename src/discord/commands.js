@@ -8,7 +8,6 @@ import { PRIVATE_MESSAGE } from '../privateMode.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
-import { githubReadJson } from '../agent/tools/githubMcp.js';
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
 import { runResearch } from '../agent/research/pipeline.js';
@@ -71,9 +70,6 @@ export const commandDefs = [
           { name: 'deep', value: 'deep' },
         ),
     ),
-  new SlashCommandBuilder()
-    .setName('github')
-    .setDescription('List your GitHub repositories (owner only)'),
   new SlashCommandBuilder()
     .setName('self_fix')
     .setDescription('Patch Panda’s own source code and restart (owner only)')
@@ -474,24 +470,6 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           await sendToolResult(result?.text ?? result);
         }
         return;
-      }
-
-      if (name === 'github') {
-        if (!isOwner) {
-          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
-        }
-        await interaction.deferReply();
-        // A read, so it goes through the GitHub MCP server like every other one.
-        let result;
-        try {
-          const { login } = await githubReadJson('get_me', {}, { config });
-          const found = await githubReadJson('search_repositories', { query: `user:${login}`, sort: 'updated', perPage: 50, minimal_output: false }, { config });
-          const lines = (found.items || []).map((repo) => `${repo.private ? '🔒' : '🌐'} [${repo.full_name}](<${repo.html_url}>)`);
-          result = lines.length ? `**${login}'s repositories**\n${lines.join('\n')}` : `No repositories found for ${login}.`;
-        } catch (err) {
-          result = `❌ Could not read GitHub: ${String(err.message || err).slice(0, 200)}`;
-        }
-        return await sendToolResult(result);
       }
 
       if (name === 'self_fix') {
