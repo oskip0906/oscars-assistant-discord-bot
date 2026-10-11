@@ -1,5 +1,4 @@
 import { chatCompletion } from '../openrouter.js';
-import { getAIConfig } from '../../configManager.js';
 import { loadPrompt, writePrompt } from '../prompts.js';
 
 export const defs = [
@@ -8,7 +7,7 @@ export const defs = [
     function: {
       name: 'set_rule',
       description:
-        "Change your personality for good: behavior, vibe, tone, attitude, habits. It rewrites your soul.md with the development model, and the change applies from the next message on. Call it whenever Oscar tells you to behave differently from now on (always, never, stop, start, be more or less…). Pass his instruction in his own words. Oscar only.",
+        "Change your personality for good: behavior, vibe, tone, attitude, habits. It rewrites your soul.md, and the change applies from the next message on. Call it whenever Oscar tells you to behave differently from now on (always, never, stop, start, be more or less…). Pass his instruction in his own words. Oscar only.",
       parameters: {
         type: 'object',
         properties: {
@@ -41,7 +40,7 @@ export async function setRule({ instruction = '' } = {}, invocation, { chat = ch
     return `I couldn't read my prompts from the database, so nothing changed: ${String(err.message || err).slice(0, 200)}`;
   }
 
-  const { model } = getAIConfig('development');
+  const { model } = config;
   let next;
   try {
     const msg = await chat({
@@ -54,9 +53,9 @@ export async function setRule({ instruction = '' } = {}, invocation, { chat = ch
     });
     next = stripFences(msg?.content);
   } catch (err) {
-    return `The development model (${model}) failed, so nothing changed: ${String(err.message || err).slice(0, 200)}`;
+    return `The model (${model}) failed, so nothing changed: ${String(err.message || err).slice(0, 200)}`;
   }
-  if (!next) return `The development model (${model}) returned nothing, so nothing changed.`;
+  if (!next) return `The model (${model}) returned nothing, so nothing changed.`;
   if (next === current.trim()) return 'That is already how I behave; soul.md is unchanged.';
 
   const backup = `history/soul-${new Date().toISOString().replace(/[:.]/g, '-')}.md`;

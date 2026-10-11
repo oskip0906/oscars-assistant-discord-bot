@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { config } from '../../config.js';
 import { dmOwner } from '../../discord/notify.js';
 import { selfFixState } from '../../selfFixState.js';
-import { getAIConfig } from '../../configManager.js';
 import { startDevRunLog } from '../../devRunLog.js';
 import { ApprovalCard } from '../../discord/approvalCard.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
@@ -99,8 +98,7 @@ export async function requestDevelopmentApproval({ instruction, invocation, stat
 }
 
 // Ask the model to turn a raw instruction into a clean commit title and
-// description. Runs on the configured development model so we never send a
-// commit message composed from a lower-capability model.
+// description, with the conversation model.
 async function generateCommitMessage(instruction, { apiKey, model }) {
   const messages = [
     {
@@ -131,7 +129,6 @@ export async function selfFix(
     runSandbox = runDevelopmentSandbox,
     notify = dmOwner,
     state = selfFixState,
-    getConfig = getAIConfig,
     confirm = requestDevelopmentApproval,
     startLog = startDevRunLog,
   } = {},
@@ -145,7 +142,6 @@ export async function selfFix(
     return summary;
   };
 
-  const { model: devModel } = getConfig('development');
   // Logged before the approval prompt so the log shows the request that was
   // never approved, not just the runs that made it to the sandbox.
   const logFinish = startLog('self_fix', {
@@ -172,7 +168,7 @@ export async function selfFix(
   // it. The workflow commits; Claude's own summary becomes the commit body.
   let commitTitle = null;
   try {
-    commitTitle = (await generateCommitMessage(instruction, { apiKey: config.openrouterApiKey, model: devModel })).title;
+    commitTitle = (await generateCommitMessage(instruction, { apiKey: config.openrouterApiKey, model: config.model })).title;
   } catch (err) {
     // Model call failed; runDevelopmentSandbox falls back to an automatic title.
     console.error('[self_fix] commit message generation failed, using the automatic title:', err.message);

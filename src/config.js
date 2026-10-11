@@ -12,11 +12,6 @@ dotenv.config({ path: path.join(projectRoot, '.env'), quiet: true });
 // than leaving junk as the owner.
 const envOwnerId = process.env.OWNER_DISCORD_ID?.trim() || '';
 
-// The chat and development models live in src/models.json, committed to the repo:
-// the host has no disk, so /set_model saves a choice by committing that file.
-export const MODELS_FILE = path.join(projectRoot, 'src', 'models.json');
-const models = JSON.parse(fs.readFileSync(MODELS_FILE, 'utf8'));
-
 // Containers have no file mounts, so the cookies can also come base64-encoded in
 // YT_COOKIES_B64. yt-dlp only reads a file, so they are written to one.
 function cookiesFile() {
@@ -38,12 +33,9 @@ export const config = {
 
   discordToken: process.env.DISCORD_TOKEN || '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
-  model: models.conversation,
-  // Dual model configuration: conversation vs. development. configManager seeds
-  // its selection from these; /set_model and /set_dev_model apply a new one live
-  // and commit it to src/models.json so the next deploy boots with it.
-  defaultModelName: models.conversation,
-  developmentModelName: models.development || models.conversation,
+  // The default chat model. /set_model saves a new one in the database
+  // (bot_settings), and loadModel swaps it in at boot.
+  model: 'deepseek/deepseek-v4.1-flash',
   ownerId: /^\d{17,20}$/.test(envOwnerId) ? envOwnerId : '',
   githubPat: process.env.GITHUB_PAT || '',
   // GitHub's hosted MCP server, read-only path. Owner-gated at the tool list, so

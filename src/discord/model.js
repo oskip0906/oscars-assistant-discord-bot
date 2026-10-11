@@ -1,57 +1,31 @@
 import { EmbedBuilder } from 'discord.js';
 import { randomEmbedColor } from './colors.js';
-import { setDefaultModel } from '../configManager.js';
-import { githubRead } from '../agent/tools/githubMcp.js';
+import { db, configured } from '../db.js';
 
-// A model id is committed into src/models.json, so it has to be inert: nothing
-// outside this charset gets into the file.
+// Junk such as a newline'd id would leave every reply failing, so only plain ids are saved.
 const SAFE_MODEL_ID = /^[A-Za-z0-9._\-/:]+$/;
 
-// Save `key` ('conversation' or 'development') as `model` by committing
-// src/models.json to the bot's repo. The host has no disk to write to; the commit
-// triggers CI, whose deploy boots the bot with the new file. The read goes
-// through the GitHub MCP server, the commit through REST. Never throws.
-export async function saveModel(
-  config,
-  key,
-  model,
-  { fetchImpl = fetch, read = (name, args) => githubRead(name, args, { config }) } = {},
-) {
+// The chosen model lives in the database (bot_settings), so it survives restarts
+// and redeploys with no commit. Never throws.
+export async function saveModel(config, model, { query = db.query } = {}) {
   const value = String(model ?? '').trim();
   if (!value || !SAFE_MODEL_ID.test(value)) {
     return { ok: false, error: `\`${value.slice(0, 80) || '(empty)'}\` is not a valid model id.` };
   }
-  if (!config.githubPat) return { ok: false, error: 'GITHUB_PAT is not set, so src/models.json cannot be committed.' };
-
-  const url = `https://api.github.com/repos/${config.developmentSandboxRepo}/contents/src/models.json`;
-  const headers = {
-    Authorization: `Bearer ${config.githubPat}`,
-    Accept: 'application/vnd.github+json',
-    'User-Agent': 'panda-bot',
-  };
+  if (!configured(config)) return { ok: false, error: 'DATABASE_URL is not set, so the choice cannot be saved.' };
   try {
-    const [owner, repo] = String(config.developmentSandboxRepo).split('/');
-    const { result, text } = await read('get_file_contents', { owner, repo, path: 'src/models.json', ref: 'refs/heads/main' });
-    // The blob sha comes back in the text part ("... (SHA: <sha>)"), the file in a resource part.
-    const sha = text.match(/SHA: ([0-9a-f]{40})/)?.[1];
-    const content = result?.content?.find((part) => part.type === 'resource')?.resource?.text;
-    if (!sha || content == null) throw new Error('GitHub MCP returned no sha or content for src/models.json');
-    const models = { ...JSON.parse(content), [key]: value };
-    const res = await fetchImpl(url, {
-      method: 'PUT',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: `Set the ${key} model to ${value}`,
-        content: Buffer.from(`${JSON.stringify(models, null, 2)}\n`).toString('base64'),
-        sha,
-        branch: 'main',
-      }),
-    });
-    if (!res.ok) throw new Error(`GitHub HTTP ${res.status} committing src/models.json`);
+    await query(config, `insert into bot_settings (key, value) values ('model', $1) on conflict (key) do update set value = excluded.value`, [value]);
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: `Could not save src/models.json: ${String(err.message || err).slice(0, 200)}` };
+    return { ok: false, error: `Could not save the model: ${String(err.message || err).slice(0, 200)}` };
   }
+}
+
+// At boot: switch to the saved model, if there is one. No database or no row keeps the default.
+export async function loadModel(config, { query = db.query } = {}) {
+  if (!configured(config)) return;
+  const { rows } = await query(config, `select value from bot_settings where key = 'model'`);
+  if (rows[0]?.value) config.model = rows[0].value;
 }
 
 async function fetchCatalog(config) {
@@ -111,7 +85,7 @@ export async function modelChoices(
     .map((id) => ({ name: id.slice(0, 100), value: id.slice(0, 100) }));
 }
 
-// The /set_model flow: validate against OpenRouter's catalog, commit the choice,
+// The /set_model flow: validate against OpenRouter's catalog, save the choice,
 // then switch the running process to it.
 export async function switchModel({ model, config }, { listModels = listOpenRouterModels, save = saveModel } = {}) {
   const value = String(model ?? '').trim();
@@ -133,17 +107,16 @@ export async function switchModel({ model, config }, { listModels = listOpenRout
     caveat = `\n⚠️ Couldn’t verify the id with OpenRouter (${String(err.message || err).slice(0, 120)}) — switching anyway.`;
   }
 
-  const saved = await save(config, 'conversation', value);
+  const saved = await save(config, value);
   if (!saved.ok) {
     return { ok: false, summary: `❌ ${saved.error} Still running \`${config.model}\`.` };
   }
 
   const previous = config.model;
   config.model = value;
-  setDefaultModel(value);
   return {
     ok: true,
-    summary: `🧠 Model switched: \`${previous}\` → \`${value}\`, live now and saved to src/models.json.${caveat}`,
+    summary: `🧠 Model switched: \`${previous}\` → \`${value}\`, live now and saved.${caveat}`,
   };
 }
 

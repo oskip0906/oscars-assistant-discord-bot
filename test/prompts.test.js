@@ -2,10 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readPrompt, loadPrompt, writePrompt, clearPromptCache } from '../src/agent/prompts.js';
 import { setRule } from '../src/agent/tools/rules.js';
-import { getAIConfig } from '../src/configManager.js';
 import { db } from '../src/db.js';
 
-const config = { databaseUrl: 'postgres://test', openrouterApiKey: 'k' };
+const config = { databaseUrl: 'postgres://test', openrouterApiKey: 'k', model: 'a/chat' };
 
 // A fake `prompts` table: selects read `files`, upserts write them. `down`
 // fails every query, like an unreachable database.
@@ -78,13 +77,13 @@ const rewrite = (content) => {
   return { chat, seen };
 };
 
-test('set_rule rewrites soul.md with the development model and keeps the old one first', async () => {
+test('set_rule rewrites soul.md with the conversation model and keeps the old one first', async () => {
   clearPromptCache();
   const t = table({ 'identity.md': 'I am Panda', 'soul.md': '# soul\n- be warm\n' });
   const { chat, seen } = rewrite('```markdown\n# soul\n- be warm\n- be sarcastic\n```');
   const out = await setRule({ instruction: 'be sarcastic' }, { config }, { chat });
 
-  assert.equal(seen[0].model, getAIConfig('development').model);
+  assert.equal(seen[0].model, config.model);
   assert.match(seen[0].messages[1].content, /I am Panda[\s\S]*- be warm[\s\S]*be sarcastic/);
   assert.equal(t.files['soul.md'], '# soul\n- be warm\n- be sarcastic\n');
   const backup = t.calls.find((c) => c.startsWith('PUT history/'));

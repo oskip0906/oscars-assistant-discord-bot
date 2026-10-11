@@ -1,7 +1,7 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { buildMenuEmbeds } from './menu.js';
 import { buildUsageEmbed } from './usage.js';
-import { buildModelEmbed, switchModel, modelChoices, saveModel } from './model.js';
+import { buildModelEmbed, switchModel, modelChoices } from './model.js';
 import { chunkMessage } from './chunk.js';
 import { suppressLinkEmbeds } from './messageHandler.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
@@ -11,7 +11,6 @@ import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
 import { githubReadJson } from '../agent/tools/githubMcp.js';
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
-import { setDevelopmentModel } from '../configManager.js';
 import { runResearch } from '../agent/research/pipeline.js';
 import { renderReport } from '../agent/research/render.js';
 import { redactSecrets } from '../config.js';
@@ -36,12 +35,6 @@ export const commandDefs = [
         .setDescription('OpenRouter model id — start typing to search')
         .setRequired(true)
         .setAutocomplete(true),
-    ),
-  new SlashCommandBuilder()
-    .setName('set_dev_model')
-    .setDescription('Set the OpenRouter model used for development tasks like self_fix (owner only)')
-    .addStringOption((o) =>
-      o.setName('model').setDescription('OpenRouter model id — start typing to search').setRequired(true).setAutocomplete(true),
     ),
   new SlashCommandBuilder()
     .setName('play')
@@ -288,7 +281,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       const short = (text) => (text.length > 100 ? `${text.slice(0, 99)}…` : text);
       try {
         let choices = [];
-        if (interaction.commandName === 'set_model' || interaction.commandName === 'set_dev_model') {
+        if (interaction.commandName === 'set_model') {
           choices = owner ? await modelChoices(config, focused.value) : [];
         } else if (interaction.commandName === 'open_note') {
           choices = (await noteChoices(config, focused.value)).map((n) => ({ name: short(n.title), value: short(n.title) }));
@@ -422,31 +415,6 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         await interaction.deferReply();
         const result = await switchModel({ model: interaction.options.getString('model', true), config });
         return await interaction.editReply({ content: result.summary, allowedMentions: { parse: [] } });
-      }
-
-      if (name === 'set_dev_model') {
-        if (!isOwner) {
-          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
-        }
-        const model = interaction.options.getString('model', true).trim();
-        if (!model) {
-          return await interaction.reply({
-            content: '⚠️ Provide a non-empty OpenRouter model id.',
-            flags: MessageFlags.Ephemeral,
-          });
-        }
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const applied = setDevelopmentModel(model);
-        const saved = await saveModel(config, 'development', applied);
-        return await interaction.editReply({
-          content: [
-            `🛠️ Development-task model set to \`${applied}\`. self_fix uses it from now on.`,
-            saved.ok ? '' : `⚠️ It is live, but I could not save it — a restart will lose it. ${saved.error}`,
-          ]
-            .filter(Boolean)
-            .join('\n'),
-          allowedMentions: { parse: [] },
-        });
       }
 
       // --- Tool slash commands (work in servers and DMs) ---------------

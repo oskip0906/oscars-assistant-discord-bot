@@ -10,6 +10,12 @@ create table if not exists prompts (
   updated_at timestamptz not null default now()
 );
 
+-- Bot-wide settings that must survive a restart, e.g. the model /set_model picked.
+create table if not exists bot_settings (
+  key text primary key,
+  value text not null
+);
+
 -- Hidden chat context, split by channel: a search only returns lines from the
 -- channel it runs in (a thread is its own channel). Everything Panda was given
 -- is saved, never DMs. The Discord message id makes a re-save a no-op.

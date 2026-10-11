@@ -1,6 +1,6 @@
 # How Panda works
 
-How panda-bot turns a message into a reply, and how its prompts, memory (context, notes, reminders), models, tools, research, sandbox and safety work. For a quick overview, see the [README](README.md).
+How panda-bot turns a message into a reply, and how its prompts, memory (context, notes, reminders), models, Jev decisions, tools, research, sandbox and safety work. For a quick overview, see the [README](README.md).
 
 Panda's `how_i_work` tool reads this file to answer questions about itself. If you change how the bot works, update this file too.
 
@@ -54,7 +54,8 @@ The model never chooses tools; it only fills in arguments. A turn is at most two
   - Buttons without one, and the dropdown, are **clickable**. Their ids start with `ui:`.
 - **A click is a message.** The click is acknowledged at once, because Discord allows 3 seconds. It then goes through the message handler as a message from whoever clicked: `[clicked "Spicy miso ramen"]`, replying to the card, whose title the model sees. So a click gets the same batching, Jev triage, owner checks (against the clicker) and private mode as typed text, and the answer goes out as a follow-up to the click. Anyone who can see the card can click it.
 - Both tools check their input first (answer counts, http(s) links, button and choice limits). They hand Discord's own validation errors back to the model to fix, and pass everything they send through `redactSecrets`.
-- After sending, Jev picks the lines of the batch and the reply worth remembering, and only those go into the context store (see "Memory").
+
+After sending, the batch and the reply are saved to the context store (see "Memory").
 
 **7. Bot-to-bot conversations.**
 They run for as long as the other bot keeps going, and end on a sign-off ("bye!", "have a great day"): Panda reacts 👋 instead of replying, then ignores bots in that channel until a human speaks. Bot sign-offs are checked per message, before batching: Jev decides, with a regex as the fallback. Human sign-offs are caught by the triage in step 4.
@@ -91,26 +92,25 @@ Everything Panda stores lives in one PMS Postgres database, **db-1** in project 
 
 ### Context (hidden)
 
-Panda keeps no summary and no transcript. `context_messages` is flat and global: each row is the Discord message id (so a re-save is a no-op), the author's id, the text and when it was said. There is no server or channel on a row, on purpose, so anything remembered can come up anywhere. **DMs are never saved.** Nobody can list it; it only feeds the model.
+Panda keeps no summary and no transcript. `context_messages` is split by channel: each row is the Discord message id (so a re-save is a no-op), the server, channel and author ids, the text and when it was said. A search only reads the channel it is asked from. **DMs are never saved.** Nobody can list it; it only feeds the model.
 
-Nothing is saved wholesale. Jev reads each line and keeps only what is worth it:
-- **After every reply**, the turn's messages and Panda's reply are checked: facts, decisions, plans, preferences and answers are kept; greetings, small talk and reactions are not.
-- **When a search finds nothing remembered** (see `fetch_history`), the last 100 messages of the channel are read from Discord, and only the lines that match the question are kept.
-- **`index_chat`** keeps only the lines around the old message that matter for what is being asked.
-- With Jev off or down, nothing is saved: the channel can always be read again.
+What gets saved:
+- **After every reply**, the turn's messages and Panda's reply, as they are. This happens after the reply is sent, so the database can never delay or break it.
+- **`fetch_history` range reads** and **`index_chat`**: every message they read.
+- **When a search finds nothing remembered** (see `fetch_history`), the last 1,000 messages of the channel are read from Discord, and Jev keeps only the lines relevant to the question (see "Jev"). With Jev off or down, that scan keeps nothing.
 
 **`fetch_history`** has two modes:
 - **Range** (no `query` or `author`): reads this channel straight from Discord, back from the message being answered. `count` messages (default 30, max 100) after skipping the `skip` most recent (max 500). Panda's own replies are marked `(you)`. Doesn't need the database.
-- **Search** (`query` and/or `author`): full-text search over the remembered context, up to 40 lines, oldest first. `author` is a name (looked up among this server's members), a mention or an id. When nothing is remembered yet, the channel is searched as above.
+- **Search** (`query` and/or `author`): full-text search over what was remembered in this channel, up to 40 lines, oldest first. `author` is a name (looked up among this server's members), a mention or an id. When nothing is remembered yet, the channel is searched as above.
 
 **`index_chat`** (the tool; anyone can trigger it) is for one specific old message Panda hasn't seen: someone replies to it, links it, or points at it.
-- It takes a message link, or an id in this channel, and reads the **50** messages around that message straight from Discord, oldest first, with the message itself marked. All 50 are shown to the model; only the relevant ones are remembered. If the database is down, it still shows them.
+- It takes a message link, or an id in this channel, and reads the **100** messages around that message (about 50 each side) straight from Discord, oldest first, with the message itself marked. All are shown to the model and remembered. If the database is down, it still shows them.
 - Another channel must be in this server, and the person asking must be able to read its history. Panda can see channels they can't. A DM can only reach itself.
 
 ### Notes (shared)
 
 Anyone can save, browse and open notes, and everyone sees every note (`src/agent/notes.js`, views in `src/discord/notes.js`).
-- **`/save_note`** reads the last 50 messages of the channel. The conversation model writes a title, a one-line description and an organized Markdown summary of everything discussed. A second call files it into the **folder tree** (folders can nest, like a knowledge graph): it sees the tree with each folder's description and the 5 closest existing notes, reuses a folder, adds a sub-folder or starts a new top-level one, and may link the note to up to 3 of those related notes. If it can't decide, the note goes to `Unsorted`.
+- **`/save_note [minutes]`** reads the channel's last 10 minutes (or `minutes`). Past 60,000 characters, Jev keeps the lines worth remembering first. The conversation model writes a title, a one-line description and an organized Markdown summary of everything discussed. A second call files it into the **folder tree** (folders can nest, like a knowledge graph): it sees the tree with each folder's description and the 5 closest existing notes, reuses a folder, adds a sub-folder or starts a new top-level one, and may link the note to up to 3 of those related notes. If it can't decide, the note goes to `Unsorted`.
 - **Finding notes** (the `search_notes` tool, and `/open_note` when no title is close): Jev walks the tree from the top, one level at a time, going into every folder it rates ≥ 0.25 (at least its top pick), at most 6 levels and 8 folders. The notes in those folders and the notes linked to them are ranked by full-text match and title similarity. With Jev off, or when the walk finds nothing, every note is searched the same way.
 - **`/open_note <title>`**: exact title (case-insensitive), then the most similar title (trigram similarity ≥ 0.3), then the search above. Long bodies continue in follow-up messages.
 - **`/display_notes`**: the whole tree with counts when it fits, otherwise one folder at a time; a menu opens a folder or a note, and ⬆ Up goes back.
@@ -129,29 +129,71 @@ Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), re
 
 | Role | Used for |
 |------|----------|
-| **Conversation** model | Chat replies, `/research` |
-| **Development** model | `self_fix` commit titles (the change itself is Claude Code's); `set_rule`: rewriting `soul.md` |
+| **Conversation** model | Chat replies, `/research`, `set_rule`'s rewrite of `soul.md`, `self_fix` commit titles |
+| **Claude Code** | The code change itself in `self_fix` (see "The development sandbox") |
 | **Jev** (`typesafe/jev-1.13`) | Fast yes/no and pick-one decisions |
 
-`/set_model` and `/set_dev_model` (Oscar) switch models; `/model` shows the current one; `/usage` shows OpenRouter spend. The choice is saved by committing `src/models.json` to the repo: the file is read through the GitHub MCP server and written with one REST call. That commit triggers CI, which redeploys the bot with the new file.
+`/set_model` (Oscar) switches the conversation model, live at once; `/model` shows the current one; `/usage` shows OpenRouter spend. The id is checked against OpenRouter's catalog, then saved in the database (`bot_settings`, key `model`), and every boot loads it from there (`loadModel` in `src/discord/model.js`). No commit and no redeploy: the container's own disk resets on restart, the database doesn't. With no saved choice, or no database, Panda boots on the default in `src/config.js`.
 
-**Jev** (`src/agent/jev.js`) returns probabilities instead of text, in about 0.2 s. Panda uses it to:
-1. **Decide whether a message is for Panda** (step 1 of "How a message becomes a reply"): every message that isn't a ping or a reply to Panda, read with the 2 messages before it (≥ 0.8).
-2. **Triage every turn** (step 4). One call answers:
-   - whether the message is a sign-off (≥ 0.8);
-   - which tools to run, one yes/no each (≥ 0.5), including whether one is Oscar-only;
-   - whether to respond with a reaction (≥ 0.8), a text message, or both.
-3. **Detect sign-offs from other bots**, per message, including "aight gn" or other languages.
-4. **Fact-check research**: drop claims whose quote likely doesn't support them (< 0.3).
-5. **Pick what to remember**: one yes/no per line (≥ 0.5) before anything goes into the context store.
-6. **Walk the notes tree**: which folders to go into, level by level.
+Jev has its own section below: it makes every decision in Panda that code, not the conversation model, acts on.
 
-Jev sees every message Panda can read in a server (with the 2 before it), so ordinary chatter does reach OpenRouter. Calls time out after 5 s. If Jev is off or down:
-- Panda answers only pings, replies to its messages, and DMs.
-- No tools run, and the model answers in text.
-- Bot sign-offs use the regex.
-- All research claims are kept.
-- Nothing new is remembered, and note searches skip the tree walk.
+## Jev: the decision layer
+
+Panda splits thinking into two kinds. **Jev** decides; the **conversation model** writes. The model never chooses whether to answer, which tools run, whether to react, what to remember or which notes folder to open. Jev answers those, and plain code applies its answers with fixed thresholds. That is what keeps a turn at most two model calls and keeps the model from wandering off into tools nobody asked for.
+
+### What a Jev call is
+
+Jev (`typesafe/jev-1.13`) is a decision model on OpenRouter's decisions endpoint (`/api/alpha/decisions`), called with the same OpenRouter key. `decide(config, state, questions)` in `src/agent/jev.js` is the only way in. A call sends:
+- **`state`**: named pieces of text, such as `message`, `recent_messages`, `sender`, `query`, or `m0` … `m24`.
+- **`questions`**: named, typed questions whose instructions point at the state by name in backticks ("Is `message` meant for the assistant…?").
+
+Jev answers every question at once, in about 0.2 s, with **probabilities instead of text**. Panda uses two question types:
+
+| Type | Answer | Example |
+|------|--------|---------|
+| `noul` | a yes probability, `answers.q.noul` from 0 to 1 | "Should the assistant call `web_search`?" → 0.91 |
+| `choice` | the top pick plus a probability per option, `answers.q.choice` / `answers.q.probabilities` | `respond_with`: reaction 0.12 · message 0.80 · both 0.08 |
+
+Because the answer is a number, the caller picks the bar. The model is pinned (not `jev-latest`) because every threshold below was tuned against 1.13's probabilities; a new version means re-tuning them.
+
+**Many questions, one call.** Where Panda needs several decisions about the same text, it packs them into one call: triage asks the sign-off, the response form, the unexplained-reference question and one yes/no per tool together; a memory scan puts 25 lines in as `m0` … `m24` with one `keep_mN` question each; a research page sends every claim and quote as `claim_i` / `quote_i`.
+
+**Failure is always safe.** `decide` returns `null` when `JEV_ENABLED=false`, the key is missing, the call fails, or it takes longer than **5 s**. Every caller treats `null` (or a missing answer) as its pre-Jev behaviour, so a Jev outage changes what Panda does but never breaks a turn.
+
+### Every decision Jev makes
+
+| Where | Asked when | State | Question(s) | Bar | Jev off or down |
+|-------|-----------|-------|-------------|-----|-----------------|
+| **Gate** (`forPanda`, `messageHandler.js`) | Every server message that isn't a ping or a reply to Panda | `message`, the 2 messages before it, bot and owner names | `for_assistant` (noul) | ≥ 0.8 → answer | Silence: only pings and replies get answers |
+| **Bot sign-off** (`signsOff`, `messageHandler.js`) | Every message from another bot | `message` | `bye` (noul) | ≥ 0.8 → wave 👋, stop talking to bots in that channel | The farewell regex |
+| **Triage** (`triage`, `agent.js`) | Every turn, once | the batch, the 10 recent messages, sender (marked if Oscar), bot and owner names | `bye` (noul) | ≥ 0.8 → wave 👋, no model call | Not a sign-off |
+| | | | `use_<tool>` (noul, one per tool but `react`) | ≥ 0.5 → offer that tool | No tools |
+| | | | `unexplained` (noul) | ≥ 0.8 → add `fetch_history` and tell the model to search | No lookup |
+| | | | `respond_with` (choice: reaction / message / both) | reaction needs ≥ 0.8; message or both just need to be the top pick | Text reply |
+| **Memory scan** (`pickRelevant`, `historyStore.js`) | `fetch_history` search found nothing remembered; `/save_note` transcript over 60,000 characters | `focus` (the query) + 25 lines per call, 5 calls at once | `keep_mN` (noul): relevant to `focus`, or worth remembering | ≥ 0.5 → keep the line | Keep nothing (`fetch_history` says nothing matched; `/save_note` cuts the oldest lines instead) |
+| **Notes walk** (`walkFolders`, `notes.js`) | `search_notes`, and `/open_note` when no title is close | `query` | `folder` (choice over up to 20 sibling folders, with descriptions) | go into every folder ≥ 0.25, or the top pick if none is; at most 6 levels and 8 folders | Full-text search over every note |
+| **Research fact-check** (`supportedClaims`, `research/stages.js`) | Each page read by `/research`, after code has checked each quote is on the page | `claim_i`, `quote_i` | `supported_i` (noul): does the quote state or imply the claim? | < 0.3 → drop the claim | Keep every claim |
+
+### Why the bars differ
+
+Each bar is set by which mistake costs more:
+- **Gate, 0.8:** a false yes means Panda butts into a conversation that wasn't for it; a false no costs only a ping. So it is tight.
+- **Tools, 0.5:** an extra tool is cheap, since the model is told to call only the picked tools that help. Plain chat scores every tool under 0.5; clear requests score the right one 0.57–0.97.
+- **Reaction only, 0.8:** a wrong "reaction only" leaves a real question unanswered. Message and both need no bar, since a text reply is the safe side.
+- **Unexplained reference, 0.8:** references nothing shown explains score 0.90–0.97; plain chat ≤ 0.45; "fix that" right under the bug report 0.73, which should *not* search.
+- **Folders, 0.25:** wide on purpose, so a note filed under a near-miss folder is still found; the 8-folder cap bounds the cost.
+- **Research, < 0.3:** a claim is dropped only when Jev is fairly sure its quote doesn't back it, so borderline claims survive and the report isn't starved.
+
+### One message through Jev
+
+For a message that isn't a ping, Jev is asked up to three times before the conversation model sees anything:
+1. **Gate:** is it for Panda? (A ping or a reply to Panda skips this.) No → silence, nothing saved.
+2. **Bot sign-off**, only if a bot sent it: yes → 👋 and stop.
+3. **Triage**, once the 3-second batch closes: sign-off → 👋; otherwise the tools to offer and the response form.
+
+Then, only if triage picked them, tools may call Jev again: `fetch_history` runs a memory scan of up to 1,000 channel lines (40 calls, 5 at a time), and `search_notes` walks the notes tree. Jev reads text only: attachments go to the conversation model alone.
+
+**Privacy:** the gate means Jev sees every message Panda can read in a server, with the 2 before it, so ordinary chatter does reach OpenRouter. `JEV_ENABLED=false` stops that, at the cost of everything in the "Jev off or down" column.
 
 ## Tools
 
@@ -183,7 +225,7 @@ Jev sees every message Panda can read in a server (with the 2 before it), so ord
 - **Notes:** `/save_note`, `/display_notes`, `/open_note <title>`, `/delete_note <note>`
 - **Reminders:** `/add_reminder <name> <repeat> <when> [timezone]`, `/show_reminders`, `/delete_reminder <reminder>`
 - **Info:** `/menu`, `/usage`, `/model`
-- **Oscar only:** `/set_rule`, `/self_fix`, `/set_model`, `/set_dev_model`, `/private on|off|status`, `/github` (lists Oscar's own repositories, read through the GitHub MCP server)
+- **Oscar only:** `/set_rule`, `/self_fix`, `/set_model`, `/private on|off|status`, `/github` (lists Oscar's own repositories, read through the GitHub MCP server)
 
 ## Deep research
 
@@ -223,9 +265,9 @@ While it runs, the bot watches it only through the GitHub MCP server (`actions` 
 - Nobody can get a credential by asking, Oscar included. The Discord token, OpenRouter key, GitHub token and database URL are only ever used in auth headers and the database connection, so the model never sees them. On top of that, `redactSecrets` (`src/config.js`) strips their exact values from every tool result before the model reads it, and from every message Panda sends.
 - `index_chat` only reads channels of this server that the person asking can read.
 - `web_fetch` refuses loopback, LAN, link-local and cloud-metadata addresses, on every DNS lookup and redirect.
-- Every GitHub read, in chat and in code, goes through GitHub's read-only MCP endpoint (`/mcp/readonly`), so a read can never write. The only REST calls are writes: the sandbox dispatch, the `src/models.json` commit and the `github` tool.
+- Every GitHub read, in chat and in code, goes through GitHub's read-only MCP endpoint (`/mcp/readonly`), so a read can never write. The only REST calls are writes: the sandbox dispatch and the `github` tool.
 - There is one GitHub token: `GITHUB_PAT` in the bot, the `GH_PAT` Actions secret in CI (Actions secret names can't start with `GITHUB_`).
-- `/set_model` and `/set_dev_model` only commit safe model-id characters to `src/models.json`.
+- `/set_model` only saves ids made of safe model-id characters.
 
 ## Running and deploying
 
@@ -258,7 +300,6 @@ src/reminders.js          reminder times and the DM scheduler
 src/agent/jev.js          Jev decision calls
 src/agent/tools/          every tool the model can call; githubMcp.js is the one way code reads GitHub
 src/agent/mcp.js          minimal MCP client (GitHub's hosted server)
-src/models.json           the conversation and development model ids
 src/agent/research/       the /research pipeline
 src/music/                discord-player + yt-dlp streaming
 .github/                  Docker build + PMS deploy, CI tests, the development sandbox

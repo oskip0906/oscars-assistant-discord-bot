@@ -72,7 +72,7 @@ jobs:
         if: always() && steps.claude.outcome != 'skipped'
         run: jq -r 'last(.[] | select(.type == "result")) | .result // empty' "$RUNNER_TEMP/claude-execution-output.json" || true
 
-      # Same paths as FORBIDDEN in src/agent/tools/repoAgent.js.
+      # Claude must not touch these; the workflow enforces it.
       - name: Check changes
         run: |
           git add -A

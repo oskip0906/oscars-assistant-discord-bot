@@ -1,52 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { saveModel, switchModel } from '../src/discord/model.js';
-import { getDefaultModelName } from '../src/configManager.js';
+import { saveModel, loadModel, switchModel } from '../src/discord/model.js';
 
-const repoConfig = { githubPat: 'pat', developmentSandboxRepo: 'owner/repo' };
-const SHA = 'a'.repeat(40);
+const dbConfig = { databaseUrl: 'postgres://x' };
 
-// What GitHub's MCP get_file_contents answers for a text file.
-const mcpFile = (obj) => async (name, args) => {
-  assert.equal(name, 'get_file_contents');
-  assert.deepEqual(args, { owner: 'owner', repo: 'repo', path: 'src/models.json', ref: 'refs/heads/main' });
-  const text = `successfully downloaded text file (SHA: ${SHA})`;
-  return { text, result: { content: [{ type: 'text', text }, { type: 'resource', resource: { text: JSON.stringify(obj) } }] } };
-};
-
-test('saveModel reads src/models.json over MCP and commits only the one key changed', async () => {
-  const calls = [];
-  const fetchImpl = async (url, opts = {}) => {
-    calls.push({ url, opts });
-    return { ok: true };
+test('saveModel upserts the id into bot_settings, and loadModel reads it back at boot', async () => {
+  const rows = new Map();
+  const query = async (_config, sql, params) => {
+    if (sql.startsWith('insert')) rows.set('model', params[0]);
+    return { rows: rows.has('model') ? [{ value: rows.get('model') }] : [] };
   };
-  const read = mcpFile({ conversation: 'a/old', development: 'b/dev' });
-  assert.deepEqual(await saveModel(repoConfig, 'conversation', 'a/new', { fetchImpl, read }), { ok: true });
+  const config = { ...dbConfig, model: 'a/default' };
+  await loadModel(config, { query });
+  assert.equal(config.model, 'a/default', 'no saved row keeps the default');
 
-  assert.equal(calls.length, 1, 'the only REST call is the commit');
-  const put = calls[0];
-  assert.equal(put.opts.method, 'PUT');
-  assert.equal(put.url, 'https://api.github.com/repos/owner/repo/contents/src/models.json');
-  const body = JSON.parse(put.opts.body);
-  assert.equal(body.sha, SHA);
-  assert.equal(body.branch, 'main');
-  assert.deepEqual(JSON.parse(Buffer.from(body.content, 'base64').toString()), { conversation: 'a/new', development: 'b/dev' });
+  assert.deepEqual(await saveModel(dbConfig, 'a/new', { query }), { ok: true });
+  await loadModel(config, { query });
+  assert.equal(config.model, 'a/new');
 });
 
-test('saveModel refuses unsafe ids and reports GitHub failures without throwing', async () => {
-  assert.equal((await saveModel(repoConfig, 'conversation', 'a\nOWNER=1')).ok, false);
-  const failing = async () => ({ ok: false, status: 403 });
-  const result = await saveModel(repoConfig, 'conversation', 'a/new', { fetchImpl: failing, read: mcpFile({ conversation: 'a/old' }) });
-  assert.equal(result.ok, false);
-  assert.match(result.error, /403/);
-
-  const unreadable = await saveModel(repoConfig, 'conversation', 'a/new', {
-    read: async () => {
-      throw new Error('GitHub MCP get_file_contents: not found');
+test('saveModel refuses unsafe ids, a missing database and failed writes without throwing', async () => {
+  const never = async () => assert.fail('nothing may be written');
+  assert.equal((await saveModel(dbConfig, 'a\nOWNER=1', { query: never })).ok, false);
+  assert.equal((await saveModel({}, 'a/new', { query: never })).ok, false);
+  const failed = await saveModel(dbConfig, 'a/new', {
+    query: async () => {
+      throw new Error('connection refused');
     },
   });
-  assert.equal(unreadable.ok, false);
-  assert.match(unreadable.error, /not found/);
+  assert.equal(failed.ok, false);
+  assert.match(failed.error, /connection refused/);
 });
 
 test('switchModel goes live only after the choice is saved', async () => {
@@ -60,5 +43,4 @@ test('switchModel goes live only after the choice is saved', async () => {
   const switched = await switchModel({ model: 'a/new', config }, { listModels, save: async () => ({ ok: true }) });
   assert.equal(switched.ok, true);
   assert.equal(config.model, 'a/new');
-  assert.equal(getDefaultModelName(), 'a/new');
 });

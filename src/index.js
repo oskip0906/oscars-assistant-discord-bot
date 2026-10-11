@@ -10,12 +10,14 @@ import { githubReadJson } from './agent/tools/githubMcp.js';
 import { resolveInterruptedRun } from './devRunStore.js';
 import { dmOwner } from './discord/notify.js';
 import { ensureSchema } from './db.js';
+import { loadModel } from './discord/model.js';
 import { startReminders } from './reminders.js';
 import { watchStorage } from './storage.js';
 
 validateConfig();
 // A database that is down at boot leaves chat working; its features fail on use.
 await ensureSchema(config).catch((err) => console.error('[panda] could not apply the database schema:', err.message));
+await loadModel(config).catch((err) => console.error('[panda] could not load the saved model, using the default:', err.message));
 
 const BASE_INTENTS = [
   GatewayIntentBits.Guilds,
