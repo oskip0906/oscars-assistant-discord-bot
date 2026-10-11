@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
-import { buildMenuEmbed } from './menu.js';
+import { buildMenuEmbeds } from './menu.js';
 import { buildUsageEmbed } from './usage.js';
 import { buildModelEmbed, switchModel, modelChoices, saveModel } from './model.js';
 import { chunkMessage } from './chunk.js';
@@ -399,7 +399,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       }
 
       if (name === 'menu') {
-        return await interaction.reply({ embeds: [buildMenuEmbed(client, config)] });
+        return await interaction.reply({ embeds: buildMenuEmbeds(client, config) });
       }
 
       if (name === 'usage') {
