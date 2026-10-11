@@ -101,7 +101,7 @@ Panda keeps no summary and no transcript. What was said before is read on demand
 
 ## Models: OpenRouter and Jev
 
-Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), retried up to 3 times on network errors, 429s and 5xx.
+Every model call goes through one OpenRouter key (`src/agent/openrouter.js`), retried without limit on network errors, 429s, 5xx and silence: an attempt with no answer after 60 s is sent again (each retry waits 60 s longer), so one stuck call can never freeze the bot. Only real API errors (bad key, unknown model) fail the turn.
 
 | Role | Used for |
 |------|----------|

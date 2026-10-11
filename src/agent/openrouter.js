@@ -2,16 +2,24 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// One chat-completions call. Retries transient failures (network, 429, 5xx),
-// throws on real API errors. Returns the assistant message object
-// ({ content, tool_calls? }).
-export async function chatCompletion({ apiKey, model, messages, tools, toolChoice = 'auto', maxRetries = 3 }) {
-  let lastErr;
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
+// One chat-completions call. Returns the assistant message object
+// ({ content, tool_calls? }), throws only on real API errors (bad key, unknown
+// model, ...) since those never succeed on a retry.
+//
+// Everything transient (network, 429, 5xx, and a provider that goes silent) is
+// retried with no limit: turns run one at a time per server, so a call left
+// hanging froze the bot for everyone there. A silent attempt is dropped after
+// `attemptMs` and sent again, and each retry waits `attemptMs` longer, so a model
+// that is merely slow still gets through.
+export async function chatCompletion({ apiKey, model, messages, tools, toolChoice = 'auto', attemptMs = 60_000, backoffMs = 1500 }) {
+  for (let attempt = 0; ; attempt++) {
     let res;
+    let text;
     try {
       res = await fetch(OPENROUTER_URL, {
         method: 'POST',
+        // Covers reading the body too, so a reply that stalls halfway is caught.
+        signal: AbortSignal.timeout(attemptMs * (attempt + 1)),
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
@@ -24,17 +32,14 @@ export async function chatCompletion({ apiKey, model, messages, tools, toolChoic
           ...(tools?.length ? { tools, tool_choice: toolChoice } : {}),
         }),
       });
+      if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`);
+      text = await res.text();
     } catch (err) {
-      lastErr = err;
-      await sleep(1500 * (attempt + 1));
+      const why = err.name === 'TimeoutError' ? `no answer in ${(attemptMs * (attempt + 1)) / 1000}s` : err.message;
+      console.warn(`[openrouter] ${model} attempt ${attempt + 1} failed (${why}) — retrying`);
+      await sleep(Math.min(backoffMs * (attempt + 1), 30_000));
       continue;
     }
-    if (res.status === 429 || res.status >= 500) {
-      lastErr = new Error(`OpenRouter HTTP ${res.status}`);
-      await sleep(2000 * (attempt + 1));
-      continue;
-    }
-    const text = await res.text();
     let data;
     try {
       data = JSON.parse(text);
@@ -48,5 +53,4 @@ export async function chatCompletion({ apiKey, model, messages, tools, toolChoic
     if (!message) throw new Error('OpenRouter response had no choices');
     return message;
   }
-  throw lastErr ?? new Error('OpenRouter request failed after retries');
 }
