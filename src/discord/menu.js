@@ -69,7 +69,6 @@ export function buildMenuEmbeds(client, config) {
         '`/set_model <model>` : Switch me to another OpenRouter model',
         '`/set_rule <instruction>` : Change my personality or behavior for good',
         '`/private on|off|status` : Only respond to Oscar',
-        '`/github` : List Oscar’s GitHub repositories',
       ].join('\n'),
     ),
     sectionEmbed(

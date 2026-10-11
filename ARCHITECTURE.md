@@ -225,7 +225,7 @@ Then, only if triage picked them, tools may call Jev again: `fetch_history` runs
 - **Notes:** `/save_note`, `/display_notes`, `/open_note <title>`, `/delete_note <note>`
 - **Reminders:** `/add_reminder <name> <repeat> <when> [timezone]`, `/show_reminders`, `/delete_reminder <reminder>`
 - **Info:** `/menu`, `/usage`, `/model`
-- **Oscar only:** `/set_rule`, `/self_fix`, `/set_model`, `/private on|off|status`, `/github` (lists Oscar's own repositories, read through the GitHub MCP server)
+- **Oscar only:** `/set_rule`, `/self_fix`, `/set_model`, `/private on|off|status`
 
 ## Deep research
 
