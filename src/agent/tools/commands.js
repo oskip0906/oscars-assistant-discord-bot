@@ -205,6 +205,10 @@ export const COMMAND_TOOLS = {
   set_rule: { tool: 'set_rule' },
   create_poll: { tool: 'create_poll' },
   create_card: { tool: 'send_card' },
+  clear: {
+    gated:
+      'It deletes messages for good and only Oscar may run it, so it is never run from chat: Oscar runs /clear himself, with a number or "all".',
+  },
   index_channel: {
     gated:
       'It reads a whole channel (up to 10,000 messages) and only Oscar may start it, so it is never run from chat: Oscar runs /index_channel himself. To read around one old message, index_chat does that in chat.',

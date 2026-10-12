@@ -74,6 +74,7 @@ export function buildMenuEmbeds(client, config) {
         '`/set_model <model>` : Switch me to another OpenRouter model',
         '`/set_rule <instruction>` : Change my personality or behavior for good',
         '`/private on|off|status` : Only respond to Oscar',
+        '`/clear <number|all>` : Delete the newest messages in this channel, or all of them',
       ].join('\n'),
     ),
     sectionEmbed(
