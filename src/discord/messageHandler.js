@@ -4,7 +4,7 @@ import { chunkMessage } from './chunk.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
 import { decide, sampleYes } from '../agent/jev.js';
 import { saveContext } from '../agent/historyStore.js';
-import { attachmentParts, gifPreviews } from './attachments.js';
+import { attachmentParts, mediaOf } from './attachments.js';
 import { modelInputs } from './model.js';
 import { redactSecrets } from '../config.js';
 import { readChannelRange } from '../agent/tools/history.js';
@@ -253,7 +253,7 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           if (m.reference?.messageId) ref = await m.fetchReference().catch(() => null);
           parts.push(formatEnvelope(m, ref));
           // A reply to someone's picture ("what's this?") is about that picture.
-          for (const msg of [m, ref]) attachments.push(...(msg?.attachments?.values() ?? []), ...gifPreviews(msg));
+          attachments.push(...mediaOf(m, 'in the turn'), ...mediaOf(ref, 'in the message replied to'));
         }
 
         // What was said just before the batch, so "that" and "it" resolve without
@@ -261,6 +261,10 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         const self = client.user?.id;
         const before = await readChannelRange(messages[0].channel, messages[0].id, { count: RECENT_COUNT }).catch(() => []);
         const recent = before.map((m) => historyLine(m, self)).join('\n');
+        // "What do you think of this?" often points at a picture, GIF or file
+        // posted just before, maybe on its own with no text: those are read
+        // too, newest first, after the turn's own.
+        for (const m of [...before].reverse()) attachments.push(...mediaOf(m, 'in the recent messages'));
         const trigger = messages[0].author;
         const triggerName = messages[0].member?.displayName || trigger.displayName || trigger.username;
         const turn = parts.join('\n');
@@ -302,8 +306,9 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           embeds: [],
         };
 
-        // Media goes to the model for this turn only; memory keeps the text,
-        // whose attachment URLs expire and would break later turns.
+        // Media is downloaded only here, for a turn Panda answers, and goes to
+        // the model for this turn only; memory keeps the text, whose attachment
+        // URLs expire and would break later turns.
         const media = attachments.length ? await attachmentParts(attachments, await modelInputs(config)) : [];
 
         let replyText;
