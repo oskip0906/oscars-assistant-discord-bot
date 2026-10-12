@@ -21,7 +21,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY src ./src
 COPY ARCHITECTURE.md ./
 
-# Runtime state (the private-mode flag, dev-run log) lives here; mount a volume over it.
+# Runtime state (dev-run log, pending approval) lives here; mount a volume over it.
 RUN mkdir -p data && chown -R node:node /app
 USER node
 

@@ -51,7 +51,7 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 | `/self_fix <instruction>` | Approve a sandboxed self-fix PR, then restart after it merges |
 | `/set_model <model> [provider]` | Switch the conversation model (OpenRouter), optionally pinned to one provider; saved in the database |
 | `/set_rule <instruction>` | Change Panda's personality or behavior for good |
-| `/private on\|off\|status` | Only respond to Oscar |
+| `/private on\|off\|status` | Only respond to Oscar. Saved in the database (db-1 `pms` table), so it survives restarts; Panda's status shows whether it is ON or OFF |
 
 **📖 Info**
 | Command | What it does |

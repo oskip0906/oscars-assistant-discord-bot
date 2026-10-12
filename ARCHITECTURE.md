@@ -34,7 +34,9 @@ All behavior text lives in the database table `prompts` (`src/agent/prompts.js`)
 
 ## Memory: context, notes and reminders
 
-Everything is stored in one PMS Postgres database (`DATABASE_URL`). `src/db.js` applies `src/schema.sql` at boot. Without it, chat works but there are no prompts, context, notes or reminders.
+Everything is stored in one PMS Postgres database (`DATABASE_URL`). `src/db.js` applies `src/schema.sql` at boot. Without it, chat works but there are no prompts, context, notes or reminders, and private mode starts OFF and can't be toggled.
+
+**Private mode** (`src/privateMode.js`) is one row in db-1's `pms` table (`id = 1`, `enabled`). It is read at boot, before Panda logs in, so it survives restarts and redeploys. `/private` and `private_mode` (Oscar only) save the new value first and only then flip the in-memory state the message handler checks, so the change applies to the very next message and the two never disagree. A failed save changes nothing and the reply says so. A database that is down at boot is logged and leaves private mode OFF.
 
 **Storage budget** (`src/storage.js`): of the 1 GiB, persona gets 10 MB and the rest splits 75% context, 20% notes, 5% reminders. When a section is full, Panda DMs Oscar with **Delete oldest** / **Not now** and refuses new writes to it until trimmed.
 
@@ -132,7 +134,7 @@ The only way Panda changes code, and only its own repo.
 3. **Claude Code** makes the change unattended with a read-only GitHub token, seeing only the repo and the instruction.
 4. **Verify:** the workflow fails if nothing changed or `.git`, `node_modules`, `data/`, `.env` or `.github/` were touched, runs `npm test`, then commits, pushes and opens the PR with `GH_PAT`. `ci.yml`'s required `test` check gates auto-merge.
 
-The bot watches via the GitHub MCP server, enables auto-merge and waits. The merge to main triggers the deploy (under `run.sh`, exit code 42 pulls and restarts). The run is in the background, so Panda keeps answering meanwhile; only a second self-fix is refused until it lands (or 50 min pass). While it runs Panda shows Idle with a "Currently fixing myself" status; otherwise private mode shows Do Not Disturb (`src/presence.js`).
+The bot watches via the GitHub MCP server, enables auto-merge and waits. The merge to main triggers the deploy (under `run.sh`, exit code 42 pulls and restarts). The run is in the background, so Panda keeps answering meanwhile; only a second self-fix is refused until it lands (or 50 min pass). While it runs Panda shows Idle with a "Currently fixing myself" status. Otherwise its custom status shows private mode: "🔒 Private mode: ON" (Do Not Disturb) or "🔓 Private mode: OFF" (Online) (`src/presence.js`). The status is set at login, once the saved private mode is loaded, and again on every toggle. A failed presence update is logged and never breaks the command.
 
 ## Safety
 
@@ -148,7 +150,7 @@ The bot watches via the GitHub MCP server, enables auto-merge and waits. The mer
 
 `npm start` runs `run.sh`: a private SearXNG (installed by `scripts/ensure-searxng.sh` with `uv`, loopback only, never blocks boot), then the bot under a supervisor (exit 42 → pull and restart, crash → restart after 3 s, exit 0 → stop). `npm run start:once` skips the supervisor; `npm test` runs the tests.
 
-Every push to `main` builds and publishes the `panda-bot` and `panda-searxng` Docker images (`.github/workflows/docker.yml`). Production runs on PMS Cloud containers (project `oscars-discord-bot`) with `SEARXNG_URL=http://panda-searxng:8080`; they have no disk, so YouTube cookies go in as `YT_COOKIES_B64` and `/app/data` resets on restart. The CI deploy step currently fails behind Cloudflare, so deploy by hand: `pms container edit <name> --image <image>:<sha>`. To self-host, use `docker-compose.deploy.yml` with a volume on `/app/data`. Always set `DATABASE_URL`.
+Every push to `main` builds and publishes the `panda-bot` and `panda-searxng` Docker images (`.github/workflows/docker.yml`). Production runs on PMS Cloud containers (project `oscars-discord-bot`) with `SEARXNG_URL=http://panda-searxng:8080`; they have no disk, so YouTube cookies go in as `YT_COOKIES_B64` and `/app/data` resets on restart (private mode is in the database, so it is kept). The CI deploy step currently fails behind Cloudflare, so deploy by hand: `pms container edit <name> --image <image>:<sha>`. To self-host, use `docker-compose.deploy.yml` with a volume on `/app/data`. Always set `DATABASE_URL`.
 
 ## Project layout
 
