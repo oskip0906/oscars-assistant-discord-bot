@@ -159,3 +159,18 @@ test('a full section alerts Oscar once, and his cleanup trims it to 90%', async 
     resetStorageState();
   }
 });
+
+test('a long folder listing is split into pages, and every entry gets a menu option', () => {
+  const many = Array.from({ length: 60 }, (_, i) => ({ id: i + 1, folder_id: null, title: `Note ${i + 1}`, description: 'x'.repeat(120) }));
+  const view = folderView({ folders: [], notes: many });
+  assert.ok(view.rest.length >= 1, 'more than one page');
+  const pages = [view.embeds[0], ...view.rest.map((p) => p.embeds[0])].map((e) => e.toJSON());
+  for (const p of pages) assert.ok(p.description.length <= 4096);
+  const listed = pages.map((p) => p.description).join('\n');
+  for (const n of many) assert.match(listed, new RegExp(`📄 ${n.title} —`));
+  assert.match(pages.at(-1).footer.text, new RegExp(`page ${pages.length}/${pages.length}`));
+  const menus = view.components.map((c) => c.toJSON().components[0]);
+  assert.deepEqual(menus.map((m) => m.options.length), [25, 25, 10]);
+  assert.equal(new Set(menus.map((m) => m.custom_id)).size, 3, 'menu ids are unique');
+  assert.deepEqual(folderView({ folders, notes: [] }).rest, []);
+});

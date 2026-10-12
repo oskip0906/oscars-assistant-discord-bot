@@ -4,6 +4,7 @@ import { switchModel } from '../../discord/model.js';
 import { usageLines } from '../../discord/usage.js';
 import { deleteNoteConfirm } from '../../discord/notes.js';
 import { providerFor } from '../openrouter.js';
+import { updatePresence } from '../../presence.js';
 import { JEV_MODEL } from '../jev.js';
 import { runResearch } from '../research/pipeline.js';
 import { renderReport } from '../research/render.js';
@@ -278,6 +279,7 @@ export function privateModeTool({ state } = {}, invocation) {
   if (!mode) return 'Private mode is unavailable here.';
   if (state === 'status') return `Private mode is ${mode.isOn() ? 'ON' : 'OFF'}.`;
   mode.set(state === 'on');
+  updatePresence(invocation.client, mode);
   return state === 'on'
     ? 'Private mode is now ON: from the next message on, only Oscar gets answers.'
     : 'Private mode is now OFF: everyone gets answers again.';

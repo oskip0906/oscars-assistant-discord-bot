@@ -6,6 +6,7 @@ import { buildModelEmbed, switchModel, modelChoices } from './model.js';
 import { chunkMessage } from './chunk.js';
 import { suppressLinkEmbeds } from './messageHandler.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
+import { updatePresence } from '../presence.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { buildSearchQuery } from '../agent/research/searchQuery.js';
@@ -40,6 +41,14 @@ async function answerApproval(interaction, content) {
     }
     await interaction.message?.edit({ content, components: [] }).catch(() => {});
   }
+}
+
+// A folder of the notes browser: its first page through `send` (update or
+// editReply), then every further page as a follow-up.
+async function showFolder(interaction, tree, folderId, send) {
+  const { rest, ...first } = folderView(tree, folderId);
+  await interaction[send](first);
+  for (const part of rest) await interaction.followUp(part);
 }
 
 export function createInteractionHandler({ client, config, player, privateMode, state = selfFixState, onMessage }) {
@@ -86,11 +95,11 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           const title = await deleteNote(config, Number(arg), interaction.user.id, interaction.user.id === config.ownerId);
           return await interaction.update({ content: title ? `🗑️ Deleted **${title}**.` : 'That note is gone, or it isn’t yours to delete.', components: [] });
         }
-        if (action === 'up') return await interaction.update(folderView(await loadTree(config), arg === 'root' ? null : Number(arg)));
+        if (action === 'up') return await showFolder(interaction, await loadTree(config), arg === 'root' ? null : Number(arg), 'update');
         if (action === 'nav') {
           const value = interaction.values?.[0] || '';
           const id = Number(value.slice(1));
-          if (value.startsWith('f')) return await interaction.update(folderView(await loadTree(config), id));
+          if (value.startsWith('f')) return await showFolder(interaction, await loadTree(config), id, 'update');
           const note = await getNote(config, id);
           if (!note) return await interaction.reply({ content: 'That note was deleted.', flags: MessageFlags.Ephemeral });
           const { folders } = await loadTree(config);
@@ -279,6 +288,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           });
         }
         privateMode.set(state === 'on');
+        updatePresence(client, privateMode);
         return await interaction.reply({
           content:
             state === 'on'
@@ -411,7 +421,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
 
       if (name === 'display_notes') {
         await interaction.deferReply();
-        return await interaction.editReply(folderView(await loadTree(config)));
+        return await showFolder(interaction, await loadTree(config), null, 'editReply');
       }
 
       if (name === 'open_note') {

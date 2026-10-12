@@ -26,7 +26,10 @@ export function providerFor(config, model) {
 // hanging froze the bot for everyone there. A silent attempt is dropped after
 // `attemptMs` and sent again, and each retry waits `attemptMs` longer, so a model
 // that is merely slow still gets through.
-export async function chatCompletion({ apiKey, model, provider, messages, tools, toolChoice = 'auto', attemptMs = 60_000, backoffMs = 1500 }) {
+//
+// `onUsage` gets the call's token counts and cost ({ prompt_tokens,
+// completion_tokens, cost }) whenever OpenRouter reports them.
+export async function chatCompletion({ apiKey, model, provider, messages, tools, toolChoice = 'auto', attemptMs = 60_000, backoffMs = 1500, onUsage }) {
   for (let attempt = 0; ; attempt++) {
     let res;
     let text;
@@ -45,6 +48,7 @@ export async function chatCompletion({ apiKey, model, provider, messages, tools,
           model,
           ...providerPreference(provider),
           messages,
+          usage: { include: true },
           ...(tools?.length ? { tools, tool_choice: toolChoice } : {}),
         }),
       });
@@ -67,6 +71,7 @@ export async function chatCompletion({ apiKey, model, provider, messages, tools,
     }
     const message = data.choices?.[0]?.message;
     if (!message) throw new Error('OpenRouter response had no choices');
+    if (data.usage) onUsage?.(data.usage);
     return message;
   }
 }

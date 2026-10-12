@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from '../../config.js';
 import { dmOwner } from '../../discord/notify.js';
 import { selfFixState } from '../../selfFixState.js';
+import { updatePresence } from '../../presence.js';
 import { startDevRunLog } from '../../devRunLog.js';
 import { ApprovalCard } from '../../discord/approvalCard.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
@@ -202,8 +203,8 @@ export async function runSelfFix(
   }
 
   state.begin();
-  // Do not disturb while the run is in flight; the bot still answers everyone.
-  invocation.client?.user?.setPresence({ status: 'dnd' });
+  // Idle with a "fixing myself" status while the run is in flight; the bot still answers everyone.
+  updatePresence(invocation.client, invocation.privateMode, state);
   await invocation.message?.channel
     ?.send(`🛠️ Approval received — running Claude Code in the remote GitHub Actions sandbox. I keep answering meanwhile and restart once the PR merges.`)
     .catch(() => {});
@@ -242,6 +243,6 @@ export async function runSelfFix(
     return finish('self_fix crashed', `❌ Remote sandbox failed: ${String(err.message || err).slice(0, 500)}`);
   } finally {
     state.end();
-    invocation.client?.user?.setPresence({ status: 'online' });
+    updatePresence(invocation.client, invocation.privateMode, state);
   }
 }

@@ -97,9 +97,21 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   if (locked && !invocation.isOwner) return `Only Oscar can use \`${locked}\`.`;
 
   let step = 0;
+  // Tokens, cost and time of this turn's model calls, shown under the reply.
+  const stats = (invocation.stats ??= { inputTokens: 0, outputTokens: 0, cost: 0, modelMs: 0 });
+  const onUsage = (usage) => {
+    stats.inputTokens += Number(usage.prompt_tokens) || 0;
+    stats.outputTokens += Number(usage.completion_tokens) || 0;
+    stats.cost += Number(usage.cost) || 0;
+  };
   const ask = async (msgs, tools, toolChoice) => {
     const callStart = Date.now();
-    const msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model), messages: msgs, tools, toolChoice });
+    let msg;
+    try {
+      msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model), messages: msgs, tools, toolChoice, onUsage });
+    } finally {
+      stats.modelMs += Date.now() - callStart;
+    }
     log(contextKey, `model #${++step} ${Date.now() - callStart}ms → ${
       msg.tool_calls?.length ? `tools: ${msg.tool_calls.map((c) => c.function.name).join(', ')}` : `text (${(msg.content || '').length} chars)`
     }`);
