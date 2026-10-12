@@ -158,7 +158,7 @@ async function headOk(url, timeoutMs = 5000) {
 
 // One main engine plus two fallbacks for general web search, tried in order
 // when the previous one errors or comes back empty.
-const WEB_ENGINES = ['bing', 'yahoo', 'mojeek'];
+const WEB_ENGINES = ['google cse', 'yahoo', 'mojeek'];
 // One dedicated engine each for the other kinds of search.
 const IMAGE_ENGINE = 'google images';
 const VIDEO_ENGINE = 'youtube';
