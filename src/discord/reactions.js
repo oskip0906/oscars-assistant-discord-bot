@@ -1,5 +1,5 @@
 // At most one reaction from Panda per message, however many things want to add
-// one (several react calls in a turn, a wave, the 👀 fallback). Every reaction
+// one (several react calls in a turn, a wave, a sign-off). Every reaction
 // Panda adds goes through reactOnce, which claims the message before calling
 // Discord, so concurrent or later attempts on it add nothing. A failed call
 // (missing permission, deleted message, bad emoji) keeps the claim too: no retry
