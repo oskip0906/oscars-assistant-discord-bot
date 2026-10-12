@@ -24,9 +24,8 @@ engines:
   - name: wikipedia
     disabled: false
   # Brave rate-limits this instance and DuckDuckGo answers it with a CAPTCHA, so
-  # these add general web engines that do answer.
-  - name: bing
-    disabled: false
+  # these add general web engines that do answer. Bing stays off: it answers
+  # for one word of the query ("who won ..." -> South Korean won), all junk.
   - name: yahoo
     disabled: false
   - name: mojeek
