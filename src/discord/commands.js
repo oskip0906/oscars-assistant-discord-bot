@@ -19,6 +19,7 @@ import { saveNote, windowMessages, loadTree, openNote, getNote, relatedNotes, no
 import { NOTES_PREFIX, noteMessage, folderView, deleteNoteConfirm } from './notes.js';
 import { addReminder, activeReminders, reminderChoices, deleteReminder, timezoneChoices, repeatText } from '../reminders.js';
 import { remindersEmbed } from './reminders.js';
+import { indexChannel, INDEX_OWNER_ID } from './indexChannel.js';
 import { STORAGE_PREFIX, cleanup, dismiss, SECTIONS, mb } from '../storage.js';
 
 export const commandDefs = [
@@ -164,6 +165,7 @@ export const commandDefs = [
     .addStringOption((o) => o.setName('fields').setDescription('Fields as name: value pairs separated by | (e.g. "A: 1 | B: 2")'))
     .addStringOption((o) => o.setName('buttons').setDescription('Button labels separated by | (e.g. "Yes | No"), up to 5'))
     .addStringOption((o) => o.setName('menu').setDescription('Dropdown choices separated by | (e.g. "Red | Green | Blue"), 2 to 25')),
+  new SlashCommandBuilder().setName('index_channel').setDescription("Owner only: save this channel's whole history into Panda's context"),
 ].map((b) => b.toJSON());
 
 // Answering a button click has a 3-second budget, after which the interaction
@@ -374,6 +376,33 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       // Private mode gates non-owner interactions too (it's a private
       // conversation with Oscar — nothing else goes through).
       const isOwner = interaction.user.id === config.ownerId;
+      if (name === 'index_channel') {
+        if (interaction.user.id !== INDEX_OWNER_ID) {
+          return await interaction.reply({ content: '⛔ Only Oscar can use this', flags: MessageFlags.Ephemeral });
+        }
+        if (!interaction.channel?.messages) {
+          return await interaction.reply({ content: 'I can only index a channel I can read.', flags: MessageFlags.Ephemeral });
+        }
+        await interaction.reply({ content: '📥 Indexing this channel’s history…', flags: MessageFlags.Ephemeral });
+        const label = interaction.channel.name ? `#${interaction.channel.name}` : 'this channel';
+        let lastEdit = 0;
+        try {
+          const done = await indexChannel(config, interaction.channel, {
+            onProgress: async ({ fetched }) => {
+              if (Date.now() - lastEdit < 5000) return;
+              lastEdit = Date.now();
+              await interaction.editReply(`📥 Indexing ${label}… ${fetched} messages read so far.`).catch(() => {});
+            },
+          });
+          return await interaction.editReply(
+            `✅ Indexed **${done.indexed}** messages from ${label}; **${done.skipped}** were already present or had no text.` +
+              (done.capped ? ` Stopped at the ${done.fetched}-message safety cap.` : ''),
+          );
+        } catch (err) {
+          return await interaction.editReply(`❌ Indexing ${label} failed: ${redactSecrets(err.message).slice(0, 200)}`);
+        }
+      }
+
       if (name !== 'private' && privateMode?.isOn() && !isOwner) {
         return await interaction.reply({
           content: PRIVATE_MESSAGE,
