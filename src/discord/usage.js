@@ -16,8 +16,22 @@ async function fetchJson(url, config) {
 
 const usd = (n) => `$${(Number(n) || 0).toFixed(4)}`;
 
-export async function buildUsageEmbed(client, config) {
+// Panda's spend, one line per period; null when OpenRouter can't be reached.
+// Shared by /usage and the `usage` tool so both say the same thing.
+export async function usageLines(config) {
   const key = await fetchJson('https://openrouter.ai/api/v1/key', config);
+  if (!key) return null;
+  return [
+    `**Today:** ${usd(key.usage_daily)}`,
+    `**This week:** ${usd(key.usage_weekly)}`,
+    `**This month:** ${usd(key.usage_monthly)}`,
+    `**All-time:** ${usd(key.usage)}`,
+    ...(key.limit != null ? [`**Budget:** ${usd(key.limit_remaining)} left of ${usd(key.limit)} (${key.limit_reset || 'fixed'})`] : []),
+  ];
+}
+
+export async function buildUsageEmbed(client, config) {
+  const lines = await usageLines(config);
 
   return new EmbedBuilder()
     .setColor(randomEmbedColor())
@@ -25,17 +39,7 @@ export async function buildUsageEmbed(client, config) {
     .setThumbnail(client.user.displayAvatarURL({ size: 256 }))
     .addFields({
       name: '🐼 Panda',
-      value: key
-        ? [
-            `**Today:** ${usd(key.usage_daily)}`,
-            `**This week:** ${usd(key.usage_weekly)}`,
-            `**This month:** ${usd(key.usage_monthly)}`,
-            `**All-time:** ${usd(key.usage)}`,
-            ...(key.limit != null
-              ? [`**Budget:** ${usd(key.limit_remaining)} left of ${usd(key.limit)} (${key.limit_reset || 'fixed'})`]
-              : []),
-          ].join('\n')
-        : '_Couldn’t reach OpenRouter for usage right now._',
+      value: lines ? lines.join('\n') : '_Couldn’t reach OpenRouter for usage right now._',
       inline: false,
     });
 }

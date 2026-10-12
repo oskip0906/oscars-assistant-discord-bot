@@ -92,16 +92,24 @@ Bars follow which mistake costs more: the gate is loose but floored, because joi
 | `create_poll` / `send_card` | Post a poll / an embed card with buttons and dropdown |
 | `web_search` / `web_fetch` / `image_search` / `video_search` / `news_search` / `wiki_search` | SearXNG: web search (bing, falling back to yahoo then mojeek); read a public page; up to 3 images (google images); one dedicated engine each for videos (youtube), news (bing news), wiki (wikipedia) |
 | `fetch_history` / `index_chat` | Read or search older messages |
-| `search_notes` | Find saved notes |
+| `search_notes` / `save_note` | Find saved notes / save the recent chat as one |
+| `list_notes` / `open_note` / `delete_note` | List notes / open one / post the same Delete–Keep confirmation as `/delete_note` (nothing is deleted until the author or Oscar clicks) |
+| `add_reminder` / `show_reminders` / `delete_reminder` | Reminders for the sender, as the slash commands; a name matching several reminders deletes nothing and asks which |
+| `research` | The `/research` pipeline and report |
+| `panda_commands` | List the slash commands or explain one, read live from `src/discord/commandDefs.js` |
+| `current_model` / `usage` | The conversation model and provider running now (read from the runtime config, as `/model`) plus Jev's model / spend, as `/usage` |
 | `how_i_work` | Read this file and the source files on GitHub that answer a topic (Jev picks up to 3; long files cut to the lines around the topic) |
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |
 | GitHub MCP tools | Every GitHub read (**Oscar only**) |
 | `github` | GitHub REST writes only (**Oscar only**) |
 | `self_fix` / `set_rule` | Change Panda's code / personality (**Oscar only**) |
+| `set_model` / `private_mode` | Switch the model / private mode, as `/set_model` and `/private` (**Oscar only**) |
 
 "Oscar only" is checked in code against the sender's Discord user id.
 
-Slash commands: music (`/play /skip /pause /resume /stop /queue`), skills (`/research /web_search /web_fetch /image_search /video_search /news_search /wiki_search /create_poll /create_card`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private`).
+Every slash command reaches chat through the tool in `COMMAND_TOOLS` (`src/agent/tools/commands.js`), which calls the same functions the command does, or is gated there with the reason (`/index_channel`: Oscar runs it himself). The command definitions live once in `src/discord/commandDefs.js`, with `OWNER_ONLY_COMMANDS`; tests hold the map to the full command list and the owner-only commands to `OWNER_ONLY_TOOLS`. Before a tool runs, `executeTool` checks the owner gate, then the arguments against the tool's own schema (required, type, enum); bad arguments or unreadable JSON run nothing and tell the model what to fix. An empty result is reported as empty, so the model can't fill it in.
+
+Slash commands: music (`/play /skip /pause /resume /stop /queue`), skills (`/research /web_search /web_fetch /image_search /video_search /news_search /wiki_search /create_poll /create_card`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private /index_channel`).
 
 ## Deep research
 

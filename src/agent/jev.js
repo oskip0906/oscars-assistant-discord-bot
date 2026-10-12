@@ -1,7 +1,7 @@
 const DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 // Pinned rather than ~typesafe/jev-latest: the thresholds callers use were
 // picked against this version's probabilities.
-const JEV_MODEL = 'typesafe/jev-1.13';
+export const JEV_MODEL = 'typesafe/jev-1.13';
 
 // One Jev decision call: a state plus typed questions (noul / choice / score),
 // answered with probabilities instead of text. Returns the answers map keyed by

@@ -8,15 +8,18 @@ import * as musicTools from './music.js';
 import * as historyTools from './history.js';
 import * as aboutTools from './about.js';
 import * as notesTools from './notes.js';
+import * as commandTools from './commands.js';
 import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.js';
 
 // Owner-only tools. Gated by the AUTHENTICATED Discord author id
 // (invocation.isOwner) — never by anything a message could claim, so no one can
 // impersonate Oscar into these. github is here because it acts with Oscar's
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
-export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'github']);
+// set_model and private_mode are the tools behind the owner-only /set_model and
+// /private, so chat can't do what the command refuses.
+export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'github', 'set_model', 'private_mode']);
 
-const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools];
+const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools, commandTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -42,7 +45,58 @@ const executors = {
   how_i_work: aboutTools.howIWork,
   search_notes: notesTools.searchNotes,
   save_note: notesTools.saveNoteFromChat,
+  panda_commands: commandTools.pandaCommands,
+  current_model: commandTools.currentModel,
+  usage: commandTools.usage,
+  set_model: commandTools.setModel,
+  private_mode: commandTools.privateModeTool,
+  research: commandTools.research,
+  list_notes: commandTools.listNotes,
+  open_note: commandTools.openNoteTool,
+  delete_note: commandTools.deleteNoteTool,
+  add_reminder: commandTools.addReminderTool,
+  show_reminders: commandTools.showReminders,
+  delete_reminder: commandTools.deleteReminderTool,
 };
+
+const schemas = new Map(allDefs.map((d) => [d.function.name, d.function.parameters]));
+
+const TYPE_OK = {
+  string: (v) => typeof v === 'string',
+  integer: (v) => Number.isInteger(v),
+  number: (v) => typeof v === 'number' && Number.isFinite(v),
+  boolean: (v) => typeof v === 'boolean',
+  array: (v) => Array.isArray(v),
+  object: (v) => v !== null && typeof v === 'object' && !Array.isArray(v),
+};
+
+// Checks the model's arguments against the tool's own schema before anything
+// runs: an object, every required property present and non-empty, each given
+// property of its declared type and in its enum. Two slips models often make
+// are forgiven: a whole number sent as a string ("10") is taken as the number,
+// and a lone string where a list goes as a one-item list. Returns the cleaned arguments, or
+// { error } naming what to fix so the model can retry with valid ones.
+export function validateArgs(name, args) {
+  const schema = schemas.get(name);
+  if (args == null) args = {};
+  if (!TYPE_OK.object(args)) return { error: `Invalid arguments for ${name}: expected an object of named arguments.` };
+  if (!schema) return { args };
+  const props = schema.properties || {};
+  const out = { ...args };
+  const problems = [];
+  for (const key of schema.required || []) {
+    if (out[key] == null || (typeof out[key] === 'string' && !out[key].trim())) problems.push(`\`${key}\` is required`);
+  }
+  for (const [key, value] of Object.entries(out)) {
+    const spec = props[key];
+    if (!spec || value == null) continue;
+    if (spec.type === 'integer' && typeof value === 'string' && /^-?\d+$/.test(value.trim())) out[key] = Number(value.trim());
+    if (spec.type === 'array' && typeof value === 'string') out[key] = [value];
+    if (spec.type && TYPE_OK[spec.type] && !TYPE_OK[spec.type](out[key])) problems.push(`\`${key}\` must be ${/^[aeiou]/.test(spec.type) ? 'an' : 'a'} ${spec.type}`);
+    else if (spec.enum && !spec.enum.includes(out[key])) problems.push(`\`${key}\` must be one of ${spec.enum.join(', ')}`);
+  }
+  return problems.length ? { error: `Invalid arguments for ${name}: ${problems.join('; ')}. Nothing ran; call it again with valid arguments, or ask the person for what is missing.` } : { args: out };
+}
 
 // Async because the GitHub MCP tool list is fetched from GitHub's hosted server
 // (once, then cached). It resolves to just the built-ins when that is off,
@@ -66,8 +120,10 @@ export async function executeTool(name, args, invocation) {
   if (OWNER_ONLY_TOOLS.has(name) && !invocation.isOwner) {
     return `⛔ ${name} is restricted to Oscar (the owner). The current sender is not Oscar — politely refuse.`;
   }
+  const checked = validateArgs(name, args);
+  if (checked.error) return checked.error;
   try {
-    const result = await fn(args || {}, invocation);
+    const result = await fn(checked.args, invocation);
     // Tools may return a { text, embeds } object — feed the model the text
     // portion and stash any embeds on the invocation so the caller (chat path)
     // can send them alongside the reply, matching the slash-command path.
@@ -77,7 +133,9 @@ export async function executeTool(name, args, invocation) {
       }
       return String(result.text);
     }
-    return typeof result === 'string' ? result : JSON.stringify(result);
+    const text = typeof result === 'string' ? result : JSON.stringify(result);
+    // An empty result would let the model invent one.
+    return text?.trim() ? text : `${name} returned nothing. Say so; do not make up a result.`;
   } catch (err) {
     return `Tool ${name} failed: ${String(err.message || err).slice(0, 500)}`;
   }
