@@ -54,11 +54,10 @@ export async function requestDevelopmentApproval({ instruction, invocation, stat
   const prompt = {
     content: [
       `🛠️ **${label} requested**`,
-      'Runs Claude Code in GitHub Actions.',
-      `Task: ${String(instruction).replace(/\s+/g, ' ').slice(0, 800)}`,
-      '',
+      'Runs Claude Code in GitHub Actions with the prompt below.',
       'This will run only in an isolated GitHub Actions sandbox and open a pull request. The buttons wait for you — take as long as you need.',
     ].join('\n'),
+    embeds: [{ title: 'Prompt for Claude Code', description: String(instruction).slice(0, 4000) }],
     components: [
       {
         type: 1,
@@ -95,6 +94,30 @@ export async function requestDevelopmentApproval({ instruction, invocation, stat
       .catch(() => {});
   }
   return outcome;
+}
+
+// Oscar's request is often a one-liner, and Claude Code sees nothing but the
+// prompt, so the chat model expands it into a full brief that Oscar approves.
+async function writeClaudeCodePrompt(instruction, { apiKey, model }) {
+  const messages = [
+    {
+      role: 'system',
+      content: `You write the prompt for Claude Code, which will change the source of Panda, a Node.js Discord bot, unattended in CI. Claude Code sees only the repository and your prompt: not this chat, earlier runs, or anything Oscar said elsewhere.
+
+Turn Oscar's request into a detailed, self-contained prompt in your own words, not a copy of his. Cover:
+- the goal and why it matters to Oscar
+- the exact behaviour wanted, including edge cases
+- what must not change
+- how to check it is done (tests to add or update)
+
+Do not invent file names, functions or facts you were not given; tell Claude Code to find them in the repo. Plain text or simple markdown, under 3500 characters. Return only the prompt.`,
+    },
+    { role: 'user', content: `Oscar's request: ${instruction}` },
+  ];
+  const msg = await chatCompletion({ apiKey, model, messages });
+  const text = msg?.content?.trim();
+  if (!text) throw new Error('empty response');
+  return text.slice(0, 4000);
 }
 
 // Ask the model to turn a raw instruction into a clean commit title and
@@ -150,7 +173,15 @@ export async function selfFix(
     task: instruction,
   });
 
-  const outcome = await confirm({ instruction, invocation, state });
+  let prompt = instruction;
+  try {
+    prompt = await writeClaudeCodePrompt(instruction, { apiKey: config.openrouterApiKey, model: config.model });
+  } catch (err) {
+    // The card then shows Oscar's own words, so he still approves exactly what runs.
+    console.error('[self_fix] prompt generation failed, using the instruction as is:', err.message);
+  }
+
+  const outcome = await confirm({ instruction: prompt, invocation, state });
   if (outcome !== 'confirm') {
     const why =
       { cancel: 'you cancelled it', superseded: 'a newer request took its place', aborted: 'the request was torn down before you answered' }[outcome] ||
@@ -177,7 +208,7 @@ export async function selfFix(
   try {
     const result = await runSandbox({
       repo: config.developmentSandboxRepo,
-      instruction,
+      instruction: prompt,
       autoMerge: true,
       selfFix: true,
       config,
