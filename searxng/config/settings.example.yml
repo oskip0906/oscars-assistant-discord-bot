@@ -33,6 +33,10 @@ engines:
     inactive: false
   - name: google images
     disabled: false
+  - name: youtube
+    disabled: false
+  - name: bing news
+    disabled: false
 
 ui:
   static_use_hash: true
