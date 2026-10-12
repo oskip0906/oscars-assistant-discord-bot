@@ -166,8 +166,18 @@ async function runTool(call, invocation, contextKey) {
   const toolStart = Date.now();
   log(contextKey, `→ ${name}(${clip(call.function.arguments || '{}', 300)})`);
   let result;
+  let args;
   try {
-    result = await executeTool(name, JSON.parse(call.function.arguments || '{}'), invocation);
+    args = JSON.parse(call.function.arguments || '{}');
+  } catch {
+    args = undefined;
+  }
+  try {
+    // Unreadable arguments never run the tool: the model is told to fix them.
+    result =
+      args === undefined
+        ? `Invalid arguments for ${name}: not valid JSON. Nothing ran; call it again with a JSON object of arguments.`
+        : await executeTool(name, args, invocation);
   } catch (err) {
     result = `Tool ${name} crashed: ${String(err.message || err).slice(0, 300)}`;
     console.error(`[agent ${contextKey}] ✗ ${name} crashed:`, err);
