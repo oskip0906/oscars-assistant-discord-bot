@@ -83,3 +83,6 @@ create table if not exists reminders (
   created_at timestamptz not null default now()
 );
 create index if not exists reminders_due on reminders (next_at) where active;
+-- Where the reminder was made. It goes off there, pinging its creator; null
+-- (made in a DM, or before this column) means a DM.
+alter table reminders add column if not exists channel_id text;

@@ -588,6 +588,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const added = await addReminder(config, {
           userId: interaction.user.id,
+          channelId: interaction.guildId ? interaction.channelId : null,
           name: interaction.options.getString('name', true),
           repeat: interaction.options.getString('repeat', true),
           when: interaction.options.getString('when', true),
@@ -596,7 +597,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         if (added.error) return await interaction.editReply(`⚠️ ${added.error}`);
         const at = Math.floor(new Date(added.next_at).getTime() / 1000);
         return await interaction.editReply(
-          `⏰ Got it: **${added.name}**, ${repeatText(added)}. First DM <t:${at}:F> (<t:${at}:R>). Make sure your DMs from server members are open.`,
+          `⏰ Got it: **${added.name}**, ${repeatText(added)}. ${interaction.guildId ? `I'll ping you here` : `I'll DM you`} first <t:${at}:F> (<t:${at}:R>).`,
         );
       }
 

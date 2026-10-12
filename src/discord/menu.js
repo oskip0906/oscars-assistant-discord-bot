@@ -61,7 +61,7 @@ export function buildMenuEmbeds(client, config) {
     sectionEmbed(
       '⏰ Reminders',
       [
-        '`/add_reminder <name> <repeat> <when> [timezone]` : Get a DM from me once, or every day, week or month',
+        '`/add_reminder <name> <repeat> <when> [timezone]` : I ping you in this channel once, or every day, week or month',
         '`/show_reminders` : See every active reminder',
         '`/delete_reminder <reminder>` : Delete one of your reminders',
         '_…or just tell me in chat what to remind you of and when._',

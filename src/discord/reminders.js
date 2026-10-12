@@ -15,7 +15,7 @@ export function remindersEmbed(rows) {
       value: [
         `<@${r.user_id}> · next <t:${unix(r.next_at)}:F> (<t:${unix(r.next_at)}:R>)`,
         `🔁 ${repeatText(r)}`,
-        r.last_error ? `⚠️ Last DM failed: ${r.last_error}` : '',
+        r.last_error ? `⚠️ Last delivery failed: ${r.last_error}` : '',
       ]
         .filter(Boolean)
         .join('\n')

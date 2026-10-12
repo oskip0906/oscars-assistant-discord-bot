@@ -47,7 +47,7 @@ Everything is stored in one PMS Postgres database (`DATABASE_URL`). `src/db.js` 
 - Finding notes (`search_notes`, `/open_note`): Jev walks the folder tree, then notes are ranked by full-text and title similarity. `/open_note` tries exact title, then similar title, then the search.
 - `/display_notes` browses the tree; `/delete_note` is for the author or Oscar, after a confirm button.
 
-**Reminders** (`src/reminders.js`). `/add_reminder <name> <repeat> <when> [timezone]`; repeat is once, daily, weekly or monthly. Times are stored as UTC and repeats are recomputed in the creator's timezone, so daylight saving can't shift them. Every 30 s due reminders are DMed; ones missed while down go out once, marked late. `/delete_reminder`: creator or Oscar.
+**Reminders** (`src/reminders.js`). `/add_reminder <name> <repeat> <when> [timezone]`; repeat is once, daily, weekly or monthly. Times are stored as UTC and repeats are recomputed in the creator's timezone, so daylight saving can't shift them. Every 30 s due reminders are posted in the channel they were made in, pinging the creator (`channel_id`); one made in a DM, made before channels were saved, or whose channel is gone or unwritable goes by DM instead. Ones missed while down go out once, marked late. `/delete_reminder`: creator or Oscar.
 
 ## Models: OpenRouter and Jev
 
@@ -151,7 +151,7 @@ src/agent/tools/          every tool the model can call
 src/agent/research/       the /research pipeline
 src/db.js, schema.sql     Postgres connection and tables
 src/storage.js            section budgets and cleanup
-src/reminders.js          reminder times and DM scheduler
+src/reminders.js          reminder times and scheduler
 src/music/                discord-player + yt-dlp streaming
 .github/                  Docker build + deploy, CI tests, the development sandbox
 ```

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseWhen, nextAt, zonedToUtc, addReminder, tick, repeatText, validTimezone } from '../src/reminders.js';
+import { reminderSender, parseWhen, nextAt, zonedToUtc, addReminder, tick, repeatText, validTimezone } from '../src/reminders.js';
 import { db } from '../src/db.js';
 
 const iso = (ts) => new Date(ts).toISOString();
@@ -45,7 +45,7 @@ function remindersTable(rows = [], settings = {}) {
     if (text.startsWith('select timezone')) return { rows: settings[params[0]] ? [{ timezone: settings[params[0]] }] : [] };
     if (text.startsWith('insert into user_settings')) return (settings[params[0]] = params[1]), { rows: [] };
     if (text.startsWith('insert into reminders')) {
-      const row = { id: 1, user_id: params[0], name: params[1], next_at: params[2], repeat: params[3], local_time: params[4], timezone: params[5] };
+      const row = { id: 1, user_id: params[0], channel_id: params[1], name: params[2], next_at: params[3], repeat: params[4], local_time: params[5], timezone: params[6] };
       log.inserts.push(row);
       return { rows: [row] };
     }
@@ -69,7 +69,8 @@ test('adding a reminder needs a timezone once, then remembers it', async () => {
   const added = await addReminder(config, { userId: 'u', name: 'gym', repeat: 'daily', when: '18:00', timezone: TO }, now);
   assert.equal(iso(added.next_at), '2026-10-11T22:00:00.000Z');
   assert.equal(settings.u, TO);
-  const again = await addReminder(config, { userId: 'u', name: 'call mom', repeat: 'once', when: '2026-10-12 09:00' }, now);
+  const again = await addReminder(config, { userId: 'u', channelId: 'c9', name: 'call mom', repeat: 'once', when: '2026-10-12 09:00' }, now);
+  assert.equal(again.channel_id, 'c9', 'the channel it was made in is saved');
   assert.equal(iso(again.next_at), '2026-10-12T13:00:00.000Z');
   assert.match((await addReminder(config, { userId: 'u', name: 'x', repeat: 'once', when: '2026-10-01 09:00' }, now)).error, /passed/);
   assert.equal(log.inserts.length, 2);
@@ -85,9 +86,10 @@ test('a due reminder is DMed once: a one-off ends, a repeat moves on, a failed D
   ];
   const log = remindersTable(rows);
   const sent = [];
-  await tick(config, async (userId, content) => {
+  await tick(config, async (userId, content, channelId) => {
     if (userId === 'b') throw new Error('Cannot send messages to this user');
     sent.push([userId, content]);
+    if (channelId !== null) throw new Error('these rows have no channel');
   }, now);
 
   assert.deepEqual(sent, [['a', '⏰ **Reminder:** pay rent'], ['d', '⏰ **Reminder:** water plants _(late — I was offline when it was due)_']]);
@@ -97,4 +99,22 @@ test('a due reminder is DMed once: a one-off ends, a repeat moves on, a failed D
   assert.equal(iso(next), '2026-10-12T22:00:00.000Z');
   assert.equal(iso(log.updates[2][1]), '2026-10-18T21:00:00.000Z');
   assert.equal(log.updates.length, 3, 'a reminder not yet due is left alone');
+});
+
+test('a reminder is posted in its channel pinging only its creator, and falls back to a DM', async () => {
+  const out = [];
+  const channels = { c1: { send: async (msg) => out.push(['c1', msg]) } };
+  const client = {
+    channels: { fetch: async (id) => channels[id] ?? Promise.reject(new Error('Unknown Channel')) },
+    users: { fetch: async (id) => ({ send: async (msg) => out.push([`dm:${id}`, msg]) }) },
+  };
+  const send = reminderSender(client);
+  await send('u1', '⏰ **Reminder:** gym @everyone', 'c1');
+  await send('u2', '⏰ **Reminder:** rent', 'gone');
+  await send('u3', '⏰ **Reminder:** call', null);
+  assert.deepEqual(out, [
+    ['c1', { content: '<@u1> ⏰ **Reminder:** gym @everyone', allowedMentions: { users: ['u1'] } }],
+    ['dm:u2', { content: '⏰ **Reminder:** rent', allowedMentions: { parse: [] } }],
+    ['dm:u3', { content: '⏰ **Reminder:** call', allowedMentions: { parse: [] } }],
+  ]);
 });

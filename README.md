@@ -41,7 +41,7 @@ The same groups as `/menu`. Everything except the Power Tools also works by just
 **⏰ Reminders**
 | Command | What it does |
 |---------|--------------|
-| `/add_reminder <name> <repeat> <when> [timezone]` | Get a DM once, or every day, week or month. `when`: `2026-10-20 18:30` · `18:30` · `mon 18:30` · `15 18:30` |
+| `/add_reminder <name> <repeat> <when> [timezone]` | Get pinged in the channel you set it in (a DM if set in DMs) once, or every day, week or month. `when`: `2026-10-20 18:30` · `18:30` · `mon 18:30` · `15 18:30` |
 | `/show_reminders` | See every active reminder |
 | `/delete_reminder <reminder>` | Delete one of your reminders (Oscar can delete any) |
 

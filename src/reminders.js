@@ -1,7 +1,8 @@
 import { db, configured } from './db.js';
 import { isFull, noteWrite } from './storage.js';
 
-// Reminders in db-1, delivered by DM to whoever made them. Times are entered in
+// Reminders in db-1, posted in the channel they were made in with a ping for
+// whoever made them (by DM when made in a DM, or when that channel is gone). Times are entered in
 // the creator's own timezone (saved per user) and stored as absolute UTC; a
 // repeat is recomputed from its local HH:MM, so daylight saving can't shift it.
 
@@ -107,7 +108,7 @@ export async function getTimezone(config, userId) {
 }
 
 // Returns the new reminder row, or { error }.
-export async function addReminder(config, { userId, name, repeat, when, timezone }, now = Date.now()) {
+export async function addReminder(config, { userId, channelId = null, name, repeat, when, timezone }, now = Date.now()) {
   if (!configured(config)) return { error: 'Reminders need DATABASE_URL to be set.' };
   if (isFull('reminders')) return { error: 'Storage for reminders is full; Oscar has been asked to approve a cleanup.' };
   const label = String(name || '').trim().slice(0, 200);
@@ -131,8 +132,8 @@ export async function addReminder(config, { userId, name, repeat, when, timezone
   }
   const { rows } = await db.query(
     config,
-    'insert into reminders (user_id, name, next_at, repeat, local_time, timezone) values ($1, $2, $3, $4, $5, $6) returning *',
-    [userId, label, new Date(next), rule.repeat, rule.local_time, tz],
+    'insert into reminders (user_id, channel_id, name, next_at, repeat, local_time, timezone) values ($1, $2, $3, $4, $5, $6, $7) returning *',
+    [userId, channelId, label, new Date(next), rule.repeat, rule.local_time, tz],
   );
   noteWrite(config, 'reminders');
   return rows[0];
@@ -171,7 +172,7 @@ export async function tick(config, send, now = Date.now()) {
       const late = now - new Date(r.next_at).getTime() > LATE_MS;
       let error = null;
       try {
-        await send(r.user_id, `⏰ **Reminder:** ${r.name}${late ? ' _(late — I was offline when it was due)_' : ''}`);
+        await send(r.user_id, `⏰ **Reminder:** ${r.name}${late ? ' _(late — I was offline when it was due)_' : ''}`, r.channel_id ?? null);
       } catch (err) {
         error = String(err.message || err).slice(0, 200);
       }
@@ -188,12 +189,32 @@ export async function tick(config, send, now = Date.now()) {
   }
 }
 
-export function startReminders(client, config) {
-  if (!configured(config)) return;
-  const send = async (userId, content) => {
+// In the reminder's channel with a ping for its creator, else by DM.
+export function reminderSender(client) {
+  const dm = async (userId, content) => {
     const user = await client.users.fetch(userId);
     await user.send({ content, allowedMentions: { parse: [] } });
   };
+  const send = async (userId, content, channelId) => {
+    if (channelId) {
+      try {
+        const channel = await client.channels.fetch(channelId);
+        // Pings only the creator, whatever the reminder's name says.
+        await channel.send({ content: `<@${userId}> ${content}`, allowedMentions: { users: [userId] } });
+        return;
+      } catch (err) {
+        // A deleted channel or lost permission must not swallow the reminder.
+        console.warn(`[reminders] channel ${channelId} unavailable, sending by DM:`, String(err.message || err).slice(0, 150));
+      }
+    }
+    await dm(userId, content);
+  };
+  return send;
+}
+
+export function startReminders(client, config) {
+  if (!configured(config)) return;
+  const send = reminderSender(client);
   const run = () => tick(config, send).catch((err) => console.error('[reminders] tick failed:', err.message));
   run();
   setInterval(run, TICK_MS).unref();
