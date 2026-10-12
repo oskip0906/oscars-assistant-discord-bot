@@ -29,14 +29,9 @@ const WINDOW_MS = 3000;
 // is kept. The same 5 are what Jev reads to decide whether to answer at all.
 const RECENT_COUNT = 5;
 const RECENT_CHARS = 500;
-// Below this Jev doesn't lean yes that a message is for Panda, so the sampled
-// gate can't pick it up out of ordinary chatter between people. At 0.3 the
-// maybes added up and Panda chimed in on nearly everything.
-const GATE_FLOOR = 0.5;
-// A reply to one of Panda's own lines is always answered from this sure.
-const FOLLOW_UP = 0.6;
-// A message Jev is this sure is addressed to Panda is always answered.
-const ADDRESSED = 0.7;
+// Panda talks unpinged only when Jev is this sure the message is addressed to
+// it or responds to something it said; below that it never talks.
+const TALK = 0.7;
 // identity.md is cut to this for Jev, which reads it to tell what is meant for Panda.
 const IDENTITY_CHARS = 2000;
 // Unaddressed messages are reacted to only when Jev leans yes, then sampled.
@@ -134,11 +129,9 @@ const historyLine = (m, self) => `${m.author.id === self ? '(you) ' : ''}${forma
 
 // Is a message that is not a ping, a reply to Panda or a DM still one to join,
 // and how? Jev reads it with the RECENT_COUNT messages before it:
-// - 'talk' when it answers or follows up on one of Panda's own recent lines
-//   (only trusted when Panda really spoke there), when Jev is fairly sure it is
-//   addressed to Panda (judged against identity.md and the recent lines), or,
-//   sampled from Jev's odds like a person who sometimes chimes in, when it is
-//   talking to Panda or a conversation Panda is in.
+// - 'talk' only when Jev is at least 70% sure it responds to one of Panda's
+//   own recent lines (only trusted when Panda really spoke there) or is
+//   addressed to Panda (judged against identity.md and the recent lines).
 // - 'react' when it is not for Panda but worth an emoji (funny, wild, dumb,
 //   big news), sampled too, so Panda doesn't react to everything.
 // - false otherwise. Bots are judged exactly like people. Jev off or down
@@ -162,12 +155,7 @@ export async function forPanda(message, before, self, config, decideImpl = decid
     addressed: {
       type: 'noul',
       instructions:
-        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else, about the assistant rather than to it, or only might be for it. \"my bot\" or \"my assistant\" means the assistant only when `sender_is_owner` is yes; from anyone else it is their own bot. No when it is put to `owner_name` himself (a question or request for him): the assistant never answers in his place.",
-    },
-    for_assistant: {
-      type: 'noul',
-      instructions:
-        "Would a socially aware friend in this chat, known only as `assistant_names`, answer `message` in words? Yes if `message` talks to or about the assistant by one of `assistant_names` or as `owner_name`'s assistant, continues a conversation the assistant is part of in `recent_messages`, or puts a question to the whole room that the assistant could really help with. No when `message` addresses someone else by a name or @mention not in `assistant_names` (another bot or nickname such as \"slopbot\" is NOT the assistant), when people are talking among themselves about something that has nothing to do with the assistant, when someone other than `owner_name` says \"my bot\" or \"my assistant\" (that is their own bot; only when `sender_is_owner` is yes does it mean the assistant), or when `message` is a question or request for `owner_name` himself.",
+        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else (a name or @mention not in `assistant_names`: another bot or nickname such as \"slopbot\" is NOT the assistant), if it is about the assistant rather than to it, if people are talking among themselves, or if it only might be for it. \"my bot\" or \"my assistant\" means the assistant only when `sender_is_owner` is yes; from anyone else it is their own bot. No when it is put to `owner_name` himself (a question or request for him): the assistant never answers in his place.",
     },
     worth_reacting: {
       type: 'noul',
@@ -177,9 +165,7 @@ export async function forPanda(message, before, self, config, decideImpl = decid
   });
   const p = (name) => answers?.[name]?.noul;
   const spoke = recent.some((m) => m.author?.id === self);
-  if (spoke && p('follows_up') >= FOLLOW_UP) return 'talk';
-  if (p('addressed') >= ADDRESSED) return 'talk';
-  if (p('for_assistant') >= GATE_FLOOR && sampleYes(p('for_assistant'), { temperature: 1, random })) return 'talk';
+  if ((spoke && p('follows_up') >= TALK) || p('addressed') >= TALK) return 'talk';
   if (p('worth_reacting') >= REACT_FLOOR && sampleYes(p('worth_reacting'), { temperature: 1, random })) return 'react';
   return false;
 }

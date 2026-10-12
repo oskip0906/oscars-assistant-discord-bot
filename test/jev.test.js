@@ -40,18 +40,22 @@ function turn(answers, extra = {}) {
   return runAgent(invocation, 'q', 'q', { chat, decideImpl: jev(answers) }).then((reply) => Object.assign(calls, { reply, invocation }));
 }
 
-test("only the tools Jev says yes to are offered, then the model answers with none", async () => {
+test("Jev's picks must be called, every tool is on offer, then the model answers", async () => {
   const calls = await turn({ use_get_user_id: { noul: 0.9 }, use_play_music: { noul: 0.2 } });
-  assert.deepEqual(calls[0], { tools: ['get_user_id'], toolChoice: 'required' });
+  assert.equal(calls[0].toolChoice, 'required');
+  assert.ok(calls[0].tools.includes('get_user_id') && calls[0].tools.includes('web_fetch'));
   assert.equal(calls[1].toolChoice, 'auto');
   assert.equal(calls.length, 2, 'answering in round 2 saves the extra call');
   assert.deepEqual(calls.invocation.toolsUsed, ['get_user_id']);
 });
 
-test('a tool Jev is unsure of, or does not know, is never offered', async () => {
+test('with no sure pick (or a made-up one) nothing is forced: the model may answer straight away', async () => {
   for (const answers of [{ use_get_user_id: { noul: 0.4 } }, { use_made_up_tool: { noul: 0.99 } }]) {
     const calls = await turn(answers);
-    assert.deepEqual([...calls], [{ tools: [], toolChoice: 'none' }]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].toolChoice, 'auto');
+    assert.ok(!calls[0].tools.includes('made_up_tool'));
+    assert.equal(calls.reply, 'done');
   }
 });
 
@@ -70,7 +74,7 @@ const msg = (id, author, content) => ({ id, author: { id: author, username: auth
 test('Jev decides whether an unpinged message is for Panda, reading the 5 lines before it', async () => {
   const before = [msg('1', 'a', 'zero'), msg('2', 'a', 'one'), msg('3', 'b', 'two'), msg('4', 'a', 'three'), msg('5', 'bot', 'sunny today'), msg('6', 'a', 'nice')];
   let state;
-  const yes = async (_c, s) => ((state = s), { for_assistant: { noul: 0.9 } });
+  const yes = async (_c, s) => ((state = s), { addressed: { noul: 0.9 } });
   assert.equal(await forPanda(msg('7', 'a', 'and tomorrow?'), before, 'bot', config, yes, () => 0), 'talk');
   assert.equal(state.recent_messages.split('\n').length, 5);
   assert.ok(state.recent_messages.endsWith('(you) bot (@bot, id:bot): sunny today\na (@a, id:a): nice'));
@@ -79,17 +83,15 @@ test('Jev decides whether an unpinged message is for Panda, reading the 5 lines 
 
 const at = (answers, r, before = []) => forPanda(msg('7', 'a', 'hm'), before, 'bot', config, jev(answers), () => r);
 
-test('the gate is sampled, but never picks up what Jev is sure is not for Panda', async () => {
-  assert.equal(await at({ for_assistant: { noul: 0.6 } }, 0.5), 'talk', 'a maybe is sometimes yes');
-  assert.equal(await at({ for_assistant: { noul: 0.6 } }, 0.7), false, 'and sometimes no');
-  assert.equal(await at({ for_assistant: { noul: 0.29 } }, 0), false, 'below the floor is always no');
+test('unpinged, Panda talks only when Jev is at least 70% sure, never by chance', async () => {
+  for (const r of [0, 0.5]) {
+    assert.equal(await at({ addressed: { noul: 0.69 } }, r), false);
+    assert.equal(await at({ follows_up: { noul: 0.69 } }, r, [msg('5', 'bot', 'hi')]), false);
+  }
 });
 
-test('the gate only samples what Jev leans yes on, from 0.5 up', async () => {
-  for (const p of [0.3, 0.4, 0.49]) assert.equal(await at({ for_assistant: { noul: p } }, 0), false, `a ${p} maybe is no longer picked up`);
-  assert.equal(await at({ for_assistant: { noul: 0.5 } }, 0.49), 'talk', 'at the floor it is sampled');
-  assert.equal(await at({ for_assistant: { noul: 0.5 } }, 0.5), false, 'and not always yes');
-  assert.equal(await at({ for_assistant: { noul: 0.9 } }, 0.85), 'talk', 'a clear yes is almost always answered');
+test('a maybe never talks: only the 70% addressed / follow-up checks do', async () => {
+  for (const r of [0, 0.5]) assert.equal(await at({ for_assistant: { noul: 0.99 } }, r), false);
 });
 
 test('a ping or a reply to Panda is answered even when the gate would say no', async () => {
@@ -117,7 +119,7 @@ test('a ping or a reply to Panda is answered even when the gate would say no', a
 
 test('bots are judged exactly like people, reactions included', async () => {
   const bot = { ...msg('7', 'b', 'hm'), author: { id: 'b', username: 'b', bot: true } };
-  assert.equal(await forPanda(bot, [], 'bot', config, jev({ for_assistant: { noul: 0.6 } }), () => 0.5), 'talk');
+  assert.equal(await forPanda(bot, [], 'bot', config, jev({ addressed: { noul: 0.7 } }), () => 0.5), 'talk');
   assert.equal(await forPanda(bot, [], 'bot', config, jev({ worth_reacting: { noul: 0.8 } }), () => 0.5), 'react');
 });
 
@@ -141,7 +143,7 @@ test('a message not for Panda that stands out gets a reaction, sampled, and plai
   assert.equal(await at({ worth_reacting: { noul: 0.8 } }, 0.5), 'react');
   assert.equal(await at({ worth_reacting: { noul: 0.8 } }, 0.9), false, 'not every time');
   assert.equal(await at({ worth_reacting: { noul: 0.45 } }, 0), false, 'below the floor is never a reaction');
-  assert.equal(await at({ for_assistant: { noul: 0.9 }, worth_reacting: { noul: 0.9 } }, 0.5), 'talk', 'talking wins over reacting');
+  assert.equal(await at({ addressed: { noul: 0.9 }, worth_reacting: { noul: 0.9 } }, 0.5), 'talk', 'talking wins over reacting');
 });
 
 test("the gate knows Panda's names, so another bot's nickname is not Panda", async () => {
@@ -150,7 +152,7 @@ test("the gate knows Panda's names, so another bot's nickname is not Panda", asy
   await forPanda(m, [], 'bot', config, async (_c, s, q) => ((state = { s, q }), null));
   assert.match(state.s.assistant_names, /Oscar's Assistant/);
   assert.match(state.s.assistant_names, /<@bot>/);
-  assert.match(state.q.for_assistant.instructions, /slopbot.*NOT the assistant/);
+  assert.match(state.q.addressed.instructions, /slopbot.*NOT the assistant/);
 });
 
 test('turns go in the order they were sent, even when the later one passes Jev first', async () => {
@@ -169,7 +171,7 @@ test('turns go in the order they were sent, even when the later one passes Jev f
     // The earlier message's check is the slow one.
     decideImpl: async (_c, state) => {
       if (state.message.endsWith('first')) await new Promise((r) => setTimeout(r, 200));
-      return { for_assistant: { noul: 1 } };
+      return { addressed: { noul: 1 } };
     },
   });
   await Promise.all([handler(message('1', 'a', 'first')), handler(message('2', 'b', 'second'))]);

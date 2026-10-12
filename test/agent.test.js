@@ -47,30 +47,35 @@ test("reaction only with a tool: Jev's tool and the reaction go in the same sing
   assert.deepEqual([...calls[0].tools].sort(), ['get_message_sender', 'react']);
 });
 
-test('no tools picked: one call, nothing to call, and its text is sent', async () => {
+test('no tools picked: every tool is still offered, and an answer without a call is sent from that one call', async () => {
   const { text, calls } = await turn({ respond_with: sure('message') }, [{ content: '391' }]);
   assert.equal(text, '391');
-  assert.deepEqual(calls, [{ tools: [], toolChoice: 'none' }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].toolChoice, 'auto');
+  assert.ok(calls[0].tools.includes('web_fetch') && calls[0].tools.includes('web_search'), 'a link can always be read');
+  assert.ok(!calls[0].tools.includes('react'), 'no reaction on a text-only turn');
+  assert.ok(!calls[0].tools.includes('self_fix'), "Oscar's tools are not offered to a guest");
 });
 
 test('Jev picks several tools: they run in one round, then the model answers with nothing left to call', async () => {
   const { text, calls, invocation } = await turn({ ...yes('get_message_sender', 'get_user_id'), respond_with: sure('message') }, [
-    step('get_message_sender', 'get_user_id', 'play_music'),
+    step('get_message_sender', 'get_user_id', 'not_a_tool'),
     { content: 'you are someone' },
   ]);
   assert.equal(text, 'you are someone');
   assert.equal(calls.length, 2);
-  assert.deepEqual([...calls[0].tools].sort(), ['get_message_sender', 'get_user_id']);
-  assert.equal(calls[0].toolChoice, 'required');
+  assert.ok(['get_message_sender', 'get_user_id', 'web_fetch'].every((name) => calls[0].tools.includes(name)));
+  assert.equal(calls[0].toolChoice, 'required', "Jev's picks must be acted on");
   assert.equal(calls[1].toolChoice, 'auto', 'a second round may call the tools again, or answer');
-  assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id'], 'a tool Jev did not pick never runs');
+  assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id'], 'a tool that was not offered never runs');
 });
 
 test('both: the model reacts, then answers in text, and an echoed emoji is dropped', async () => {
   const { text, calls, reactions } = await turn({ respond_with: sure('both') }, [reactCall('🔥'), { content: '17 × 23 = 391' }]);
   assert.equal(text, '17 × 23 = 391');
   assert.deepEqual(reactions, ['🔥']);
-  assert.deepEqual(calls.map((c) => c.toolChoice), ['required', 'none'], 'once it has reacted there is nothing left to call');
+  assert.deepEqual(calls.map((c) => c.toolChoice), ['required', 'auto'], 'once it has reacted it may use a tool or answer');
+  assert.ok(!calls[1].tools.includes('react'), 'one reaction round only');
   assert.equal((await turn({ respond_with: sure('both') }, [reactCall('🎲'), { content: '🎲' }])).text, '');
 });
 
@@ -110,8 +115,8 @@ test('a turn Panda joined only to react is a reaction with no tools and no words
 test('the form is sampled from Jev\'s odds, so reactions happen even when text is likelier', async () => {
   const odds = { respond_with: { choice: 'message', probabilities: { message: 0.6, reaction: 0.25, both: 0.15 } } };
   // random 0 lands on the first option, random ~1 on the last.
-  assert.deepEqual((await turn(odds, [{ content: 'hi' }], { random: () => 0 })).calls, [{ tools: [], toolChoice: 'none' }]);
-  assert.deepEqual((await turn(odds, [reactCall('👀')], { random: () => 0.999 })).calls[0].tools, ['react']);
+  assert.ok(!(await turn(odds, [{ content: 'hi' }], { random: () => 0 })).calls[0].tools.includes('react'));
+  assert.ok((await turn(odds, [reactCall('👀')], { random: () => 0.999 })).calls[0].tools.includes('react'));
 });
 
 test('the mood sets the tone and which reactions are suggested, varied each turn', async () => {
@@ -144,13 +149,16 @@ test('a request that needs an Oscar-only tool stops for anyone else', async () =
   assert.equal(guest.text, 'Only Oscar can use `set_rule`.');
   assert.equal(guest.calls.length, 0);
   const owner = await turn(answers, [{ content: 'done' }], { isOwner: true });
-  assert.deepEqual(owner.calls[0], { tools: ['set_rule'], toolChoice: 'required' });
+  assert.ok(owner.calls[0].tools.includes('set_rule'));
+  assert.equal(owner.calls[0].toolChoice, 'required');
 });
 
-test('with Jev down there are no tools: one call answers from what it was shown', async () => {
+test('with Jev down every tool is still offered, and one call can answer', async () => {
   const { text, calls } = await turn(null, [{ content: 'rolled a 4' }]);
   assert.equal(text, 'rolled a 4');
-  assert.deepEqual(calls, [{ tools: [], toolChoice: 'none' }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].toolChoice, 'auto');
+  assert.ok(calls[0].tools.includes('web_fetch'));
 });
 
 test('Jev gets one yes/no per tool (react excepted) and the recent messages', async () => {
@@ -171,7 +179,7 @@ test('a reference nothing shown explains sends the model to search history, thou
   const invocation = { contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' }, message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' } } };
   const text = await runAgent(invocation, 'q', 'are you excited for the event', { chat, decideImpl: async () => ({ unexplained: { noul: 0.95 }, use_fetch_history: { noul: 0.1 }, respond_with: sure('message') }) });
   assert.equal(text, 'the hackathon? yes!');
-  assert.deepEqual(seen[0].tools, ['fetch_history']);
+  assert.ok(seen[0].tools.includes('fetch_history'));
   assert.equal(seen[0].toolChoice, 'required');
   assert.match(seen[0].note, /fetch_history with a `query`/);
   assert.deepEqual(invocation.toolsUsed, ['fetch_history']);
@@ -179,7 +187,8 @@ test('a reference nothing shown explains sends the model to search history, thou
 
 test('a reference the recent messages explain does not search history', async () => {
   const { calls } = await turn({ unexplained: { noul: 0.73 }, respond_with: sure('message') }, [{ content: 'on it' }]);
-  assert.deepEqual(calls, [{ tools: [], toolChoice: 'none' }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].toolChoice, 'auto', 'not sent to search history');
 });
 
 test('saysNothing only matches text without letters or digits', () => {

@@ -52,13 +52,15 @@ const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
 export const saysNothing = (text) => !/[\p{L}\p{N}]/u.test(text.replace(/<a?:\w+:\d+>/g, ''));
 
 // One turn, at most MAX_MODEL_CALLS model calls after one Jev call:
-// 1. Jev (triage) decides in what form to answer, the mood, and which tools run:
-//    a yes/no per tool. The model never adds a tool of its own.
-// 2. If Jev picked any, the model fills in their arguments and they all run at
-//    once. It may go another round with the same tools when the results call for
-//    it (search, then read a page), and stops as soon as it calls none.
-// 3. The last call writes the reply from the results, with no tools left.
-// Jev down means no tools: the model answers from what it was shown.
+// 1. Jev (triage) decides in what form to answer, the mood, and which tools it
+//    expects: a yes/no per tool.
+// 2. A turn with words is offered every tool, Jev's picks named first (and
+//    required when there are any); a reaction-only turn just Jev's picks and
+//    react. Called tools all run at once. The model may go another round when
+//    the results call for it (search, then read a page), and stops as soon as
+//    it calls none; words without a tool call are the answer.
+// 3. Otherwise the last call writes the reply from the results, with no tools left.
+// Jev down means no picks, but every tool is still offered.
 //
 // What the turn refers to comes from the recent messages the handler puts above
 // it (`invocation.recent`), not from searching history.
@@ -100,10 +102,18 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   // Jev's read of the mood shapes the reply's tone and which reactions are offered.
   if (plan.mood) messages.push({ role: 'user', content: `[TONE] Jev reads the turn as ${plan.mood}: ${MOOD_NOTE[plan.mood]}` });
 
-  // A reaction is a tool call too, so the forms that react offer `react` with Jev's picks.
+  // A reaction is a tool call too, so the forms that react offer `react`. A
+  // reaction-only turn gets just Jev's picks; any turn with words gets every
+  // tool (Oscar's only for Oscar), Jev's picks named first, so a pick Jev
+  // missed (web_fetch on a docs link) never leaves Panda saying it can't.
   const reacts = plan.form === 'reaction' || plan.form === 'both';
+  const wordy = plan.form !== 'reaction';
   const picked = new Set(reacts ? [...plan.tools, 'react'] : plan.tools);
-  const offered = allTools.filter((t) => picked.has(t.function.name));
+  const offered = allTools.filter(({ function: { name } }) =>
+    name === 'react' ? reacts : picked.has(name) || (wordy && (invocation.isOwner || !OWNER_ONLY_TOOLS.has(name))),
+  );
+  // Required when something must happen (a reaction, Jev's picks); otherwise the model may just answer.
+  const mustCall = reacts || plan.tools.length > 0;
   const reactNote = reacts
     ? ` React with exactly one emoji that fits the mood, and vary it: for example one of ${moodEmoji(plan.mood, random).join(' ')}, or any better fit (not always the same one). Only your first reaction is added.`
     : '';
@@ -121,15 +131,18 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
       role: 'user',
       content:
         round === 1
-          ? `[TOOLS] Picked for this turn: ${[...picked].join(', ')}. Call the ones that help, all in this one reply, with the arguments the turn needs.${reactNote}${lookupNote}`
+          ? wordy
+            ? `[TOOLS] ${picked.size ? `Picked for this turn: ${[...picked].join(', ')}. ` : ''}Every tool listed is yours to use: call the ones the turn needs (a link to read → web_fetch, something to look up → web_search), all in this one reply, with the arguments it needs${mustCall ? '' : ', or call none and answer if no tool would help'}. Never say you can't access, browse or fetch something a listed tool can do.${reactNote}${lookupNote}`
+            : `[TOOLS] Picked for this turn: ${[...picked].join(', ')}. Call the ones that help, all in this one reply, with the arguments the turn needs.${reactNote}${lookupNote}`
           : `[TOOLS] Round ${round} of at most ${MAX_MODEL_CALLS - 1}. Call more of these tools only if the results so far are not enough to answer (e.g. read a page a search found); otherwise call nothing and write your reply now.`,
     };
-    const msg = await ask([...messages, pickNote], tools, round === 1 ? 'required' : 'auto');
-    // Only Jev's picks run, whatever else the model tries to call.
+    const msg = await ask([...messages, pickNote], tools, round === 1 && mustCall ? 'required' : 'auto');
+    // Only offered tools run, whatever else the model tries to call.
     const allowed = new Set(tools.map((t) => t.function.name));
     const calls = (msg.tool_calls ?? []).filter((c) => allowed.has(c.function?.name));
+    // No tool calls: words here are the answer, so no extra call is spent.
     if (!calls.length) {
-      if (round > 1 && msg.content?.trim()) answer = msg;
+      if (msg.content?.trim()) answer = msg;
       break;
     }
     messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: calls });
