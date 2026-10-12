@@ -12,8 +12,9 @@ const PICK_THRESHOLD = 0.8;
 const TOOL_THRESHOLD = 0.5;
 // At most this many model calls a turn: rounds of tool calls, then the answer.
 export const MAX_MODEL_CALLS = 5;
-// "reaction only" turns into "both" when Jev thinks the turn needs words this much.
-const NEEDS_WORDS = 0.6;
+// A turn Jev thinks is owed words this much (a question to Panda, a reply to
+// something it said) is never reaction-only.
+const NEEDS_WORDS = 0.5;
 
 // Emoji to vary reactions by the mood Jev reads. A few are offered at random each
 // turn so Panda doesn't put 😂 on everything; the model may still pick its own.
@@ -178,8 +179,10 @@ async function runTool(call, invocation, contextKey) {
 // 1. is it a sign-off?
 // 2. which tools does it need? One yes/no per tool, so several can run at once.
 //    A reference nothing shown explains ("the event") adds fetch_history.
-// 3. should Panda react, reply in text, or both? Sampled, so it varies like a
-//    person would; a turn that needs words never gets only a reaction.
+// 3. should Panda react, reply in text, or both? Sampled from Jev's odds, so it
+//    varies like a person would; a turn owed words (a question to Panda, a reply
+//    to something it said) is text or both, never only a reaction. A turn Panda
+//    joined unaddressed just to react (invocation.reactOnly) is a reaction, no tools.
 // 4. what mood is it in? The most likely one, since a misread mood is a bug.
 // Jev down, or unsure of an answer, means no tools and a text reply.
 async function triage(tools, message, invocation, decideImpl, random = Math.random) {
@@ -201,16 +204,18 @@ async function triage(tools, message, invocation, decideImpl, random = Math.rand
     },
     respond_with: {
       type: 'choice',
-      instructions: 'How would a friend in a group chat respond to `message`? People react with emoji a lot, not only in words.',
+      instructions:
+        'How would a sharp, socially aware friend in a group chat respond to `message`, read together with `recent_messages`? Judge this message on its own: none of these is the default.',
       criteria: {
-        reaction: 'Only emoji reactions: a social beat (thanks, lol, a joke, gg, agreement, news, a cool picture, a feeling shared) where words would add nothing, or `message` asks it to just react.',
-        message: 'Only a text reply: a plain question or request with no feeling in it.',
-        both: 'Emoji reactions plus a text reply: it needs an answer and also has a mood worth acknowledging (funny, exciting, sad, annoying), or asks for both.',
+        reaction: 'Only emoji reactions, no words: `message` asks nothing and is worth reacting to (funny, wild, dumb, impressive, exciting or sad news, a cool picture, thanks, agreement, gg), so words would add nothing; or it asks for just a reaction.',
+        message: 'Only a text reply: `message` wants an answer or a reply, and has no punchline or feeling an emoji would add to.',
+        both: 'A text reply plus emoji reactions: `message` wants an answer and also has a punchline or feeling worth acknowledging (funny, exciting, sad, annoying), or asks for both.',
       },
     },
     needs_words: {
       type: 'noul',
-      instructions: 'Does `message` ask a question, make a request, or say something that would be left hanging without a reply in words?',
+      instructions:
+        "Is `message` owed a reply in words: a question or request put to the assistant, or a response to something the assistant said (its lines in `recent_messages` start with (you)), so that only an emoji would leave the person ignored?",
     },
     mood: {
       type: 'choice',
@@ -234,6 +239,8 @@ async function triage(tools, message, invocation, decideImpl, random = Math.rand
     };
   }
   const answers = await decideImpl(config, state, questions);
+  const mood = answers?.mood?.choice in MOOD_EMOJI ? answers.mood.choice : null;
+  if (invocation.reactOnly) return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: [], form: 'reaction', mood, needsContext: false };
 
   const picked = asked.map((t) => t.function.name).filter((name) => answers?.[`use_${name}`]?.noul >= TOOL_THRESHOLD);
   // Tuned against jev-1.13: references nothing shown explains score 0.90–0.97,
@@ -241,10 +248,13 @@ async function triage(tools, message, invocation, decideImpl, random = Math.rand
   // search reads what was remembered, then the last 1000 messages if nothing was.
   const needsContext = answers?.unexplained?.noul >= PICK_THRESHOLD && asked.some((t) => t.function.name === 'fetch_history');
   if (needsContext && !picked.includes('fetch_history')) picked.push('fetch_history');
-  let form = sampleChoice(answers?.respond_with, { random });
+  const odds = answers?.respond_with?.probabilities ?? {};
+  // A reaction alone would ignore the person: text or both, by Jev's odds, where
+  // a reaction-worthy turn that is owed words counts toward both.
+  const owed = answers?.needs_words?.noul >= NEEDS_WORDS;
+  let form = owed
+    ? sampleChoice({ choice: 'message', probabilities: { message: odds.message, both: (odds.both ?? 0) + (odds.reaction ?? 0) } }, { random })
+    : sampleChoice(answers?.respond_with, { random });
   if (!['reaction', 'message', 'both'].includes(form)) form = null;
-  // A reaction alone would leave a question unanswered.
-  if (form === 'reaction' && answers?.needs_words?.noul >= NEEDS_WORDS) form = 'both';
-  const mood = answers?.mood?.choice in MOOD_EMOJI ? answers.mood.choice : null;
   return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: picked, form, mood, needsContext };
 }

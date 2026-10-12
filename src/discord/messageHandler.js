@@ -29,7 +29,11 @@ const RECENT_COUNT = 5;
 const RECENT_CHARS = 500;
 // Below this Jev is sure a message has nothing to do with Panda, so the sampled
 // gate can't pick it up out of ordinary chatter between people.
-const GATE_FLOOR = 0.2;
+const GATE_FLOOR = 0.3;
+// A reply to one of Panda's own lines is always answered from this sure.
+const FOLLOW_UP = 0.6;
+// Unaddressed messages are reacted to only when Jev leans yes, then sampled.
+const REACT_FLOOR = 0.5;
 
 // Waiting batches per channel, held in memory. A trigger past this is dropped (spam guard).
 const MAX_QUEUE = 10;
@@ -70,28 +74,49 @@ export async function signsOff(text, clientUserId, config, decideImpl = decide) 
 // One line of channel history as Panda reads it; its own lines are marked (you).
 const historyLine = (m, self) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`.slice(0, RECENT_CHARS);
 
-// Is a message that is not a ping, a reply to Panda or a DM still one to join?
-// Jev reads it with the RECENT_COUNT messages before it, on loose criteria, and
-// the answer is sampled from its probability like a person who sometimes chimes
-// in. Another bot needs Jev to be sure, so two bots can't chat in a loop by
-// chance. Jev off or down means no: then only pings, replies and DMs are answered.
+// Is a message that is not a ping, a reply to Panda or a DM still one to join,
+// and how? Jev reads it with the RECENT_COUNT messages before it:
+// - 'talk' when it answers or follows up on one of Panda's own recent lines
+//   (only trusted when Panda really spoke there), or, sampled from Jev's odds
+//   like a person who sometimes chimes in, when it is talking to Panda or a
+//   conversation Panda is in.
+// - 'react' when it is not for Panda but worth an emoji (funny, wild, dumb,
+//   big news), sampled too, so Panda doesn't react to everything.
+// - false otherwise. Another bot needs Jev to be sure and never gets a
+//   reaction, so two bots can't chat in a loop by chance. Jev off or down means
+//   false: then only pings, replies and DMs are answered.
 export async function forPanda(message, before, self, config, decideImpl = decide, random = Math.random) {
+  const recent = before.slice(-RECENT_COUNT);
   const state = {
     message: formatEnvelope(message),
-    recent_messages: before.slice(-RECENT_COUNT).map((m) => historyLine(m, self)).join('\n') || '(none)',
+    recent_messages: recent.map((m) => historyLine(m, self)).join('\n') || '(none)',
     assistant_names: myNames(config, message.client?.user),
     owner_name: 'Oscar',
   };
   const answers = await decideImpl(config, state, {
+    follows_up: {
+      type: 'noul',
+      instructions:
+        "The assistant's own lines in `recent_messages` start with (you). Is `message` a direct response to one of those lines: answering a question it asked, replying to, correcting, disputing, thanking or asking about something it said? No if there is no (you) line, if `message` responds to someone else's line, or if it only shares a topic with the assistant's line without responding to it.",
+    },
     for_assistant: {
       type: 'noul',
       instructions:
-        "Would a friend in this chat, known only as `assistant_names`, naturally respond to `message`? Be generous. Yes if `message` talks to or about the assistant by one of `assistant_names` or as `owner_name`'s assistant, responds to or follows up on something the assistant said (its lines in `recent_messages` start with (you)), continues a conversation the assistant is part of in `recent_messages`, or is a question or topic put to the whole room that the assistant could add to. No when `message` addresses someone else by a name or @mention not in `assistant_names` (another bot or nickname such as \"slopbot\" is NOT the assistant), or when people are talking among themselves about something that has nothing to do with the assistant.",
+        "Would a socially aware friend in this chat, known only as `assistant_names`, answer `message` in words? Yes if `message` talks to or about the assistant by one of `assistant_names` or as `owner_name`'s assistant, continues a conversation the assistant is part of in `recent_messages`, or puts a question to the whole room that the assistant could really help with. No when `message` addresses someone else by a name or @mention not in `assistant_names` (another bot or nickname such as \"slopbot\" is NOT the assistant), or when people are talking among themselves about something that has nothing to do with the assistant.",
+    },
+    worth_reacting: {
+      type: 'noul',
+      instructions:
+        'Even though `message` may not be meant for the assistant, would a friend reading the chat drop an emoji reaction on it? Yes only if it stands out: genuinely funny, wild or absurd, hilariously dumb, impressive, exciting or sad news, a striking picture or a hot take. No for ordinary chatter, plans and logistics, plain questions, greetings and small talk.',
     },
   });
-  const p = answers?.for_assistant?.noul;
-  if (!(p >= GATE_FLOOR)) return false;
-  return message.author?.bot ? p >= 0.8 : sampleYes(p, { temperature: 1, random });
+  const p = (name) => answers?.[name]?.noul;
+  const spoke = recent.some((m) => m.author?.id === self);
+  if (message.author?.bot) return (spoke && p('follows_up') >= 0.8) || p('for_assistant') >= 0.8 ? 'talk' : false;
+  if (spoke && p('follows_up') >= FOLLOW_UP) return 'talk';
+  if (p('for_assistant') >= GATE_FLOOR && sampleYes(p('for_assistant'), { temperature: 1, random })) return 'talk';
+  if (p('worth_reacting') >= REACT_FLOOR && sampleYes(p('worth_reacting'), { temperature: 1, random })) return 'react';
+  return false;
 }
 
 // Suppress Discord link embeds by wrapping bare URLs in <>. Image URLs stay
@@ -99,10 +124,10 @@ export async function forPanda(message, before, self, config, decideImpl = decid
 // URLs already wrapped, inside markdown links, or in inline code.
 const IMAGE_URL = /\.(png|jpe?g|gif|webp|avif)(\?\S*)?$/i;
 // "-# 🔧 web_search ×2 · send_card": the tools a turn called, as Discord's small
-// grey subtext above the reply. No tools, no line.
+// grey subtext above the reply. No tools, no line. A reaction shows for itself.
 export function toolsLine(names = []) {
   const counts = new Map();
-  for (const name of names) counts.set(name, (counts.get(name) || 0) + 1);
+  for (const name of names) if (name !== 'react') counts.set(name, (counts.get(name) || 0) + 1);
   return counts.size ? `-# 🔧 ${[...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ')}` : '';
 }
 
@@ -139,8 +164,9 @@ export function createMessageHandler({ client, config, player, privateMode, runA
   const signedOff = new Set();
 
   // direct = pinged, replied to, or DMed; otherwise Jev judged it meant for Panda.
-  function makeBatch(message, direct) {
-    const batch = { claimantId: message.author.id, messages: [message], closed: false, direct, sentAt: message.createdAt?.getTime() ?? Date.now() };
+  // reactOnly = Panda joins unaddressed only to react (forPanda said 'react').
+  function makeBatch(message, direct, reactOnly = false) {
+    const batch = { claimantId: message.author.id, messages: [message], closed: false, direct, reactOnly, sentAt: message.createdAt?.getTime() ?? Date.now() };
     batch.collected = new Promise((resolve) => {
       setTimeout(() => {
         batch.closed = true;
@@ -185,7 +211,7 @@ export function createMessageHandler({ client, config, player, privateMode, runA
                 '',
               ]
             : []),
-          `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : 'did not name or ping you; you are joining in because it seemed relevant, so do not assume it is about you or that names in it mean you'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This matters most: it is your actual task. Answer what is actually said here.]`,
+          `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : batch.reactOnly ? 'did not name or ping you and it is not for you; it just stands out, so you only react to it with emoji' : 'did not name or ping you; you are joining in because it seemed relevant, so do not assume it is about you or that names in it mean you'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This matters most: it is your actual task. Answer what is actually said here.]`,
           turn,
         ].join('\n');
 
@@ -204,6 +230,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           posted: false,
           // Every tool the agent calls this turn, in order; shown above the reply.
           toolsUsed: [],
+          // Joined unaddressed for something worth an emoji: react, say nothing.
+          reactOnly: batch.reactOnly && !batch.direct,
           batchedCount: messages.length,
           recent,
           // Collect any Discord embeds produced by tool calls (e.g. image_search)
@@ -323,7 +351,10 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         open.messages.push(message);
         // A slower Jev check can land after a later follow-up; keep them in the order they were sent.
         open.messages.sort((a, b) => a.createdAt - b.createdAt);
-        if (message.mentions?.users?.has(client.user.id)) open.direct = true;
+        if (message.mentions?.users?.has(client.user.id)) {
+          open.direct = true;
+          open.reactOnly = false;
+        }
         return true;
       };
       if (foldIn()) return;
@@ -340,11 +371,13 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         repliedToBot = ref?.author?.id === client.user.id;
       }
       const direct = isDM || mentioned || repliedToBot;
+      let joined = 'talk';
       if (!direct) {
         // A full queue would drop it anyway, so Jev is not asked.
         if ((channels.get(channelId)?.queue.length ?? 0) >= MAX_QUEUE) return;
         const before = await message.channel.messages.fetch({ limit: RECENT_COUNT, before: message.id }).catch(() => []);
-        if (!(await forPanda(message, [...before.values()].reverse(), client.user.id, config, decideImpl))) return;
+        joined = await forPanda(message, [...before.values()].reverse(), client.user.id, config, decideImpl);
+        if (!joined) return;
         // A follow-up of theirs may have opened a batch while Jev was deciding.
         if (foldIn()) return;
       }
@@ -379,7 +412,7 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         return;
       }
       channels.set(channelId, st);
-      const batch = makeBatch(message, direct);
+      const batch = makeBatch(message, direct, joined === 'react');
       const at = st.queue.findIndex((b) => b.sentAt > batch.sentAt || (b.sentAt === batch.sentAt && Math.random() < 0.5));
       st.queue.splice(at === -1 ? st.queue.length : at, 0, batch);
       message.channel.sendTyping().catch(() => {});

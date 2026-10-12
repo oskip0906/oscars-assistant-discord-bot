@@ -71,19 +71,35 @@ test('Jev decides whether an unpinged message is for Panda, reading the 5 lines 
   const before = [msg('1', 'a', 'zero'), msg('2', 'a', 'one'), msg('3', 'b', 'two'), msg('4', 'a', 'three'), msg('5', 'bot', 'sunny today'), msg('6', 'a', 'nice')];
   let state;
   const yes = async (_c, s) => ((state = s), { for_assistant: { noul: 0.9 } });
-  assert.equal(await forPanda(msg('7', 'a', 'and tomorrow?'), before, 'bot', config, yes, () => 0), true);
+  assert.equal(await forPanda(msg('7', 'a', 'and tomorrow?'), before, 'bot', config, yes, () => 0), 'talk');
   assert.equal(state.recent_messages.split('\n').length, 5);
   assert.ok(state.recent_messages.endsWith('(you) bot (@bot, id:bot): sunny today\na (@a, id:a): nice'));
   assert.equal(await forPanda(msg('7', 'a', 'panda?'), before, 'bot', config, jev(null)), false, 'Jev down means only pings, replies and DMs are answered');
 });
 
-test('the gate is loose and sampled, but never picks up what Jev is sure is not for Panda', async () => {
-  const at = (p, r) => forPanda(msg('7', 'a', 'hm'), [], 'bot', config, jev({ for_assistant: { noul: p } }), () => r);
-  assert.equal(await at(0.6, 0.5), true, 'a maybe is sometimes yes');
-  assert.equal(await at(0.6, 0.7), false, 'and sometimes no');
-  assert.equal(await at(0.19, 0), false, 'below the floor is always no');
+const at = (answers, r, before = []) => forPanda(msg('7', 'a', 'hm'), before, 'bot', config, jev(answers), () => r);
+
+test('the gate is sampled, but never picks up what Jev is sure is not for Panda', async () => {
+  assert.equal(await at({ for_assistant: { noul: 0.6 } }, 0.5), 'talk', 'a maybe is sometimes yes');
+  assert.equal(await at({ for_assistant: { noul: 0.6 } }, 0.7), false, 'and sometimes no');
+  assert.equal(await at({ for_assistant: { noul: 0.29 } }, 0), false, 'below the floor is always no');
   const bot = { ...msg('7', 'b', 'hm'), author: { id: 'b', username: 'b', bot: true } };
   assert.equal(await forPanda(bot, [], 'bot', config, jev({ for_assistant: { noul: 0.7 } }), () => 0), false, 'another bot needs Jev to be sure');
+  assert.equal(await forPanda(bot, [], 'bot', config, jev({ worth_reacting: { noul: 1 } }), () => 0), false, 'and never gets a reaction');
+});
+
+test("a reply to one of Panda's own lines is always answered, but only when Panda really said something there", async () => {
+  const pandaSpoke = [msg('5', 'bot', 'pineapple belongs on pizza'), msg('6', 'b', 'lol')];
+  assert.equal(await at({ follows_up: { noul: 0.7 } }, 0.999, pandaSpoke), 'talk', 'not sampled');
+  assert.equal(await at({ follows_up: { noul: 0.7 } }, 0.999, [msg('6', 'b', 'lol')]), false, 'no (you) line, nothing to follow up');
+  assert.equal(await at({ follows_up: { noul: 0.4 } }, 0.999, pandaSpoke), false);
+});
+
+test('a message not for Panda that stands out gets a reaction, sampled, and plain chatter does not', async () => {
+  assert.equal(await at({ worth_reacting: { noul: 0.8 } }, 0.5), 'react');
+  assert.equal(await at({ worth_reacting: { noul: 0.8 } }, 0.9), false, 'not every time');
+  assert.equal(await at({ worth_reacting: { noul: 0.45 } }, 0), false, 'below the floor is never a reaction');
+  assert.equal(await at({ for_assistant: { noul: 0.9 }, worth_reacting: { noul: 0.9 } }, 0.5), 'talk', 'talking wins over reacting');
 });
 
 test("the gate knows Panda's names, so another bot's nickname is not Panda", async () => {
@@ -111,7 +127,7 @@ test('turns go in the order they were sent, even when the later one passes Jev f
     // The earlier message's check is the slow one.
     decideImpl: async (_c, state) => {
       if (state.message.endsWith('first')) await new Promise((r) => setTimeout(r, 200));
-      return { for_assistant: { noul: 0.9 } };
+      return { for_assistant: { noul: 1 } };
     },
   });
   await Promise.all([handler(message('1', 'a', 'first')), handler(message('2', 'b', 'second'))]);

@@ -80,6 +80,21 @@ test('"reaction only" on a turn that needs words reacts and answers', async () =
   assert.deepEqual(reactions, ['😂']);
 });
 
+test('a turn owed words never gets only a reaction, whatever the odds', async () => {
+  const odds = { respond_with: { choice: 'reaction', probabilities: { reaction: 0.9, message: 0.1 } }, needs_words: { noul: 0.7 } };
+  for (const r of [0, 0.5, 0.999]) {
+    const { calls } = await turn(odds, [reactCall('😂'), { content: 'it was the cat' }], { random: () => r });
+    assert.notDeepEqual(calls.map((c) => c.toolChoice), ['required'], 'not a turn that ends at the reaction');
+  }
+});
+
+test('a turn Panda joined only to react is a reaction with no tools and no words', async () => {
+  const { text, calls, reactions } = await turn({ ...yes('get_message_sender'), respond_with: sure('message') }, [reactCall('💀'), { content: 'lol' }], { reactOnly: true });
+  assert.equal(text, '');
+  assert.deepEqual(calls, [{ tools: ['react'], toolChoice: 'required' }]);
+  assert.deepEqual(reactions, ['💀']);
+});
+
 test('the form is sampled from Jev\'s odds, so reactions happen even when text is likelier', async () => {
   const odds = { respond_with: { choice: 'message', probabilities: { message: 0.6, reaction: 0.25, both: 0.15 } } };
   // random 0 lands on the first option, random ~1 on the last.
@@ -196,4 +211,6 @@ test('every tool a turn calls is recorded, in order, for the line above the repl
   assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id', 'get_message_sender']);
   assert.equal(toolsLine(invocation.toolsUsed), '-# 🔧 get_message_sender ×2 · get_user_id');
   assert.equal(toolsLine([]), '');
+  assert.equal(toolsLine(['react', 'react']), '', 'a reaction is never shown as a tool');
+  assert.equal(toolsLine(['react', 'web_search']), '-# 🔧 web_search');
 });
