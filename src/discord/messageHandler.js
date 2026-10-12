@@ -29,9 +29,10 @@ const WINDOW_MS = 3000;
 // is kept. The same 5 are what Jev reads to decide whether to answer at all.
 const RECENT_COUNT = 5;
 const RECENT_CHARS = 500;
-// Below this Jev is sure a message has nothing to do with Panda, so the sampled
-// gate can't pick it up out of ordinary chatter between people.
-const GATE_FLOOR = 0.3;
+// Below this Jev doesn't lean yes that a message is for Panda, so the sampled
+// gate can't pick it up out of ordinary chatter between people. At 0.3 the
+// maybes added up and Panda chimed in on nearly everything.
+const GATE_FLOOR = 0.5;
 // A reply to one of Panda's own lines is always answered from this sure.
 const FOLLOW_UP = 0.6;
 // A message Jev is this sure is addressed to Panda is always answered.
