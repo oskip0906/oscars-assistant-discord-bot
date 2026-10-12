@@ -30,8 +30,9 @@ const BASE_INTENTS = [
 
 async function boot(intents) {
   const client = new Client({ intents, partials: [Partials.Channel] });
-  const privateMode = new PrivateMode(config.dataDir);
-  if (privateMode.isOn()) console.log('[panda] Private mode is ON (restored from flag file)');
+  // Loaded before login, so no message is answered before the saved state applies.
+  const privateMode = new PrivateMode(config);
+  console.log(`[panda] Private mode is ${(await privateMode.load()) ? 'ON' : 'OFF'}`);
 
   let player = null;
   try {

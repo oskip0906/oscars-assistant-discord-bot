@@ -287,7 +287,13 @@ export function createInteractionHandler({ client, config, player, privateMode, 
             flags: MessageFlags.Ephemeral,
           });
         }
-        privateMode.set(state === 'on');
+        const saved = await privateMode.set(state === 'on');
+        if (!saved.ok) {
+          return await interaction.reply({
+            content: `❌ ${saved.error} Private mode is still **${saved.on ? 'ON' : 'OFF'}**.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
         updatePresence(client, privateMode);
         return await interaction.reply({
           content:

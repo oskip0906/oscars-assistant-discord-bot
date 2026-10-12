@@ -274,11 +274,12 @@ export async function setModel({ model, provider = '' } = {}, invocation, { swit
   return result.ok ? result.summary : `${result.summary}\n(The switch did not happen; say so.)`;
 }
 
-export function privateModeTool({ state } = {}, invocation) {
+export async function privateModeTool({ state } = {}, invocation) {
   const mode = invocation.privateMode;
   if (!mode) return 'Private mode is unavailable here.';
   if (state === 'status') return `Private mode is ${mode.isOn() ? 'ON' : 'OFF'}.`;
-  mode.set(state === 'on');
+  const saved = await mode.set(state === 'on');
+  if (!saved.ok) return `${saved.error}\nPrivate mode is still ${saved.on ? 'ON' : 'OFF'}. (The switch did not happen; say so.)`;
   updatePresence(invocation.client, mode);
   return state === 'on'
     ? 'Private mode is now ON: from the next message on, only Oscar gets answers.'
