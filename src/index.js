@@ -14,6 +14,7 @@ import { ensureSchema } from './db.js';
 import { loadModel } from './discord/model.js';
 import { startReminders } from './reminders.js';
 import { watchStorage } from './storage.js';
+import { joinThread, joinActiveThreads } from './discord/threads.js';
 
 validateConfig();
 // A database that is down at boot leaves chat working; its features fail on use.
@@ -63,6 +64,9 @@ async function boot(intents) {
     // was still in flight gets the finish line and the DM its process never
     // lived to send. A self-fix ends in a restart, so this is the normal path
     // for reporting one — not an edge case.
+    joinActiveThreads(readyClient)
+      .then((n) => n && console.log(`[panda] Joined ${n} active thread(s)`))
+      .catch((err) => console.error('[panda] could not join the active threads:', err.message));
     await approvalCard.retireStale(readyClient).catch(() => {});
     startReminders(readyClient, config);
     watchStorage(readyClient, config);
@@ -78,6 +82,7 @@ async function boot(intents) {
   client.on(Events.GuildCreate, (guild) => {
     guild.commands.set(commandDefs).catch(() => {});
   });
+  client.on(Events.ThreadCreate, (thread) => joinThread(thread));
   const onMessage = createMessageHandler({ client, config, player, privateMode });
   client.on(Events.MessageCreate, onMessage);
   client.on(Events.InteractionCreate, createInteractionHandler({ client, config, player, privateMode, onMessage }));

@@ -17,9 +17,11 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # App source, and ARCHITECTURE.md, which the how_i_work tool reads to answer
-# questions about the bot. The prompts live in the database, not in the image.
+# questions about the bot, and RULES.md, Oscar's standing rules (set RULES_FILE
+# to a path under data/ to keep rule changes across redeploys). The prompts live
+# in the database, not in the image.
 COPY src ./src
-COPY ARCHITECTURE.md ./
+COPY ARCHITECTURE.md RULES.md ./
 
 # Runtime state (dev-run log, pending approval) lives here; mount a volume over it.
 RUN mkdir -p data && chown -R node:node /app

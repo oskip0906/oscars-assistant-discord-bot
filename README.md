@@ -64,13 +64,13 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 
 Beyond the slash commands, Panda calls these on its own while chatting (details in [ARCHITECTURE.md](ARCHITECTURE.md#tools)):
 
-- **Discord:** look up members and message senders, read server info (channels, roles, events, emojis, threads), react with emoji, post polls and embed cards (link buttons, clickable buttons, dropdowns).
+- **Discord:** look up members and message senders, read server info (channels, roles, events, emojis, threads), react with emoji, post polls and embed cards (link buttons, clickable buttons, dropdowns). Panda listens and answers in threads too, to people and bots alike.
 - **Web:** search the web and images, read any public page.
 - **Memory:** read further back in a channel, search what it remembered, index the messages around an old one, and save, list, open and find notes (deleting one posts the same confirmation as `/delete_note`).
 - **Reminders and research:** add, show and delete reminders, and run the full `/research` pipeline.
 - **Slash commands:** explain any command from its registered definition, say which model it runs on (the live setting), and report spend.
 - **Music:** play, skip, pause, resume, stop and show the queue.
 - **Self-knowledge:** read ARCHITECTURE.md and its own source on GitHub to explain how it works.
-- **Oscar only:** read GitHub (files, commits, issues, PRs, code search, Actions runs), make GitHub writes such as issues and comments, change its own code through an approved `self_fix` PR, change its personality with `set_rule`, switch models with `set_model`, and toggle private mode.
+- **Oscar only:** read GitHub (files, commits, issues, PRs, code search, Actions runs), make GitHub writes such as issues and comments, change its own code through an approved `self_fix` PR, remember standing rules in `RULES.md` with `add_rule` / `remove_rule` (followed in every reply), create threads and post in them with `create_thread` / `send_to_thread`, change its personality with `set_rule`, switch models with `set_model`, and toggle private mode.
 
 Everything else — how a message becomes a reply, how Jev makes Panda's decisions, the prompts, memory, models, tools, the research pipeline, the sandbox, safety and deployment — lives in **[ARCHITECTURE.md](ARCHITECTURE.md)**.

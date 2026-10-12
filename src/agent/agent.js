@@ -1,5 +1,5 @@
 import { chatCompletion, providerFor } from './openrouter.js';
-import { buildSystemPrompt, myNames } from './systemPrompt.js';
+import { buildSystemPrompt, myNames, NO_REPLY } from './systemPrompt.js';
 import { toolDefs, executeTool, OWNER_ONLY_TOOLS } from './tools/index.js';
 import { decide, sampleChoice } from './jev.js';
 import { redactSecrets } from '../config.js';
@@ -52,6 +52,7 @@ const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
 export const saysNothing = (text) => !/[\p{L}\p{N}]/u.test(text.replace(/<a?:\w+:\d+>/g, ''));
 // Nothing to say at all: empty, or only a 🐼 and punctuation ("🐼 …", "...").
 // An emoji the model chose ("🔥") is still a reply; this is filler.
+export const isNoReply = (text) => String(text ?? '').trim().toUpperCase().replace(/[\s.]+$/, '') === NO_REPLY;
 export const isFiller = (text) => !String(text ?? '').replace(/🐼|[\s\p{P}]/gu, '');
 
 // A sign-off: a wave and no words, so the conversation can end. The wave is
@@ -182,6 +183,11 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   const msg = answer ?? (await ask(messages, ran ? offered : [], 'none'));
   const text = msg.content?.trim() || '';
   log(contextKey, `turn done in ${Date.now() - turnStart}ms after ${step} model call(s)`);
+  // A rule says to stay silent: nothing is sent, not even the sign-off wave.
+  if (isNoReply(text)) {
+    invocation.silent = true;
+    return '';
+  }
   // After a reaction, poll or card, a reply with no words (usually the same
   // emoji echoed) is dropped: something was already sent. A ping or reply is
   // always answered in words, so there it is kept.
