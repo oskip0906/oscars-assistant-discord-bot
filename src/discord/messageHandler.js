@@ -9,6 +9,7 @@ import { modelInputs } from './model.js';
 import { redactSecrets } from '../config.js';
 import { readChannelRange } from '../agent/tools/history.js';
 import { myNames } from '../agent/systemPrompt.js';
+import { readPrompt } from '../agent/prompts.js';
 
 // Fixed-window input debounce with a per-channel queue.
 //
@@ -32,6 +33,10 @@ const RECENT_CHARS = 500;
 const GATE_FLOOR = 0.3;
 // A reply to one of Panda's own lines is always answered from this sure.
 const FOLLOW_UP = 0.6;
+// A message Jev is this sure is addressed to Panda is always answered.
+const ADDRESSED = 0.7;
+// identity.md is cut to this for Jev, which reads it to tell what is meant for Panda.
+const IDENTITY_CHARS = 2000;
 // Unaddressed messages are reacted to only when Jev leans yes, then sampled.
 const REACT_FLOOR = 0.5;
 
@@ -77,20 +82,21 @@ const historyLine = (m, self) => `${m.author.id === self ? '(you) ' : ''}${forma
 // Is a message that is not a ping, a reply to Panda or a DM still one to join,
 // and how? Jev reads it with the RECENT_COUNT messages before it:
 // - 'talk' when it answers or follows up on one of Panda's own recent lines
-//   (only trusted when Panda really spoke there), or, sampled from Jev's odds
-//   like a person who sometimes chimes in, when it is talking to Panda or a
-//   conversation Panda is in.
+//   (only trusted when Panda really spoke there), when Jev is fairly sure it is
+//   addressed to Panda (judged against identity.md and the recent lines), or,
+//   sampled from Jev's odds like a person who sometimes chimes in, when it is
+//   talking to Panda or a conversation Panda is in.
 // - 'react' when it is not for Panda but worth an emoji (funny, wild, dumb,
 //   big news), sampled too, so Panda doesn't react to everything.
-// - false otherwise. Another bot needs Jev to be sure and never gets a
-//   reaction, so two bots can't chat in a loop by chance. Jev off or down means
-//   false: then only pings, replies and DMs are answered.
+// - false otherwise. Bots are judged exactly like people. Jev off or down
+//   means false: then only pings, replies and DMs are answered.
 export async function forPanda(message, before, self, config, decideImpl = decide, random = Math.random) {
   const recent = before.slice(-RECENT_COUNT);
   const state = {
     message: formatEnvelope(message),
     recent_messages: recent.map((m) => historyLine(m, self)).join('\n') || '(none)',
     assistant_names: myNames(config, message.client?.user),
+    assistant_identity: (await readPrompt(config, 'identity.md')).slice(0, IDENTITY_CHARS) || '(unknown)',
     owner_name: 'Oscar',
   };
   const answers = await decideImpl(config, state, {
@@ -98,6 +104,11 @@ export async function forPanda(message, before, self, config, decideImpl = decid
       type: 'noul',
       instructions:
         "The assistant's own lines in `recent_messages` start with (you). Is `message` a direct response to one of those lines: answering a question it asked, replying to, correcting, disputing, thanking or asking about something it said? No if there is no (you) line, if `message` responds to someone else's line, or if it only shares a topic with the assistant's line without responding to it.",
+    },
+    addressed: {
+      type: 'noul',
+      instructions:
+        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else, about the assistant rather than to it, or only might be for it.",
     },
     for_assistant: {
       type: 'noul',
@@ -112,8 +123,8 @@ export async function forPanda(message, before, self, config, decideImpl = decid
   });
   const p = (name) => answers?.[name]?.noul;
   const spoke = recent.some((m) => m.author?.id === self);
-  if (message.author?.bot) return (spoke && p('follows_up') >= 0.8) || p('for_assistant') >= 0.8 ? 'talk' : false;
   if (spoke && p('follows_up') >= FOLLOW_UP) return 'talk';
+  if (p('addressed') >= ADDRESSED) return 'talk';
   if (p('for_assistant') >= GATE_FLOOR && sampleYes(p('for_assistant'), { temperature: 1, random })) return 'talk';
   if (p('worth_reacting') >= REACT_FLOOR && sampleYes(p('worth_reacting'), { temperature: 1, random })) return 'react';
   return false;
@@ -211,7 +222,7 @@ export function createMessageHandler({ client, config, player, privateMode, runA
                 '',
               ]
             : []),
-          `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : batch.reactOnly ? 'did not name or ping you and it is not for you; it just stands out, so you only react to it with emoji' : 'did not name or ping you; you are joining in because it seemed relevant, so do not assume it is about you or that names in it mean you'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This matters most: it is your actual task. Answer what is actually said here.]`,
+          `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : batch.reactOnly ? 'did not name or ping you and it is not for you; it just stands out, so you only react to it with emoji' : 'did not ping you. Read it with the recent messages and judge for yourself whether it is meant for you or you are just joining in; names in it are only yours if they are your names'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This matters most: it is your actual task. Answer what is actually said here.]`,
           turn,
         ].join('\n');
 

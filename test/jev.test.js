@@ -83,9 +83,21 @@ test('the gate is sampled, but never picks up what Jev is sure is not for Panda'
   assert.equal(await at({ for_assistant: { noul: 0.6 } }, 0.5), 'talk', 'a maybe is sometimes yes');
   assert.equal(await at({ for_assistant: { noul: 0.6 } }, 0.7), false, 'and sometimes no');
   assert.equal(await at({ for_assistant: { noul: 0.29 } }, 0), false, 'below the floor is always no');
+});
+
+test('bots are judged exactly like people, reactions included', async () => {
   const bot = { ...msg('7', 'b', 'hm'), author: { id: 'b', username: 'b', bot: true } };
-  assert.equal(await forPanda(bot, [], 'bot', config, jev({ for_assistant: { noul: 0.7 } }), () => 0), false, 'another bot needs Jev to be sure');
-  assert.equal(await forPanda(bot, [], 'bot', config, jev({ worth_reacting: { noul: 1 } }), () => 0), false, 'and never gets a reaction');
+  assert.equal(await forPanda(bot, [], 'bot', config, jev({ for_assistant: { noul: 0.6 } }), () => 0.5), 'talk');
+  assert.equal(await forPanda(bot, [], 'bot', config, jev({ worth_reacting: { noul: 0.8 } }), () => 0.5), 'react');
+});
+
+test('a message Jev is fairly sure is addressed to Panda is always answered, judged against identity.md', async () => {
+  assert.equal(await at({ addressed: { noul: 0.7 } }, 0.999), 'talk', 'not sampled');
+  assert.equal(await at({ addressed: { noul: 0.69 } }, 0.999), false);
+  let seen;
+  await forPanda(msg('7', 'a', 'hm'), [], 'bot', config, async (_c, s, q) => ((seen = { s, q }), null));
+  assert.ok('assistant_identity' in seen.s);
+  assert.match(seen.q.addressed.instructions, /assistant_identity/);
 });
 
 test("a reply to one of Panda's own lines is always answered, but only when Panda really said something there", async () => {
