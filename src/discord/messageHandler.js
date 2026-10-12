@@ -10,6 +10,7 @@ import { redactSecrets } from '../config.js';
 import { readChannelRange } from '../agent/tools/history.js';
 import { myNames } from '../agent/systemPrompt.js';
 import { readPrompt } from '../agent/prompts.js';
+import { reactOnce } from './reactions.js';
 
 // Fixed-window input debounce with a per-channel queue.
 //
@@ -47,7 +48,7 @@ const MAX_QUEUE = 10;
 // say; it ends when the other bot says one of these. A wave costs one reaction
 // and ends the exchange, where a reply restarts it.
 const FAREWELL_RE =
-  /\b(bye|goodbye|good ?night|see ?ya|see you( later| around)?|cya|later(s)?|take care|farewell|catch you later|have a (great|good|nice|wonderful) (day|one|night|evening)|you too|talk (to you )?later|ttyl|peace out|signing off|i'?m (all set|good)|standing by)\b/i;
+  /\b(bye|goodbye|good ?night|see ?ya|see you( later| around)?|cya|later(s)?|take care|farewell|catch you later|have a (great|good|nice|wonderful) (day|one|night|evening)|you too|talk (to you )?later|ttyl|peace out|signing off|gn|gtg|g2g|ttfn|nite|i'?m (all set|good)|standing by)\b/i;
 
 // Strip the bot's own mention so detection sees only what the sender "said".
 function stripBotMention(text, clientUserId) {
@@ -76,6 +77,57 @@ export async function signsOff(text, clientUserId, config, decideImpl = decide) 
   return answers?.bye ? answers.bye.noul >= 0.8 : isSignOff(text, clientUserId);
 }
 
+// --- who is a message addressed to? ----------------------------------------
+//
+// A cheap check that runs before Jev on every unpinged server message. The words
+// that mean Panda depend on who says them: from Oscar, "my bot" or "my
+// assistant" is Panda; from anyone else it is their own bot. Anyone may call it
+// Panda (or its Discord name), "panda bot", "Oscar's bot" or "the bot". A message
+// put to Oscar himself (his @mention, a reply to him, "Oscar, can you…") is his
+// to answer, so Panda stays out of it rather than answering in his place.
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const OWNER = 'oscar';
+const OWNER_POSSESSIVE = `${OWNER}(?:'|’)?s`;
+// Openers before a name used to call someone ("hey panda", "ok oscar, …").
+const OPENER = "(?:(?:hey|hi|hello|yo|oi|ok|okay|so|um|uh|pls|please|sup|wait|ayo|ay)[\\s,!.]+)*";
+// Greetings that make the next name the one being called ("hey oscar how's it going").
+const GREETING = "(?:(?:hey|hi|hello|yo|oi|sup|ayo|ay|dear|thanks|thx|ty)[\\s,!.]+)+";
+
+// Every phrase that names Panda when `isOwner` (or not) says it.
+export function pandaAliases(config, user, isOwner = false) {
+  const names = new Set([config.botName, user?.globalName, user?.username].filter(Boolean).map((n) => n.toLowerCase()));
+  const phrases = [...names].map(escapeRe);
+  for (const n of names) phrases.push(`${escapeRe(n)} ?bot`);
+  phrases.push(`${OWNER_POSSESSIVE} (?:bot|assistant|ai)`, 'the bot', 'the assistant');
+  if (isOwner) phrases.push('my (?:bot|assistant|ai)');
+  return phrases;
+}
+
+// 'panda' when the message calls Panda, 'owner' when it is put to Oscar instead,
+// null when this check can't tell (then Jev decides, as before).
+export function addressee(message, config, user, repliedTo = null) {
+  const isOwner = Boolean(config.ownerId) && message.author?.id === config.ownerId;
+  const text = stripBotMention(message.content, user?.id ?? '').toLowerCase();
+  const alias = `(?:${pandaAliases(config, user, isOwner).join('|')})`;
+  const aliases = new RegExp(`(?<![\\w'’])${alias}(?![\\w'’])`, 'i');
+  // Called at the start: "hey panda bot …" or "Oscar's bot, …".
+  const callsPanda = new RegExp(`^\\W*(?:${GREETING}@?${alias}(?![\\w'’])|${OPENER}@?${alias}\\s*[,:!])`, 'i');
+  // "Panda, ask Oscar…" is for Panda however it goes on.
+  if (callsPanda.test(text)) return 'panda';
+  if (!isOwner && config.ownerId) {
+    const pingsOwner =
+      message.mentions?.users?.has?.(config.ownerId) || new RegExp(`<@!?${config.ownerId}>`).test(message.content ?? '');
+    const repliesToOwner = repliedTo?.author?.id === config.ownerId;
+    // "Oscar, …", "hey oscar can you…", "…right oscar?", "oscar do you…" — not "Oscar's bot".
+    const namesOwner = new RegExp(
+      `^\\W*${GREETING}${OWNER}(?![\\w'’])|^\\W*${OWNER}\\s*(?:[,:!?]|$)|(?:,\\s*${OWNER}|(?<![\\w'’])${OWNER}\\s*\\?)[\\s?!.]*$|(?<![\\w'’])${OWNER}[,:]?\\s+(?:can|could|will|would|do|did|are|were|have|is|should|pls|please)\\s+(?:you|u|ya)\\b`,
+      'i',
+    ).test(text);
+    if (pingsOwner || repliesToOwner || namesOwner) return 'owner';
+  }
+  return aliases.test(text) ? 'panda' : null;
+}
+
 // One line of channel history as Panda reads it; its own lines are marked (you).
 const historyLine = (m, self) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`.slice(0, RECENT_CHARS);
 
@@ -98,6 +150,7 @@ export async function forPanda(message, before, self, config, decideImpl = decid
     assistant_names: myNames(config, message.client?.user),
     assistant_identity: (await readPrompt(config, 'identity.md')).slice(0, IDENTITY_CHARS) || '(unknown)',
     owner_name: 'Oscar',
+    sender_is_owner: message.author?.id && message.author.id === config.ownerId ? 'yes' : 'no',
   };
   const answers = await decideImpl(config, state, {
     follows_up: {
@@ -108,12 +161,12 @@ export async function forPanda(message, before, self, config, decideImpl = decid
     addressed: {
       type: 'noul',
       instructions:
-        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else, about the assistant rather than to it, or only might be for it.",
+        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else, about the assistant rather than to it, or only might be for it. \"my bot\" or \"my assistant\" means the assistant only when `sender_is_owner` is yes; from anyone else it is their own bot. No when it is put to `owner_name` himself (a question or request for him): the assistant never answers in his place.",
     },
     for_assistant: {
       type: 'noul',
       instructions:
-        "Would a socially aware friend in this chat, known only as `assistant_names`, answer `message` in words? Yes if `message` talks to or about the assistant by one of `assistant_names` or as `owner_name`'s assistant, continues a conversation the assistant is part of in `recent_messages`, or puts a question to the whole room that the assistant could really help with. No when `message` addresses someone else by a name or @mention not in `assistant_names` (another bot or nickname such as \"slopbot\" is NOT the assistant), or when people are talking among themselves about something that has nothing to do with the assistant.",
+        "Would a socially aware friend in this chat, known only as `assistant_names`, answer `message` in words? Yes if `message` talks to or about the assistant by one of `assistant_names` or as `owner_name`'s assistant, continues a conversation the assistant is part of in `recent_messages`, or puts a question to the whole room that the assistant could really help with. No when `message` addresses someone else by a name or @mention not in `assistant_names` (another bot or nickname such as \"slopbot\" is NOT the assistant), when people are talking among themselves about something that has nothing to do with the assistant, when someone other than `owner_name` says \"my bot\" or \"my assistant\" (that is their own bot; only when `sender_is_owner` is yes does it mean the assistant), or when `message` is a question or request for `owner_name` himself.",
     },
     worth_reacting: {
       type: 'noul',
@@ -276,13 +329,10 @@ export function createMessageHandler({ client, config, player, privateMode, runA
 
         // A response is MANDATORY (reaction or text — never none). If the model
         // produced neither, fall back to a reaction, then to text.
+        // A message that already got (or failed to get) a reaction gets the text.
         if (!replyText.trim() && !invocation.reacted && !invocation.posted) {
-          try {
-            await anchor.react('👀');
-            invocation.reacted = true;
-          } catch {
-            replyText = '🐼';
-          }
+          if (await reactOnce(anchor, '👀')) invocation.reacted = true;
+          else replyText = '🐼';
         }
 
         const sent = [];
@@ -380,13 +430,18 @@ export function createMessageHandler({ client, config, player, privateMode, runA
 
       const mentioned = message.mentions?.users?.has(client.user.id) ?? false;
       let repliedToBot = false;
+      let ref = null;
       if (!isDM && message.reference?.messageId) {
-        const ref = await message.fetchReference().catch(() => null);
+        ref = await message.fetchReference().catch(() => null);
         repliedToBot = ref?.author?.id === client.user.id;
       }
       const direct = isDM || mentioned || repliedToBot;
       let joined = 'talk';
-      if (!direct) {
+      // Called by name ("panda bot", "Oscar's bot", Oscar's "my bot") it talks;
+      // a message put to Oscar is his, so Panda neither answers nor reacts.
+      const to = direct ? null : addressee(message, config, client.user, ref);
+      if (to === 'owner') return;
+      if (!direct && to !== 'panda') {
         // A full queue would drop it anyway, so Jev is not asked.
         if ((channels.get(channelId)?.queue.length ?? 0) >= MAX_QUEUE) return;
         const before = await message.channel.messages.fetch({ limit: RECENT_COUNT, before: message.id }).catch(() => []);
@@ -404,7 +459,7 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         if (signedOff.has(channelId) && !direct) return;
         if (await signsOff(message.content, client.user.id, config, decideImpl)) {
           signedOff.add(channelId);
-          await message.react('👋').catch(() => {});
+          await reactOnce(message, '👋');
           return;
         }
       }

@@ -1,4 +1,5 @@
 import { ChannelType, PermissionFlagsBits, GuildScheduledEventStatus } from 'discord.js';
+import { reactOnce, hasReacted } from '../../discord/reactions.js';
 
 export const defs = [
   {
@@ -21,7 +22,7 @@ export const defs = [
     function: {
       name: 'react',
       description:
-        "React to the message you're answering with an emoji (unicode like 👋, or a custom emote in <:name:id> form). For several reactions, call it several times in the same step. For lightweight social messages (bye, thanks, lol, gg, simple agreement) reacting INSTEAD of replying is best: react, then return an empty final response (no text).",
+        "React to the message you're answering with an emoji (unicode like 👋, or a custom emote in <:name:id> form). Exactly ONE reaction per message: call it once, with the single emoji that fits best; any further call adds nothing. For lightweight social messages (bye, thanks, lol, gg, simple agreement) reacting INSTEAD of replying is best: react, then return an empty final response (no text).",
       parameters: {
         type: 'object',
         properties: {
@@ -109,13 +110,16 @@ export async function getUserId({ name }, invocation) {
 export async function react({ emoji }, invocation) {
   const trimmed = String(emoji || '').trim();
   if (!trimmed) return 'Provide an emoji to react with.';
-  try {
-    await invocation.message.react(trimmed);
+  // One reaction per message, whatever the model asks for: the first call wins.
+  if (await reactOnce(invocation.message, trimmed)) {
     invocation.reacted = true;
     return `Reacted with ${trimmed}.`;
-  } catch (err) {
-    return `Couldn't react with "${trimmed}": ${String(err.message || err).slice(0, 120)} — use a standard unicode emoji.`;
   }
+  if (hasReacted(invocation.message)) {
+    invocation.reacted = true;
+    return `Not added: you already reacted to this message, and you add at most one reaction per message.`;
+  }
+  return `Couldn't react with "${trimmed}", and no other reaction will be tried on this message. Answer in words if the turn needs it.`;
 }
 
 export function getMessageSender(_args, invocation) {

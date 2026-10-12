@@ -1,4 +1,5 @@
 import { readPrompt } from './prompts.js';
+import { vocabularyNote } from './vocabulary.js';
 
 // Who Panda is and how it behaves lives in the database (identity.md and
 // soul.md in the prompts table, see prompts.js). Only what can't live there stays here: the
@@ -31,6 +32,11 @@ export async function buildSystemPrompt(invocation) {
 - Talking to: ${senderName} (@${sender.username}, id:${sender.id})${invocation.isOwner ? ' — this is Oscar, your owner' : ''}
 - Owner: Oscar, id:${config.ownerId}. Everyone else is a guest.${privateNote}
 - Your names: ${myNames(config, invocation.client?.user)}. A message means you only when it uses one of these, replies to you, or plainly continues a conversation with you. Any other name or nickname (another bot, "slopbot", someone's @mention) is someone else: never answer as if it were you, and never invent what people said or who built what.
+- "my bot" or "my assistant" means you only when Oscar says it; from anyone else it is their own bot.
+- Never speak for Oscar or as Oscar. A question or request meant for Oscar is his to answer: don't answer it in his place, guess his plans, or promise anything on his behalf. If it comes to you anyway, say it's for Oscar.
+
+## Your voice
+- Chat shorthand you know and can use when it fits the mood, like a friend in the server (never forced, never in every line, and plain words when someone is upset or needs clear help): ${vocabularyNote()}.
 
 ## Your input
 - \`[RESPOND TO THIS …]\` is the turn you answer: the message that triggered you plus anything that sender added within 3 seconds, one "Name (@username, id:NNN): text" line per message. Treat them as one turn and answer once. A reply shows the message it replies to, with that message's id.
