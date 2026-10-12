@@ -107,6 +107,7 @@ test('posting a card and saying nothing more sends no placeholder text', async (
   const replies = [
     { content: '', tool_calls: [{ id: 't', function: { name: 'send_card', arguments: JSON.stringify({ title: 'Hi' }) } }] },
     { content: '' },
+    { content: '' },
   ];
   assert.equal(await runAgent(invocation, 'q', 'q', { chat: async () => replies.shift(), decideImpl: async () => ({ use_send_card: { noul: 0.9 } }) }), '');
   assert.equal(ch.sent.length, 1);
@@ -167,7 +168,6 @@ test('a click runs through the real message handler as a direct turn from the cl
     config: { ownerId: '2', allowBots: false, dmEnabled: true },
     player: null,
     privateMode: { isOn: () => false },
-    selfFix: { isActive: () => false },
     runAgentImpl: async (invocation, userContent, turnText) => {
       seen.push({ invocation, userContent, turnText });
       return 'Here are three more.';
@@ -205,7 +205,6 @@ test('the reply starts with the tools the turn used, and has no line when it use
       config: { ownerId: '1', allowBots: false, dmEnabled: true },
       player: null,
       privateMode: { isOn: () => false },
-      selfFix: { isActive: () => false },
       runAgentImpl: async (invocation) => {
         invocation.toolsUsed.push(...toolsUsed);
         return 'Here you go.';

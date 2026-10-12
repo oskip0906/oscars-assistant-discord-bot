@@ -1,14 +1,10 @@
-// Busy-state lock for self_fix. While a fix is running the bot answers nobody
-// through the model — triggering messages get the hardcoded string below and
-// nothing else. Mirrors the PrivateMode pattern (see privateMode.js), but this
-// state is deliberately in-memory only: a self_fix ends in a restart, and a
-// lock that survived the restart would leave the bot deaf on boot.
-export const SELF_FIX_MESSAGE =
-  "🛠️ I'm rebuilding my own source code right now — I'll be back in a few minutes once it lands and I restart.";
+// Tracks the self_fix approval and run. The bot keeps answering throughout:
+// Claude Code works in GitHub Actions, not here. isActive() only stops a second
+// fix from starting while one runs. In-memory on purpose: a self_fix ends in a
+// restart, and a run that survived it would block self_fix after boot.
 
-// Absolute cap on how long the lock may hold. A remote sandbox can legitimately
-// wait for CI and auto-merge, but it must still fail open rather than leaving
-// the bot permanently ignoring everyone.
+// Absolute cap on how long a run counts as active, so a run that never reports
+// back can't block self_fix forever.
 const DEFAULT_TIMEOUT_MS = 50 * 60 * 1000;
 
 export class SelfFixState {
@@ -16,7 +12,6 @@ export class SelfFixState {
     this.timeoutMs = timeoutMs;
     this.now = now;
     this.startedAt = null;
-    this.notified = new Set();
     // 'idle' → 'awaiting_confirmation' → 'executing' → 'idle'. A development
     // task first receives an explicit Discord button approval.
     this.status = 'idle';
@@ -50,7 +45,6 @@ export class SelfFixState {
     // from "this request was taken over" and retire the old card accordingly.
     if (this.pending) this.pending.resolve('superseded');
     this.status = 'awaiting_confirmation';
-    this.notified = new Set();
     const result = new Promise((resolve) => {
       let timer = null;
       const finish = (outcome) => {
@@ -89,25 +83,15 @@ export class SelfFixState {
   begin() {
     this.status = 'executing';
     this.startedAt = this.now();
-    this.notified = new Set();
   }
 
   end() {
     this.startedAt = null;
-    this.notified = new Set();
     this.status = 'idle';
     if (this.pending) {
       this.pending.resolve('aborted');
       this.pending = null;
     }
-  }
-
-  // True the first time a given sender is told we're busy, false afterwards —
-  // so a long fix doesn't spam the channel with one reply per message.
-  shouldNotify(userId) {
-    if (this.notified.has(userId)) return false;
-    this.notified.add(userId);
-    return true;
   }
 }
 

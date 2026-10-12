@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runAgent, saysNothing } from '../src/agent/agent.js';
+import { runAgent, saysNothing, moodEmoji, MOOD_EMOJI, MAX_MODEL_CALLS } from '../src/agent/agent.js';
 
 // One turn with Jev's `answers` and the model scripted to give `replies` in order.
 async function turn(answers, replies, extra = {}) {
@@ -15,10 +15,10 @@ async function turn(answers, replies, extra = {}) {
   };
   const calls = [];
   const chat = async ({ tools, toolChoice }) => {
-    calls.push({ tools: tools.map((t) => t.function.name), toolChoice });
+    calls.push({ tools: (tools ?? []).map((t) => t.function.name), toolChoice });
     return replies.shift() ?? { content: 'done' };
   };
-  const text = await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => answers });
+  const text = await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => answers, random: extra.random });
   return { text, calls, reactions, invocation };
 }
 
@@ -62,7 +62,7 @@ test('Jev picks several tools: they run in one round, then the model answers wit
   assert.equal(calls.length, 2);
   assert.deepEqual([...calls[0].tools].sort(), ['get_message_sender', 'get_user_id']);
   assert.equal(calls[0].toolChoice, 'required');
-  assert.equal(calls[1].toolChoice, 'none');
+  assert.equal(calls[1].toolChoice, 'auto', 'a second round may call the tools again, or answer');
   assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id'], 'a tool Jev did not pick never runs');
 });
 
@@ -70,14 +70,38 @@ test('both: the model reacts, then answers in text, and an echoed emoji is dropp
   const { text, calls, reactions } = await turn({ respond_with: sure('both') }, [reactCall('🔥'), { content: '17 × 23 = 391' }]);
   assert.equal(text, '17 × 23 = 391');
   assert.deepEqual(reactions, ['🔥']);
-  assert.deepEqual(calls.map((c) => c.toolChoice), ['required', 'none']);
+  assert.deepEqual(calls.map((c) => c.toolChoice), ['required', 'none'], 'once it has reacted there is nothing left to call');
   assert.equal((await turn({ respond_with: sure('both') }, [reactCall('🎲'), { content: '🎲' }])).text, '');
 });
 
-test('an unsure "reaction only" becomes a text reply', async () => {
-  const { text, calls } = await turn({ respond_with: sure('reaction', 0.6) }, [{ content: 'hi' }]);
-  assert.equal(text, 'hi');
-  assert.deepEqual(calls, [{ tools: [], toolChoice: 'none' }]);
+test('"reaction only" on a turn that needs words reacts and answers', async () => {
+  const { text, reactions } = await turn({ respond_with: sure('reaction'), needs_words: { noul: 0.8 } }, [reactCall('😂'), { content: 'it was the cat' }]);
+  assert.equal(text, 'it was the cat');
+  assert.deepEqual(reactions, ['😂']);
+});
+
+test('the form is sampled from Jev\'s odds, so reactions happen even when text is likelier', async () => {
+  const odds = { respond_with: { choice: 'message', probabilities: { message: 0.6, reaction: 0.25, both: 0.15 } } };
+  // random 0 lands on the first option, random ~1 on the last.
+  assert.deepEqual((await turn(odds, [{ content: 'hi' }], { random: () => 0 })).calls, [{ tools: [], toolChoice: 'none' }]);
+  assert.deepEqual((await turn(odds, [reactCall('👀')], { random: () => 0.999 })).calls[0].tools, ['react']);
+});
+
+test('the mood sets the tone and which reactions are suggested, varied each turn', async () => {
+  const seen = [];
+  const chat = async ({ messages }) => (seen.push(messages.map((m) => m.content).join('\n')), seen.length === 1 ? reactCall('🫂') : { content: 'that sucks, sorry' });
+  const invocation = { contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' }, message: { channel: {}, author: { id: '2', username: 'x' }, react: async () => {} } };
+  await runAgent(invocation, 'q', 'my dog died', { chat, decideImpl: async () => ({ respond_with: sure('both'), mood: sure('sad') }) });
+  assert.match(seen[0], /\[TONE\] Jev reads the turn as sad/);
+  assert.ok(MOOD_EMOJI.sad.some((e) => seen[0].includes(e)), 'sad reactions are suggested');
+  assert.notDeepEqual(moodEmoji('funny', () => 0), moodEmoji('funny', () => 0.99), 'suggestions vary');
+});
+
+test(`a turn never makes more than ${MAX_MODEL_CALLS} model calls, the last one the answer`, async () => {
+  const replies = Array.from({ length: 10 }, () => step('get_message_sender'));
+  const { calls } = await turn({ ...yes('get_message_sender'), respond_with: sure('message') }, replies);
+  assert.equal(calls.length, MAX_MODEL_CALLS);
+  assert.equal(calls.at(-1).toolChoice, 'none');
 });
 
 test('a sign-off gets a wave and no model call', async () => {

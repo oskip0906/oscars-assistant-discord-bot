@@ -15,9 +15,10 @@ const KEEP = 0.5;
 const line = (m) => `${m.member?.displayName || m.author.displayName || m.author.username}: ${String(m.content).slice(0, 500)}`;
 
 // The messages Jev says are worth keeping. `question` names each line as `mN`
-// and may refer to `focus`. Jev off or down keeps nothing: the bot can always
-// re-read Discord later, while junk in the store would stay.
-export async function pickRelevant(config, messages, question, focus = '', decideImpl = decide) {
+// and may refer to `focus`. Where Jev is off or down, `ifDown` decides per
+// message; by default nothing is kept: the bot can always re-read Discord later,
+// while junk in the store would stay.
+export async function pickRelevant(config, messages, question, focus = '', decideImpl = decide, ifDown = () => false) {
   const batches = [];
   for (let i = 0; i < messages.length; i += BATCH) batches.push(messages.slice(i, i + BATCH));
   const kept = await pool(batches, PARALLEL, async (batch) => {
@@ -28,7 +29,7 @@ export async function pickRelevant(config, messages, question, focus = '', decid
       questions[`keep_m${j}`] = { type: 'noul', instructions: question(`m${j}`) };
     });
     const answers = await decideImpl(config, state, questions);
-    return batch.filter((_m, j) => answers?.[`keep_m${j}`]?.noul >= KEEP);
+    return batch.filter((m, j) => (answers ? answers[`keep_m${j}`]?.noul >= KEEP : ifDown(m)));
   });
   return kept.flat();
 }

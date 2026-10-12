@@ -25,3 +25,30 @@ export async function decide(config, state, questions, { fetchImpl = fetch } = {
     return null;
   }
 }
+
+// Jev answers with probabilities and ignores a `temperature` field (checked:
+// 0 and 2 return the same numbers), so the randomness is applied here. Social
+// calls (whether to chime in, react or talk) sample from Jev's probabilities so
+// Panda isn't the same every time; tool picks keep their fixed thresholds.
+// A temperature above 1 flattens the odds, below 1 sharpens them.
+export const SOCIAL_TEMPERATURE = 1.5;
+
+const tempered = (p, temperature) => Math.max(0, Number(p) || 0) ** (1 / temperature);
+
+// One choice drawn from a Jev choice answer, or null when it has no probabilities.
+export function sampleChoice(answer, { temperature = SOCIAL_TEMPERATURE, random = Math.random } = {}) {
+  const weights = Object.entries(answer?.probabilities ?? {}).map(([name, p]) => [name, tempered(p, temperature)]);
+  const total = weights.reduce((sum, [, w]) => sum + w, 0);
+  if (!total) return answer?.choice ?? null;
+  let r = random() * total;
+  for (const [name, w] of weights) if ((r -= w) < 0) return name;
+  return weights.at(-1)[0];
+}
+
+// A yes drawn from a Jev noul probability; a missing answer is no.
+export function sampleYes(p, { temperature = SOCIAL_TEMPERATURE, random = Math.random } = {}) {
+  if (!Number.isFinite(p)) return false;
+  const yes = tempered(p, temperature);
+  const no = tempered(1 - p, temperature);
+  return yes + no > 0 && random() < yes / (yes + no);
+}

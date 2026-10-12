@@ -68,7 +68,7 @@ Beyond the slash commands, Panda calls these on its own while chatting (details 
 - **Web:** search the web and images, read any public page.
 - **Memory:** read further back in a channel, search what it remembered, index the messages around an old one, and find saved notes.
 - **Music:** play, skip, pause, resume, stop and show the queue.
-- **Self-knowledge:** read ARCHITECTURE.md to explain how it works.
+- **Self-knowledge:** read ARCHITECTURE.md and its own source on GitHub to explain how it works.
 - **Oscar only:** read GitHub (files, commits, issues, PRs, code search, Actions runs), make GitHub writes such as issues and comments, change its own code through an approved `self_fix` PR, and change its personality with `set_rule`.
 
 Everything else — how a message becomes a reply, how Jev makes Panda's decisions, the prompts, memory, models, tools, the research pipeline, the sandbox, safety and deployment — lives in **[ARCHITECTURE.md](ARCHITECTURE.md)**.

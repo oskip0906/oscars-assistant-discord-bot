@@ -327,7 +327,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
     // Minimal invocation shim so the shared tool functions (which were written
     // for the message pipeline) work when driven by a slash command. Only the
     // fields the tools actually read are provided: config, isOwner, a channel
-    // to post progress into, and requestRestart (self_fix flips it).
+    // to post progress into.
     const buildInvocation = () => ({
       config,
       client,
@@ -335,15 +335,12 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       // Some tools (self_fix) post progress via message.channel.send;
       // fall back to a no-op channel if the interaction has no cached channel.
       message: { channel: interaction.channel ?? { send: async () => {} } },
-      requestRestart: false,
     });
 
     // Tools return plain strings that can exceed Discord's 2000-char cap and
     // may contain bare URLs. Chunk + suppress link embeds like the chat path.
-    // A deferred interaction token dies 15 minutes in. /self_fix now
-    // waits on Oscar's approval button with no deadline, and the sandbox run takes
-    // minutes more, so the answer routinely arrives after the token is gone —
-    // post it in the channel rather than dropping it.
+    // A deferred interaction token dies 15 minutes in, and a slow tool can
+    // outlast it — post the answer in the channel rather than dropping it.
     const sendToolResult = async (text) => {
       // An array means the caller already decided the message boundaries;
       // only split a part that is too long on its own.
@@ -538,12 +535,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         }
         await interaction.deferReply();
         const invocation = buildInvocation();
-        const result = await selfFix({ instruction: interaction.options.getString('instruction', true) }, invocation);
-        await sendToolResult(result);
-        if (invocation.requestRestart) {
-          console.log('[panda] /self_fix requested restart — exiting with code 42');
-          setTimeout(() => process.exit(42), 1500);
-        }
+        await sendToolResult(selfFix({ instruction: interaction.options.getString('instruction', true) }, invocation));
         return;
       }
 

@@ -2,17 +2,17 @@
 
 How panda-bot turns a message into a reply, and how its prompts, memory, models, Jev, tools, research, sandbox and safety work. For a quick overview, see the [README](README.md).
 
-Panda's `how_i_work` tool reads this file to answer questions about itself. If you change how the bot works, update this file too.
+Panda's `how_i_work` tool reads this file, plus the source files on GitHub that answer the question, to explain itself. If you change how the bot works, update this file too.
 
 ## How a message becomes a reply
 
 The flow lives in `src/discord/messageHandler.js` and `src/agent/agent.js`.
 
-1. **Does Panda answer?** Always for an @-ping or a reply to Panda. Otherwise **Jev** reads the message with the 2 before it and says yes (≥ 0.8) only if it speaks to Panda or follows up on what Panda said; a no means silence and nothing saved. Never in DMs. In private mode anyone but Oscar gets a fixed "private conversation" reply; during a self-fix people get a fixed "rebuilding" message once.
+1. **Does Panda answer?** Always for an @-ping or a reply to Panda. Otherwise **Jev** reads the message with the 5 before it, on loose criteria: it talks to or about Panda by one of its names, follows up on something Panda said, continues a conversation Panda is in, or is put to the whole room. Another name or nickname ("slopbot", another bot) is never Panda. The answer is sampled from Jev's probability, so a maybe is sometimes yes; under 0.2 is always no, and another bot needs ≥ 0.8. A no means silence and nothing saved. Never in DMs. In private mode anyone but Oscar gets a fixed "private conversation" reply. A self-fix doesn't pause answering.
 2. **Batching.** The first trigger opens a 3-second batch for that sender; everything they send in that time joins it. Batches run one at a time per channel (in the order triggered, at most 10 waiting, extras dropped) and per server. Panda replies to the last message of the batch.
-3. **Prompt.** The system prompt (`src/agent/systemPrompt.js`) holds the date, server, channel, sender, private-mode note and security rules, followed by `identity.md` and `soul.md` from the database. The turn is the batch (`[RESPOND TO THIS]`) under the 10 messages before it (`[RECENT MESSAGES]`), each written as `Name (@username, id:NNN): text`. Anything older is read only through tools. Attachments (images, PDFs, text files, GIF frames, the picture being replied to) go to the model for that turn only.
-4. **Jev triage.** One Jev call asks everything at once: sign-off (≥ 0.8 → react 👋, no model call), which tools to offer (≥ 0.5 each; Oscar-only tools stop the turn for anyone else), whether the turn refers to something unexplained (≥ 0.8 → add `fetch_history`), and reaction / message / both (reaction-only needs ≥ 0.8). If Jev is unsure or down: no tools, text reply.
-5. **Tools.** The model never chooses tools, it only fills in arguments for the picked ones. A turn is at most two model calls: a tool call (picked tools only, run in parallel, results capped at 12,000 characters) and then the answer (no tools).
+3. **Prompt.** The system prompt (`src/agent/systemPrompt.js`) holds the date, server, channel, sender, private-mode note and security rules, followed by `identity.md` and `soul.md` from the database. The turn is the batch (`[RESPOND TO THIS]`, which matters most) under the 5 messages before it (`[RECENT MESSAGES]`, supporting background), each written as `Name (@username, id:NNN): text`. The prompt lists Panda's names (`myNames`) and tells it not to assume what the background doesn't make clear. A turn Panda joined without being named says so, so it doesn't take the message as being about itself. Anything older is read only through tools. Attachments (images, PDFs, text files, GIF frames, the picture being replied to) go to the model for that turn only.
+4. **Jev triage.** One Jev call asks everything at once: sign-off (≥ 0.8 → react 👋, no model call), which tools to offer (≥ 0.5 each; Oscar-only tools stop the turn for anyone else), whether the turn refers to something unexplained (≥ 0.8 → add `fetch_history`), reaction / message / both, and the mood (funny, happy, sad, angry or neutral). The form is sampled from Jev's probabilities at temperature 1.5, so reactions are common; reaction-only becomes both when the turn needs words (≥ 0.6). The mood sets a `[TONE]` note and which reactions are suggested (a random 5 from that mood's set each turn, `MOOD_EMOJI`). If Jev is down: no tools, text reply.
+5. **Tools.** The model never chooses tools, it only fills in arguments for the picked ones. A turn is at most five model calls (`MAX_MODEL_CALLS`): up to four rounds of tool calls (picked tools only, run in parallel, results capped at 12,000 characters each), then the answer with no tools. The first round must call a tool; later rounds may call more (search, then read a page) or answer in words, which ends the turn. `react` is offered until Panda has reacted.
 6. **Sending.** The reply starts with a small `-# 🔧 tools used` line, text over 2,000 characters is split cleanly (`src/discord/chunk.js`), and bare links are wrapped in `<>`. A response is mandatory: with nothing to say Panda reacts 👀. Afterwards the batch and reply are saved to the context store.
 7. **Bots.** Conversations with other bots continue until a sign-off ("bye!"), then Panda reacts 👋 and ignores bots in that channel until a human speaks.
 
@@ -38,8 +38,8 @@ Everything is stored in one PMS Postgres database (`DATABASE_URL`). `src/db.js` 
 
 **Storage budget** (`src/storage.js`): of the 1 GiB, persona gets 10 MB and the rest splits 75% context, 20% notes, 5% reminders. When a section is full, Panda DMs Oscar with **Delete oldest** / **Not now** and refuses new writes to it until trimmed.
 
-**Context (hidden).** Panda keeps no summary or transcript, only per-channel message rows that feed the model. DMs are never saved. Saved: each turn and reply, everything `fetch_history` ranges and `index_chat` read, and, when a search finds nothing, the lines Jev judges relevant from the channel's last 1,000 messages.
-- `fetch_history`: *range* mode reads the channel straight from Discord (default 30, max 100 messages); *search* mode (`query` / `author`) full-text searches what was remembered, up to 40 lines.
+**Context (hidden).** Panda keeps no summary or transcript, only per-channel message rows that feed the model. DMs are never saved. Saved: each turn and reply, everything `fetch_history` ranges and `index_chat` read, and, when a search finds nothing, the lines Jev judges relevant from the channel scan below.
+- `fetch_history`: *range* mode reads the channel straight from Discord (default 30, max 100 messages); *search* mode (`query` / `author`) full-text searches what was remembered, then Jev keeps only the lines that answer it, so the model gets the part it needs (at most 40 lines). When none do, the channel is read back in sections of 500 messages, all the way to its start, stopping at the first section with a match (caps: 20,000 messages or 90 s). With Jev down, keyword hits are kept and the scan matches query words.
 - `index_chat`: given a message link or id, reads the 100 messages around it and remembers them. Other channels must be in this server and readable by the asker.
 
 **Notes (shared).** Everyone sees every note (`src/agent/notes.js`, `src/discord/notes.js`).
@@ -63,20 +63,21 @@ Every model call uses one OpenRouter key (`src/agent/openrouter.js`), retried on
 
 ## Jev: the decision layer
 
-Jev decides; the conversation model writes. The model never chooses whether to answer, which tools run, whether to react, what to remember or which notes folder to open. Plain code applies Jev's answers with fixed thresholds.
+Jev decides; the conversation model writes. The model never chooses whether to answer, which tools run, whether to react, what to remember or which notes folder to open. Plain code applies Jev's answers: tool picks, lookups and memory use fixed thresholds; the social calls (whether to chime in, react or talk) are sampled from Jev's probabilities so Panda varies like a person. Jev ignores a `temperature` field (0 and 2 return the same numbers), so `sampleChoice` / `sampleYes` in `jev.js` apply it.
 
 `decide(config, state, questions)` in `src/agent/jev.js` sends named text `state` and named `questions` in one call (~0.2 s). Answers are probabilities: `noul` (yes, 0–1) or `choice` (a probability per option). The model is pinned because the thresholds were tuned to 1.13. `decide` returns `null` when `JEV_ENABLED=false`, the key is missing, the call fails or takes over 5 s, and every caller then falls back to its non-Jev behavior, so an outage never breaks a turn.
 
 | Decision | Asked when | Bar | Jev off or down |
 |----------|-----------|-----|-----------------|
-| Gate (`forPanda`) | Server message that isn't a ping or reply | ≥ 0.8 → answer | Silence |
+| Gate (`forPanda`) | Server message that isn't a ping or reply | sampled, never < 0.2; bots ≥ 0.8 | Silence |
 | Bot sign-off | Every bot message | ≥ 0.8 → 👋, stop | Farewell regex |
-| Triage | Every turn | sign-off ≥ 0.8; tool ≥ 0.5; unexplained ≥ 0.8; reaction-only ≥ 0.8 | No tools, text reply |
-| Memory scan (`pickRelevant`) | Empty `fetch_history` search; long `/save_note` | line ≥ 0.5 | Keep nothing |
+| Triage | Every turn | sign-off ≥ 0.8; tool ≥ 0.5; unexplained ≥ 0.8; form sampled (needs words ≥ 0.6 → not reaction-only); mood = most likely | No tools, text reply |
+| Memory scan (`pickRelevant`) | `fetch_history` search hits and channel scan; long `/save_note` | line ≥ 0.5 | Search: keyword hits; notes: keep nothing |
+| Source files (`how_i_work`) | A question about Panda with a topic | file ≥ 0.5, best 3 | Files whose path has a topic word |
 | Notes walk | `search_notes`, `/open_note` | folder ≥ 0.25 (max 6 levels, 8 folders) | Search every note |
 | Research fact-check | Each page read by `/research` | drop claim < 0.3 | Keep every claim |
 
-Bars follow which mistake costs more: the gate is tight because butting in is worse than needing a ping; tools are loose because an extra tool is cheap; folders are wide so near-miss filing is still found; research drops a claim only when Jev is fairly sure its quote doesn't support it.
+Bars follow which mistake costs more: the gate is loose but floored, because joining in is human and butting into unrelated chatter is not; tools are loose because an extra tool is cheap; folders are wide so near-miss filing is still found; research drops a claim only when Jev is fairly sure its quote doesn't support it.
 
 **Privacy:** the gate means Jev sees every server message Panda can read, with the 2 before it. `JEV_ENABLED=false` stops that.
 
@@ -91,7 +92,7 @@ Bars follow which mistake costs more: the gate is tight because butting in is wo
 | `web_search` / `web_fetch` / `image_search` / `video_search` / `news_search` / `wiki_search` | SearXNG: web search (bing, falling back to yahoo then mojeek); read a public page; up to 3 images (google images); one dedicated engine each for videos (youtube), news (bing news), wiki (wikipedia) |
 | `fetch_history` / `index_chat` | Read or search older messages |
 | `search_notes` | Find saved notes |
-| `how_i_work` | Read this file |
+| `how_i_work` | Read this file and the source files on GitHub that answer a topic (Jev picks up to 3; long files cut to the lines around the topic) |
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |
 | GitHub MCP tools | Every GitHub read (**Oscar only**) |
 | `github` | GitHub REST writes only (**Oscar only**) |
@@ -122,7 +123,7 @@ The only way Panda changes code, and only its own repo.
 3. **Claude Code** makes the change unattended with a read-only GitHub token, seeing only the repo and the instruction.
 4. **Verify:** the workflow fails if nothing changed or `.git`, `node_modules`, `data/`, `.env` or `.github/` were touched, runs `npm test`, then commits, pushes and opens the PR with `GH_PAT`. `ci.yml`'s required `test` check gates auto-merge.
 
-The bot watches via the GitHub MCP server, enables auto-merge and waits. The merge to main triggers the deploy (under `run.sh`, exit code 42 pulls and restarts). Meanwhile others see the "rebuilding" message; the lock frees itself after 50 min.
+The bot watches via the GitHub MCP server, enables auto-merge and waits. The merge to main triggers the deploy (under `run.sh`, exit code 42 pulls and restarts). The run is in the background, so Panda keeps answering meanwhile; only a second self-fix is refused until it lands (or 50 min pass).
 
 ## Safety
 

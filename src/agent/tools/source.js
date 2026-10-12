@@ -17,7 +17,7 @@ export const defs = [
     function: {
       name: 'self_fix',
       description:
-        'OWNER ONLY. Propose a change to YOUR OWN source code. Panda shows Oscar a Discord approval button first. After approval, an isolated GitHub Actions sandbox checks out the repository, runs Claude Code to make and test the change, opens a PR to main, enables auto-merge, and waits until it lands before Panda restarts. The live bot filesystem is never edited. Claude Code sees only the repository and the instruction — not this chat, earlier runs or GitHub — so the instruction must state the whole change on its own, even when retrying.',
+        'OWNER ONLY. Propose a change to YOUR OWN source code. Panda shows Oscar a Discord approval button first. After approval, an isolated GitHub Actions sandbox checks out the repository, runs Claude Code to make and test the change, opens a PR to main, enables auto-merge, and Panda restarts once it lands. The tool returns at once and the run continues in the background, so Panda keeps answering everyone meanwhile; the result is posted in the channel and DMed to Oscar. The live bot filesystem is never edited. Claude Code sees only the repository and the instruction — not this chat, earlier runs or GitHub — so the instruction must state the whole change on its own, even when retrying.',
       parameters: {
         type: 'object',
         properties: {
@@ -145,7 +145,17 @@ Return ONLY the JSON object, no other text.`,
   return { title: parsed.title, description: parsed.description };
 }
 
-export async function selfFix(
+// Returns at once. A turn holds its server's queue until it ends, so waiting
+// here for the approval click and the minutes-long sandbox run left everyone in
+// the server unanswered until the fix landed.
+export function selfFix(args, invocation, deps = {}) {
+  const state = deps.state || selfFixState;
+  if (state.isActive()) return '🛠️ A self-fix is already running. Wait for it to land (Oscar gets a DM) before asking for another.';
+  runSelfFix(args, invocation, deps).catch((err) => console.error('[self_fix] background run failed:', err));
+  return '🛠️ Writing the prompt for Claude Code now; an approval card will appear here in a moment. The fix runs in the background, so I keep answering meanwhile, and the result is posted here and DMed to Oscar.';
+}
+
+export async function runSelfFix(
   { instruction },
   invocation,
   {
@@ -154,9 +164,12 @@ export async function selfFix(
     state = selfFixState,
     confirm = requestDevelopmentApproval,
     startLog = startDevRunLog,
+    restart = () => setTimeout(() => process.exit(42), 1500),
   } = {},
 ) {
+  // Nobody is waiting on a return value any more, so every ending is posted.
   const finish = async (headline, summary) => {
+    await invocation.message?.channel?.send({ content: summary, allowedMentions: { parse: [] } }).catch(() => {});
     await notify(
       invocation.client,
       config.ownerId,
@@ -187,12 +200,15 @@ export async function selfFix(
       { cancel: 'you cancelled it', superseded: 'a newer request took its place', aborted: 'the request was torn down before you answered' }[outcome] ||
       'it was not approved';
     logFinish('aborted', { reason: why });
-    return `🚫 Self-fix aborted — ${why}. Nothing was changed.`;
+    const summary = `🚫 Self-fix aborted — ${why}. Nothing was changed.`;
+    // A click on the card already says so in the channel, and a cancel needs no DM.
+    if (outcome !== 'cancel') await invocation.message?.channel?.send(summary).catch(() => {});
+    return summary;
   }
 
   state.begin();
   await invocation.message?.channel
-    ?.send(`🛠️ Approval received — running Claude Code in the remote GitHub Actions sandbox. I will wait for the PR to merge before restarting.`)
+    ?.send(`🛠️ Approval received — running Claude Code in the remote GitHub Actions sandbox. I keep answering meanwhile and restart once the PR merges.`)
     .catch(() => {});
 
   // Generate a proper commit title so the instruction never appears verbatim in
@@ -219,9 +235,11 @@ export async function selfFix(
       return finish('self_fix did not land', result.summary);
     }
 
-    invocation.requestRestart = true;
     logFinish('merged', { pr: result.pr?.number, url: result.pr?.html_url });
-    return finish('self_fix landed — restarting now', `${result.summary}\n\n🔁 Restarting now to apply the merged remote change.`);
+    const summary = await finish('self_fix landed — restarting now', `${result.summary}\n\n🔁 Restarting now to apply the merged remote change.`);
+    console.log('[panda] self_fix landed — exiting with code 42 to restart');
+    restart();
+    return summary;
   } catch (err) {
     logFinish('crashed', { detail: String(err.message || err) });
     return finish('self_fix crashed', `❌ Remote sandbox failed: ${String(err.message || err).slice(0, 500)}`);

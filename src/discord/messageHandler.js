@@ -2,13 +2,13 @@ import { runAgent } from '../agent/agent.js';
 import { formatEnvelope } from './envelope.js';
 import { chunkMessage } from './chunk.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
-import { selfFixState, SELF_FIX_MESSAGE } from '../selfFixState.js';
-import { decide } from '../agent/jev.js';
+import { decide, sampleYes } from '../agent/jev.js';
 import { saveContext } from '../agent/historyStore.js';
 import { attachmentParts, gifPreviews } from './attachments.js';
 import { modelInputs } from './model.js';
 import { redactSecrets } from '../config.js';
 import { readChannelRange } from '../agent/tools/history.js';
+import { myNames } from '../agent/systemPrompt.js';
 
 // Fixed-window input debounce with a per-channel queue.
 //
@@ -23,11 +23,13 @@ import { readChannelRange } from '../agent/tools/history.js';
 // collection has elapsed.
 const WINDOW_MS = 3000;
 
-// Messages shown above each turn, and the most of each one that is kept.
-const RECENT_COUNT = 10;
+// Messages shown above each turn as background, and the most of each one that
+// is kept. The same 5 are what Jev reads to decide whether to answer at all.
+const RECENT_COUNT = 5;
 const RECENT_CHARS = 500;
-// Messages Jev reads before a message to decide whether it is for Panda.
-const GATE_COUNT = 2;
+// Below this Jev is sure a message has nothing to do with Panda, so the sampled
+// gate can't pick it up out of ordinary chatter between people.
+const GATE_FLOOR = 0.2;
 
 // Waiting batches per channel, held in memory. A trigger past this is dropped (spam guard).
 const MAX_QUEUE = 10;
@@ -68,25 +70,28 @@ export async function signsOff(text, clientUserId, config, decideImpl = decide) 
 // One line of channel history as Panda reads it; its own lines are marked (you).
 const historyLine = (m, self) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`.slice(0, RECENT_CHARS);
 
-// Is a message that is not a ping, a reply to Panda or a DM still meant for it?
-// Asked of every such message, so Jev reads only it and the GATE_COUNT lines
-// before it. Tight on purpose: not everything deserves an answer. Jev off or
-// down means no, so then only pings, replies and DMs are answered.
-export async function forPanda(message, before, self, config, decideImpl = decide) {
+// Is a message that is not a ping, a reply to Panda or a DM still one to join?
+// Jev reads it with the RECENT_COUNT messages before it, on loose criteria, and
+// the answer is sampled from its probability like a person who sometimes chimes
+// in. Another bot needs Jev to be sure, so two bots can't chat in a loop by
+// chance. Jev off or down means no: then only pings, replies and DMs are answered.
+export async function forPanda(message, before, self, config, decideImpl = decide, random = Math.random) {
   const state = {
     message: formatEnvelope(message),
-    recent_messages: before.slice(-GATE_COUNT).map((m) => historyLine(m, self)).join('\n') || '(none)',
-    assistant_name: config.botName,
+    recent_messages: before.slice(-RECENT_COUNT).map((m) => historyLine(m, self)).join('\n') || '(none)',
+    assistant_names: myNames(config, message.client?.user),
     owner_name: 'Oscar',
   };
   const answers = await decideImpl(config, state, {
     for_assistant: {
       type: 'noul',
       instructions:
-        "Is `message` meant for the assistant, so that it should answer? Yes only if `message` speaks to the assistant directly (as `assistant_name`, `owner_name`'s assistant, the assistant of `owner_name`, or the bot), or answers or follows up on what the assistant just said (its lines in `recent_messages` start with (you)). No if it only mentions the assistant in passing, is people talking to each other, is a reaction such as lol, ok or thanks that needs nothing back, or is a question nobody put to the assistant.",
+        "Would a friend in this chat, known only as `assistant_names`, naturally respond to `message`? Be generous. Yes if `message` talks to or about the assistant by one of `assistant_names` or as `owner_name`'s assistant, responds to or follows up on something the assistant said (its lines in `recent_messages` start with (you)), continues a conversation the assistant is part of in `recent_messages`, or is a question or topic put to the whole room that the assistant could add to. No when `message` addresses someone else by a name or @mention not in `assistant_names` (another bot or nickname such as \"slopbot\" is NOT the assistant), or when people are talking among themselves about something that has nothing to do with the assistant.",
     },
   });
-  return answers?.for_assistant?.noul >= 0.8;
+  const p = answers?.for_assistant?.noul;
+  if (!(p >= GATE_FLOOR)) return false;
+  return message.author?.bot ? p >= 0.8 : sampleYes(p, { temperature: 1, random });
 }
 
 // Suppress Discord link embeds by wrapping bare URLs in <>. Image URLs stay
@@ -124,7 +129,7 @@ function enqueueContext(key, task) {
   return next;
 }
 
-export function createMessageHandler({ client, config, player, privateMode, selfFix = selfFixState, runAgentImpl = runAgent, decideImpl = decide }) {
+export function createMessageHandler({ client, config, player, privateMode, runAgentImpl = runAgent, decideImpl = decide }) {
   // channelId -> { queue: Batch[], busy: boolean }
   // Batch = { claimantId, messages: Message[], closed: boolean, collected: Promise }
   const channels = new Map();
@@ -174,8 +179,14 @@ export function createMessageHandler({ client, config, player, privateMode, self
         const triggerName = messages[0].member?.displayName || trigger.displayName || trigger.username;
         const turn = parts.join('\n');
         const combined = [
-          ...(recent ? ['[RECENT MESSAGES — what was said just before, oldest first. Context only: use it to tell what the turn refers to, and do not answer these. Lines marked (you) are your own replies.]', recent, ''] : []),
-          `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : 'spoke to you without a ping'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This is your actual task. Answer what is actually said here.]`,
+          ...(recent
+            ? [
+                '[RECENT MESSAGES — the 5 messages just before the turn, oldest first, each with who said it. Supporting background only: do not answer these. Use them to tell what the turn refers to and who is talking about what; if they do not make it clear, do not guess. Lines marked (you) are your own replies.]',
+                recent,
+                '',
+              ]
+            : []),
+          `[RESPOND TO THIS — ${triggerName} ${batch.direct ? 'pinged you' : 'did not name or ping you; you are joining in because it seemed relevant, so do not assume it is about you or that names in it mean you'}${messages.length > 1 ? `, then sent ${messages.length - 1} more message(s) within 3 seconds` : ''}. This matters most: it is your actual task. Answer what is actually said here.]`,
           turn,
         ].join('\n');
 
@@ -189,7 +200,6 @@ export function createMessageHandler({ client, config, player, privateMode, self
           contextKey,
           isOwner: anchor.author.id === config.ownerId,
           privateMode,
-          requestRestart: false,
           reacted: false,
           // A poll or card a tool posted (create_poll, send_card) counts as a response.
           posted: false,
@@ -261,11 +271,6 @@ export function createMessageHandler({ client, config, player, privateMode, self
         saveContext(config, [...messages, ...sent]).catch((err) =>
           console.error('[history] save failed:', String(err.message || err).slice(0, 200)),
         );
-
-        if (invocation.requestRestart) {
-          console.log('[panda] self_fix requested restart — exiting with code 42');
-          setTimeout(() => process.exit(42), 1500);
-        }
       } finally {
         clearInterval(typing);
       }
@@ -338,7 +343,7 @@ export function createMessageHandler({ client, config, player, privateMode, self
       if (!direct) {
         // A full queue would drop it anyway, so Jev is not asked.
         if ((channels.get(channelId)?.queue.length ?? 0) >= MAX_QUEUE) return;
-        const before = await message.channel.messages.fetch({ limit: GATE_COUNT, before: message.id }).catch(() => []);
+        const before = await message.channel.messages.fetch({ limit: RECENT_COUNT, before: message.id }).catch(() => []);
         if (!(await forPanda(message, [...before.values()].reverse(), client.user.id, config, decideImpl))) return;
         // A follow-up of theirs may have opened a batch while Jev was deciding.
         if (foldIn()) return;
@@ -354,25 +359,6 @@ export function createMessageHandler({ client, config, player, privateMode, self
           await message.react('👋').catch(() => {});
           return;
         }
-      }
-
-      // Self-fix in progress: the bot is rewriting its own source and must not
-      // route anything to the model. Triggers get the hardcoded busy string and
-      // nothing else — once per sender, so a multi-minute fix can't flood the
-      // channel. Sits after trigger qualification on purpose: people who aren't
-      // talking to the bot get silence, not busy spam.
-      //
-      // A pending approval deliberately does NOT count as busy. It waits for a
-      // button with no deadline, and nothing is being rewritten yet — treating
-      // it as busy would leave the bot answering everyone with "I'm rebuilding
-      // my source" until Oscar got round to clicking.
-      if (selfFix?.isActive()) {
-        if (selfFix.shouldNotify(message.author.id)) {
-          await message
-            .reply({ content: SELF_FIX_MESSAGE, allowedMentions: { parse: [] } })
-            .catch(() => {});
-        }
-        return;
       }
 
       // Private mode: a non-owner trigger gets the hardcoded refusal immediately

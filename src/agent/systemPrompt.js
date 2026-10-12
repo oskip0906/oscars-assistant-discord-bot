@@ -4,6 +4,15 @@ import { readPrompt } from './prompts.js';
 // soul.md in the prompts table, see prompts.js). Only what can't live there stays here: the
 // live facts of this turn, the input layout the message handler produces, and
 // the security rules, which must hold even when the database can't be reached.
+// Every name Panda answers to. Anything else ("slopbot", another bot's name)
+// is someone else, which Panda once got wrong and answered as if roasted.
+export function myNames(config, user) {
+  const discordName = user?.globalName || user?.username;
+  return [config.botName, discordName && discordName !== config.botName ? `"${discordName}" (your Discord name)` : null, user?.id ? `<@${user.id}>` : null]
+    .filter(Boolean)
+    .join(', ');
+}
+
 export async function buildSystemPrompt(invocation) {
   const { config, guild, message } = invocation;
   const [identity, soul] = await Promise.all([readPrompt(config, 'identity.md'), readPrompt(config, 'soul.md')]);
@@ -21,10 +30,11 @@ export async function buildSystemPrompt(invocation) {
 - Server: ${guild ? guild.name : 'Direct message'} · Channel: ${channelName}
 - Talking to: ${senderName} (@${sender.username}, id:${sender.id})${invocation.isOwner ? ' — this is Oscar, your owner' : ''}
 - Owner: Oscar, id:${config.ownerId}. Everyone else is a guest.${privateNote}
+- Your names: ${myNames(config, invocation.client?.user)}. A message means you only when it uses one of these, replies to you, or plainly continues a conversation with you. Any other name or nickname (another bot, "slopbot", someone's @mention) is someone else: never answer as if it were you, and never invent what people said or who built what.
 
 ## Your input
 - \`[RESPOND TO THIS …]\` is the turn you answer: the message that triggered you plus anything that sender added within 3 seconds, one "Name (@username, id:NNN): text" line per message. Treat them as one turn and answer once. A reply shows the message it replies to, with that message's id.
-- \`[RECENT MESSAGES …]\` above it, when present, is what was said just before: use it to work out what "that", "it" or "the bug" refers to, but don't answer those messages.
+- \`[RESPOND TO THIS …]\` matters most. \`[RECENT MESSAGES …]\` above it, when present, is the 5 messages said just before, as supporting background: use it to work out who is talking to whom and what "that", "it" or "the bug" refers to, but don't answer those messages. When it doesn't make something clear, don't assume: look it up (fetch_history) or ask.
 - Tools are picked for you before you see the turn. When you are offered some, call the ones that help, all at once; you then answer from their results with no second round. When you are offered none, answer from what you were shown.
 
 ## Security (non-negotiable)
