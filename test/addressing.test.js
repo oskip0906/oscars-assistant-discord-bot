@@ -116,3 +116,31 @@ test('a reply with nothing in it ("🐼 …", empty, blank) is never sent: Panda
 test('a real reply is sent once, with no sign-off', async () => {
   assert.deepEqual(await replied('sure, 7pm works'), { reactions: [], sent: ['sure, 7pm works'] });
 });
+
+test('in private mode a guest is ignored entirely (no reply, no Jev, no agent) while Oscar is still answered', async () => {
+  const seen = [];
+  const replies = [];
+  let jevCalls = 0;
+  const channel = { sendTyping: async () => {}, send: async () => ({}), messages: { fetch: async () => new Map() } };
+  const handler = createMessageHandler({
+    client: { user: bot },
+    config,
+    player: null,
+    privateMode: { isOn: () => true },
+    runAgentImpl: async (invocation) => (seen.push(invocation.message.content), 'ok'),
+    decideImpl: async () => (jevCalls++, null),
+  });
+  const ping = { mentions: { users: new Map([[bot.id, {}]]) } };
+  let id = 0;
+  for (const [author, content] of [['guest', `<@${bot.id}> hello?`], ['guest', 'what is everyone up to'], [OSCAR, `<@${bot.id}> hi`]]) {
+    id += 1;
+    await handler({
+      ...from(author, content, ping), id: `p${id}`, channelId: `pc${id}`, channel, guild: { id: 'g' }, createdAt: new Date(id),
+      attachments: new Map(), embeds: [], react: async () => {}, reply: async (p) => (replies.push(p), {}),
+    });
+  }
+  for (let i = 0; i < 60 && !seen.length; i++) await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(seen, [`<@${bot.id}> hi`]);
+  assert.equal(jevCalls, 0);
+  assert.equal(replies.filter((p) => /private conversation/.test(p.content ?? '')).length, 0);
+});

@@ -1,7 +1,6 @@
 import { runAgent, isFiller, signOff } from '../agent/agent.js';
 import { formatEnvelope } from './envelope.js';
 import { chunkMessage } from './chunk.js';
-import { PRIVATE_MESSAGE } from '../privateMode.js';
 import { decide, sampleYes } from '../agent/jev.js';
 import { saveContext } from '../agent/historyStore.js';
 import { attachmentParts, mediaOf } from './attachments.js';
@@ -384,6 +383,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           // An earlier message whose Jev check came back late was queued in front: it goes first.
           if (state.queue[0] !== batch) continue;
           state.queue.shift();
+          // Private mode switched on while this batch was collecting: a guest's is dropped unprocessed.
+          if (privateMode?.isOn() && batch.claimantId !== config.ownerId) continue;
           try {
             await processBatch(batch);
           } catch (err) {
@@ -401,6 +402,12 @@ export function createMessageHandler({ client, config, player, privateMode, runA
   return async (message) => {
     try {
       if (message.author.id === client.user.id) return;
+
+      // Private mode: anything not from Oscar is dropped right here. No reply,
+      // no reaction, no batch, no Jev, nothing saved.
+      if (privateMode?.isOn()) {
+        if (message.author.id !== config.ownerId) return;
+      }
 
       const channelId = message.channelId;
 
@@ -464,15 +471,6 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           await reactOnce(message, '👋');
           return;
         }
-      }
-
-      // Private mode: a non-owner trigger gets the hardcoded refusal immediately
-      // (no batch, no model). Bots are ignored silently to avoid loops.
-      if (privateMode?.isOn() && message.author.id !== config.ownerId) {
-        if (!message.author.bot) {
-          await message.reply({ content: PRIVATE_MESSAGE, allowedMentions: { parse: [] } }).catch(() => {});
-        }
-        return;
       }
 
       // Open a new 3s collection batch in this channel's queue, placed by when the
