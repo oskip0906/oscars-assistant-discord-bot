@@ -150,8 +150,9 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   const text = msg.content?.trim() || '';
   log(contextKey, `turn done in ${Date.now() - turnStart}ms after ${step} model call(s)`);
   // After a reaction, poll or card, a reply with no words (usually the same
-  // emoji echoed) is dropped: something was already sent.
-  if ((invocation.reacted || invocation.posted) && saysNothing(text)) return '';
+  // emoji echoed) is dropped: something was already sent. A ping or reply is
+  // always answered in words, so there it is kept.
+  if ((invocation.posted || (invocation.reacted && !invocation.direct)) && saysNothing(text)) return '';
   return text || '🐼 …';
   } catch (err) {
     log(contextKey, `turn failed after ${Date.now() - turnStart}ms: ${err.message || err}`);
@@ -180,8 +181,9 @@ async function runTool(call, invocation, contextKey) {
 // 2. which tools does it need? One yes/no per tool, so several can run at once.
 //    A reference nothing shown explains ("the event") adds fetch_history.
 // 3. should Panda react, reply in text, or both? Sampled from Jev's odds, so it
-//    varies like a person would; a turn owed words (a question to Panda, a reply
-//    to something it said) is text or both, never only a reaction. A turn Panda
+//    varies like a person would; a turn owed words (a ping, a reply to Panda, a
+//    question to it, a response to something it said) is text or both, never
+//    only a reaction. A turn Panda
 //    joined unaddressed just to react (invocation.reactOnly) is a reaction, no tools.
 // 4. what mood is it in? The most likely one, since a misread mood is a bug.
 // Jev down, or unsure of an answer, means no tools and a text reply.
@@ -251,7 +253,7 @@ async function triage(tools, message, invocation, decideImpl, random = Math.rand
   const odds = answers?.respond_with?.probabilities ?? {};
   // A reaction alone would ignore the person: text or both, by Jev's odds, where
   // a reaction-worthy turn that is owed words counts toward both.
-  const owed = answers?.needs_words?.noul >= NEEDS_WORDS;
+  const owed = invocation.direct || answers?.needs_words?.noul >= NEEDS_WORDS;
   let form = owed
     ? sampleChoice({ choice: 'message', probabilities: { message: odds.message, both: (odds.both ?? 0) + (odds.reaction ?? 0) } }, { random })
     : sampleChoice(answers?.respond_with, { random });

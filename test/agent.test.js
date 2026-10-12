@@ -88,6 +88,18 @@ test('a turn owed words never gets only a reaction, whatever the odds', async ()
   }
 });
 
+test('a ping or reply always gets words: text or text + reactions, never only a reaction', async () => {
+  const odds = { respond_with: { choice: 'reaction', probabilities: { reaction: 0.99, message: 0.01 } }, needs_words: { noul: 0 } };
+  for (const r of [0, 0.5, 0.999]) {
+    const invocation = { contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm' }, message: { channel: {}, author: { id: '2' }, react: async () => {} }, direct: true };
+    // The model reacts when it may, then answers.
+    const chat = async ({ tools }) => (tools?.some((t) => t.function.name === 'react') && !invocation.reacted ? reactCall('😂') : { content: 'lmao same' });
+    assert.equal(await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => odds, random: () => r }), 'lmao same');
+  }
+  const echoed = await turn({ respond_with: sure('both') }, [reactCall('🔥'), { content: '🔥' }], { direct: true });
+  assert.equal(echoed.text, '🔥', 'an emoji-only reply to a ping is still sent');
+});
+
 test('a turn Panda joined only to react is a reaction with no tools and no words', async () => {
   const { text, calls, reactions } = await turn({ ...yes('get_message_sender'), respond_with: sure('message') }, [reactCall('💀'), { content: 'lol' }], { reactOnly: true });
   assert.equal(text, '');

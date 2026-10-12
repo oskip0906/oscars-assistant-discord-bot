@@ -243,6 +243,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           toolsUsed: [],
           // Joined unaddressed for something worth an emoji: react, say nothing.
           reactOnly: batch.reactOnly && !batch.direct,
+          // Pinged, replied to or DMed: always answered in words (text or text + reactions).
+          direct: batch.direct,
           batchedCount: messages.length,
           recent,
           // Collect any Discord embeds produced by tool calls (e.g. image_search)
@@ -362,7 +364,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         open.messages.push(message);
         // A slower Jev check can land after a later follow-up; keep them in the order they were sent.
         open.messages.sort((a, b) => a.createdAt - b.createdAt);
-        if (message.mentions?.users?.has(client.user.id)) {
+        // A ping or a reply to Panda folded in makes the whole batch direct.
+        if (message.mentions?.users?.has(client.user.id) || message.mentions?.repliedUser?.id === client.user.id) {
           open.direct = true;
           open.reactOnly = false;
         }
@@ -394,10 +397,11 @@ export function createMessageHandler({ client, config, player, privateMode, runA
       }
 
       // Bot-to-bot: keep going as long as the other bot does, and end it on its
-      // sign-off with a wave instead of a reply. Silent toward bots from then on
-      // until a human speaks, so its "you too!" doesn't start it again.
+      // sign-off with a wave instead of a reply. Unpinged bot lines are ignored
+      // from then on until a human speaks, so its "you too!" doesn't start it
+      // again; a ping or reply is still answered (or waved at, if it's a bye).
       if (message.author.bot) {
-        if (signedOff.has(channelId)) return;
+        if (signedOff.has(channelId) && !direct) return;
         if (await signsOff(message.content, client.user.id, config, decideImpl)) {
           signedOff.add(channelId);
           await message.react('👋').catch(() => {});
