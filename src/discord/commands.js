@@ -7,6 +7,7 @@ import { suppressLinkEmbeds } from './messageHandler.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
+import { buildSearchQuery } from '../agent/research/searchQuery.js';
 import { webSearch, webFetch, imageSearch, videoSearch, newsSearch, wikiSearch } from '../agent/tools/search.js';
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
@@ -364,9 +365,11 @@ export function createInteractionHandler({ client, config, player, privateMode, 
     };
 
     // Defer, run a tool, stream the result back.
+    // `args` may be a function: it runs after the defer, so slow work (like
+    // writing a search query) can't blow Discord's 3-second reply window.
     const runTool = async (fn, args) => {
       await interaction.deferReply();
-      const result = await fn(args, buildInvocation());
+      const result = await fn(typeof args === 'function' ? await args() : args, buildInvocation());
       await sendToolResult(result);
     };
 
@@ -481,14 +484,19 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       }
 
       if (name === 'web_search') {
-        return await runTool(webSearch, {
-          query: interaction.options.getString('query', true),
+        return await runTool(webSearch, async () => ({
+          query: await buildSearchQuery({ request: interaction.options.getString('query', true), kind: 'web', config }),
           count: undefined,
-        });
+        }));
       }
 
-      for (const [cmd, fn] of [['video_search', videoSearch], ['news_search', newsSearch], ['wiki_search', wikiSearch]]) {
-        if (name === cmd) return await runTool(fn, { query: interaction.options.getString('query', true), count: undefined });
+      for (const [cmd, fn, kind] of [['video_search', videoSearch, 'video'], ['news_search', newsSearch, 'news'], ['wiki_search', wikiSearch, 'wiki']]) {
+        if (name === cmd) {
+          return await runTool(fn, async () => ({
+            query: await buildSearchQuery({ request: interaction.options.getString('query', true), kind, config }),
+            count: undefined,
+          }));
+        }
       }
 
       if (name === 'web_fetch') {
@@ -502,7 +510,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         await interaction.deferReply();
         const result = await imageSearch(
           {
-            query: interaction.options.getString('query', true),
+            query: await buildSearchQuery({ request: interaction.options.getString('query', true), kind: 'image', config }),
             count: undefined,
           },
           buildInvocation(),
