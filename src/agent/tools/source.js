@@ -17,7 +17,7 @@ export const defs = [
     function: {
       name: 'self_fix',
       description:
-        'OWNER ONLY. Propose a change to YOUR OWN source code. Panda shows Oscar a Discord approval button first. After approval, an isolated GitHub Actions sandbox checks out the repository, runs Claude Code to make and test the change, opens a PR to main, enables auto-merge, and Panda restarts once it lands. The tool returns at once and the run continues in the background, so Panda keeps answering everyone meanwhile; the result is posted in the channel and DMed to Oscar. The live bot filesystem is never edited. Claude Code sees only the repository and the instruction — not this chat, earlier runs or GitHub — so the instruction must state the whole change on its own, even when retrying.',
+        'OWNER ONLY. Propose a change to YOUR OWN source code. Panda shows Oscar a Discord approval button first. After approval, an isolated GitHub Actions sandbox checks out the repository, runs Claude Code to make and test the change, opens a PR to main, enables auto-merge, and Panda restarts once it lands. The tool returns at once and the run continues in the background, so Panda keeps answering everyone meanwhile; the result is DMed to Oscar only. The live bot filesystem is never edited. Claude Code sees only the repository and the instruction — not this chat, earlier runs or GitHub — so the instruction must state the whole change on its own, even when retrying.',
       parameters: {
         type: 'object',
         properties: {
@@ -97,20 +97,15 @@ export async function requestDevelopmentApproval({ instruction, invocation, stat
 }
 
 // Oscar's request is often a one-liner, and Claude Code sees nothing but the
-// prompt, so the chat model expands it into a full brief that Oscar approves.
+// prompt, so the chat model restates it as a self-contained task Oscar approves.
+// It must not pad the request: an earlier version invented requirements.
 async function writeClaudeCodePrompt(instruction, { apiKey, model, provider }) {
   const messages = [
     {
       role: 'system',
       content: `You write the prompt for Claude Code, which will change the source of Panda, a Node.js Discord bot, unattended in CI. Claude Code sees only the repository and your prompt: not this chat, earlier runs, or anything Oscar said elsewhere.
 
-Turn Oscar's request into a detailed, self-contained prompt in your own words, not a copy of his. Cover:
-- the goal and why it matters to Oscar
-- the exact behaviour wanted, including edge cases
-- what must not change
-- how to check it is done (tests to add or update)
-
-Do not invent file names, functions or facts you were not given; tell Claude Code to find them in the repo. Plain text or simple markdown, under 3500 characters. Return only the prompt.`,
+Restate Oscar's request as a clear, self-contained task. Stay faithful to it: say what he asked for and nothing more. Do not add requirements, features, edge cases, constraints, acceptance criteria or tests he did not ask for, and do not guess at his reasons. Do not invent file names, functions or facts you were not given; tell Claude Code to find them in the repo. Keep it as short as the request allows — a one-line request gets a few sentences, not a spec. Plain text, under 1500 characters. Return only the prompt.`,
     },
     { role: 'user', content: `Oscar's request: ${instruction}` },
   ];
@@ -152,7 +147,7 @@ export function selfFix(args, invocation, deps = {}) {
   const state = deps.state || selfFixState;
   if (state.isActive()) return '🛠️ A self-fix is already running. Wait for it to land (Oscar gets a DM) before asking for another.';
   runSelfFix(args, invocation, deps).catch((err) => console.error('[self_fix] background run failed:', err));
-  return '🛠️ Writing the prompt for Claude Code now; an approval card will appear here in a moment. The fix runs in the background, so I keep answering meanwhile, and the result is posted here and DMed to Oscar.';
+  return '🛠️ Writing the prompt for Claude Code now; an approval card will appear here in a moment. The fix runs in the background, so I keep answering meanwhile, and Oscar gets the result by DM.';
 }
 
 export async function runSelfFix(
@@ -167,9 +162,9 @@ export async function runSelfFix(
     restart = () => setTimeout(() => process.exit(42), 1500),
   } = {},
 ) {
-  // Nobody is waiting on a return value any more, so every ending is posted.
+  // Nobody is waiting on a return value any more, so every ending is DMed to
+  // Oscar. Only him: the server does not need to hear about it.
   const finish = async (headline, summary) => {
-    await invocation.message?.channel?.send({ content: summary, allowedMentions: { parse: [] } }).catch(() => {});
     await notify(
       invocation.client,
       config.ownerId,
@@ -207,6 +202,8 @@ export async function runSelfFix(
   }
 
   state.begin();
+  // Do not disturb while the run is in flight; the bot still answers everyone.
+  invocation.client?.user?.setPresence({ status: 'dnd' });
   await invocation.message?.channel
     ?.send(`🛠️ Approval received — running Claude Code in the remote GitHub Actions sandbox. I keep answering meanwhile and restart once the PR merges.`)
     .catch(() => {});
@@ -245,5 +242,6 @@ export async function runSelfFix(
     return finish('self_fix crashed', `❌ Remote sandbox failed: ${String(err.message || err).slice(0, 500)}`);
   } finally {
     state.end();
+    invocation.client?.user?.setPresence({ status: 'online' });
   }
 }
