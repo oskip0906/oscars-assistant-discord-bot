@@ -1,4 +1,4 @@
-import { chatCompletion } from '../openrouter.js';
+import { chatCompletion, providerFor } from '../openrouter.js';
 
 // Weak models wrap JSON in fences, prefix it with prose, and trail commas.
 // Recover what we can from the text before spending a retry on it.
@@ -37,12 +37,14 @@ export async function askJson({ config, system, user, isValid, model }) {
     { role: 'user', content: user },
   ];
 
+  const chosen = model || config.model;
   for (let attempt = 0; attempt < 2; attempt++) {
     let content;
     try {
       const message = await chatCompletion({
         apiKey: config.openrouterApiKey,
-        model: model || config.model,
+        model: chosen,
+        provider: providerFor(config, chosen),
         messages,
       });
       content = message?.content ?? '';

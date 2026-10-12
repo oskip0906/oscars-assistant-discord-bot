@@ -2,6 +2,21 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// The `provider` field for a request. A provider pins the model to it (no
+// fallback to others); absent, empty or whitespace means OpenRouter's own
+// routing, so no field is sent at all.
+export function providerPreference(provider) {
+  const slug = typeof provider === 'string' ? provider.trim() : '';
+  return slug ? { provider: { order: [slug], allow_fallbacks: false } } : {};
+}
+
+// The provider saved for one model id (config.modelProviders, set by
+// /set_model), or '' for OpenRouter's default. Each model resolves on its own.
+export function providerFor(config, model) {
+  const provider = config?.modelProviders?.[model];
+  return typeof provider === 'string' ? provider.trim() : '';
+}
+
 // One chat-completions call. Returns the assistant message object
 // ({ content, tool_calls? }), throws only on real API errors (bad key, unknown
 // model, ...) since those never succeed on a retry.
@@ -11,7 +26,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // hanging froze the bot for everyone there. A silent attempt is dropped after
 // `attemptMs` and sent again, and each retry waits `attemptMs` longer, so a model
 // that is merely slow still gets through.
-export async function chatCompletion({ apiKey, model, messages, tools, toolChoice = 'auto', attemptMs = 60_000, backoffMs = 1500 }) {
+export async function chatCompletion({ apiKey, model, provider, messages, tools, toolChoice = 'auto', attemptMs = 60_000, backoffMs = 1500 }) {
   for (let attempt = 0; ; attempt++) {
     let res;
     let text;
@@ -28,6 +43,7 @@ export async function chatCompletion({ apiKey, model, messages, tools, toolChoic
         },
         body: JSON.stringify({
           model,
+          ...providerPreference(provider),
           messages,
           ...(tools?.length ? { tools, tool_choice: toolChoice } : {}),
         }),

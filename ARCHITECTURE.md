@@ -59,7 +59,7 @@ Every model call uses one OpenRouter key (`src/agent/openrouter.js`), retried on
 | **Claude Code** | The code change in `self_fix` |
 | **Jev** (`typesafe/jev-1.13`) | Fast yes/no and pick-one decisions |
 
-`/set_model` (Oscar) validates the id against OpenRouter's catalog and saves it in `bot_settings`, live at once and kept across restarts. `/model` shows it; `/usage` shows spend.
+`/set_model <model> [provider]` (Oscar) validates the id against OpenRouter's catalog and saves it in `bot_settings`, live at once and kept across restarts. The optional provider (e.g. `deepinfra`) pins that model to one OpenRouter provider (`provider: { order: [slug], allow_fallbacks: false }`); it is checked against the model's endpoints and refused if OpenRouter doesn't route the model there. Providers are saved per model id as JSON in the `model_providers` row; a blank provider, or no row at all, sends no provider field, so OpenRouter routes as it always has. `/model` shows the model and provider; `/usage` shows spend.
 
 ## Jev: the decision layer
 
@@ -132,7 +132,7 @@ The bot watches via the GitHub MCP server, enables auto-merge and waits. The mer
 - `index_chat` only reads channels the asker can read; `web_fetch` refuses loopback, LAN, link-local and metadata addresses on every lookup and redirect.
 - Every GitHub read goes through the read-only MCP endpoint; the only REST calls are writes.
 - One GitHub token: `GITHUB_PAT` in the bot, `GH_PAT` in Actions.
-- `/set_model` only saves ids made of safe characters.
+- `/set_model` only saves model ids and provider names made of safe characters.
 
 ## Running and deploying
 

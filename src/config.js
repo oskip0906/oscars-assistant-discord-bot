@@ -36,6 +36,9 @@ export const config = {
   // The default chat model. /set_model saves a new one in the database
   // (bot_settings), and loadModel swaps it in at boot.
   model: 'deepseek/deepseek-v4.1-flash',
+  // Optional OpenRouter provider per model id ({ 'model/id': 'provider-slug' }),
+  // also set by /set_model. A model with no entry uses OpenRouter's default routing.
+  modelProviders: {},
   ownerId: /^\d{17,20}$/.test(envOwnerId) ? envOwnerId : '',
   githubPat: process.env.GITHUB_PAT || '',
   // GitHub's hosted MCP server, read-only path. Owner-gated at the tool list, so

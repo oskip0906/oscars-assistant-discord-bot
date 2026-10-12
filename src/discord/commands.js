@@ -36,6 +36,9 @@ export const commandDefs = [
         .setDescription('OpenRouter model id — start typing to search')
         .setRequired(true)
         .setAutocomplete(true),
+    )
+    .addStringOption((o) =>
+      o.setName('provider').setDescription('OpenRouter provider to pin it to, e.g. deepinfra — leave blank for the default').setRequired(false),
     ),
   new SlashCommandBuilder()
     .setName('play')
@@ -453,7 +456,11 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
         }
         await interaction.deferReply();
-        const result = await switchModel({ model: interaction.options.getString('model', true), config });
+        const result = await switchModel({
+          model: interaction.options.getString('model', true),
+          provider: interaction.options.getString('provider') ?? '',
+          config,
+        });
         return await interaction.editReply({ content: result.summary, allowedMentions: { parse: [] } });
       }
 
