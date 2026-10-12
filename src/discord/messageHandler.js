@@ -1,4 +1,4 @@
-import { runAgent } from '../agent/agent.js';
+import { runAgent, isFiller, signOff } from '../agent/agent.js';
 import { formatEnvelope } from './envelope.js';
 import { chunkMessage } from './chunk.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
@@ -314,12 +314,11 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           }
         }
 
-        // A response is MANDATORY (reaction or text — never none). If the model
-        // produced neither, fall back to a reaction, then to text.
-        // A message that already got (or failed to get) a reaction gets the text.
-        if (!replyText.trim() && !invocation.reacted && !invocation.posted) {
-          if (await reactOnce(anchor, '👀')) invocation.reacted = true;
-          else replyText = '🐼';
+        // Filler ("", "🐼 …") is never sent. If nothing else answered the turn
+        // (no reaction, poll or card), Panda signs off: a wave, no message.
+        if (isFiller(replyText)) {
+          replyText = '';
+          if (!invocation.reacted && !invocation.posted) await signOff(invocation);
         }
 
         const sent = [];

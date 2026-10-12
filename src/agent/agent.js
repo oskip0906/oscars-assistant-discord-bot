@@ -50,6 +50,16 @@ const clip = (v, n = 200) => {
 const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
 // No letters or digits once custom emotes are removed: only emoji and punctuation.
 export const saysNothing = (text) => !/[\p{L}\p{N}]/u.test(text.replace(/<a?:\w+:\d+>/g, ''));
+// Nothing to say at all: empty, or only a 🐼 and punctuation ("🐼 …", "...").
+// An emoji the model chose ("🔥") is still a reply; this is filler.
+export const isFiller = (text) => !String(text ?? '').replace(/🐼|[\s\p{P}]/gu, '');
+
+// A sign-off: a wave and no words, so the conversation can end. The wave is
+// only added if nothing has reacted to the message yet (reactOnce).
+export async function signOff(invocation) {
+  if (await reactOnce(invocation.message, '👋')) invocation.reacted = true;
+  return '';
+}
 
 // One turn, at most MAX_MODEL_CALLS model calls after one Jev call:
 // 1. Jev (triage) decides in what form to answer, the mood, and which tools it
@@ -82,10 +92,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   const plan = await triage(allTools, turnText, invocation, decideImpl, random);
   log(contextKey, `triage: signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'} mood=${plan.mood ?? '?'} lookup=${plan.needsContext}`);
   // A goodbye gets a wave and nothing else, so the conversation can end.
-  if (plan.signOff) {
-    if (await reactOnce(invocation.message, '👋')) invocation.reacted = true;
-    return '';
-  }
+  if (plan.signOff) return signOff(invocation);
   const locked = plan.tools.find((name) => OWNER_ONLY_TOOLS.has(name));
   if (locked && !invocation.isOwner) return `Only Oscar can use \`${locked}\`.`;
 
@@ -167,7 +174,9 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   // emoji echoed) is dropped: something was already sent. A ping or reply is
   // always answered in words, so there it is kept.
   if ((invocation.posted || (invocation.reacted && !invocation.direct)) && saysNothing(text)) return '';
-  return text || '🐼 …';
+  // Nothing worth saying (no text, or just "🐼 …") signs off instead of sending filler.
+  if (isFiller(text)) return signOff(invocation);
+  return text;
   } catch (err) {
     log(contextKey, `turn failed after ${Date.now() - turnStart}ms: ${err.message || err}`);
     throw err;

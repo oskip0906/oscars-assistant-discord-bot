@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runAgent, saysNothing, moodEmoji, MOOD_EMOJI, MAX_MODEL_CALLS } from '../src/agent/agent.js';
+import { runAgent, saysNothing, isFiller, moodEmoji, MOOD_EMOJI, MAX_MODEL_CALLS } from '../src/agent/agent.js';
 
 // One turn with Jev's `answers` and the model scripted to give `replies` in order.
 async function turn(answers, replies, extra = {}) {
@@ -234,4 +234,32 @@ test('every tool a turn calls is recorded, in order, for the line above the repl
   assert.equal(toolsLine([]), '');
   assert.equal(toolsLine(['react', 'react']), '', 'a reaction is never shown as a tool');
   assert.equal(toolsLine(['react', 'web_search']), '-# 🔧 web_search');
+});
+
+test('isFiller matches empty and "🐼 …" style output, never a real reply or a chosen emoji', () => {
+  for (const text of ['', '   \n\t', '🐼 …', '🐼', '🐼 ...', '…', '...', ' 🐼  … ', null, undefined]) assert.ok(isFiller(text), JSON.stringify(text));
+  for (const text of ['ok', '4', '🔥', '🐼 hi', 'no.', '<:panda:42>']) assert.ok(!isFiller(text), text);
+});
+
+test('a reply with nothing to say signs off: a wave and no message', async () => {
+  for (const content of ['', '   ', '🐼 …', '🐼', '...', null]) {
+    for (const direct of [false, true]) {
+      const { text, reactions, invocation } = await turn({ respond_with: sure('message') }, [{ content }, { content }], { direct });
+      assert.equal(text, '', `${JSON.stringify(content)} is not sent`);
+      assert.deepEqual(reactions, ['👋'], `${JSON.stringify(content)} signs off once`);
+      assert.equal(invocation.reacted, true);
+    }
+  }
+});
+
+test('signing off after a reaction adds no second reaction', async () => {
+  const { text, reactions } = await turn({ respond_with: sure('both') }, [reactCall('🔥'), { content: '🐼 …' }], { direct: true });
+  assert.equal(text, '');
+  assert.deepEqual(reactions, ['🔥']);
+});
+
+test('a real reply is sent as is, with no sign-off', async () => {
+  const { text, reactions } = await turn({ respond_with: sure('message') }, [{ content: '  sure, 7pm works  ' }], { direct: true });
+  assert.equal(text, 'sure, 7pm works');
+  assert.deepEqual(reactions, []);
 });

@@ -74,3 +74,45 @@ test('a message directed at Oscar gets no reply from Panda, even when Jev would 
   );
   assert.deepEqual(seen, []);
 });
+
+// One ping through the real handler, the agent stubbed to return `reply`.
+async function replied(reply, { reacted = false } = {}) {
+  const reactions = [];
+  const sent = [];
+  let done;
+  const finished = new Promise((r) => (done = r));
+  const channel = { sendTyping: async () => {}, send: async (p) => (sent.push(p.content), {}), messages: { fetch: async () => new Map() } };
+  const handler = createMessageHandler({
+    client: { user: bot },
+    config,
+    player: null,
+    privateMode: { isOn: () => false },
+    runAgentImpl: async (invocation) => {
+      if (reacted) invocation.reacted = (await invocation.message.react('🔥'), true);
+      setTimeout(done, 50);
+      return reply;
+    },
+    decideImpl: async () => null,
+  });
+  const id = `s${Math.random()}`;
+  await handler({
+    ...from('guest', `<@${bot.id}> hey`, { mentions: { users: new Map([[bot.id, {}]]) } }), id, channelId: id, channel, guild: { id: 'g' }, createdAt: new Date(),
+    attachments: new Map(), embeds: [], react: async (e) => { reactions.push(e); }, reply: async (p) => (sent.push(p.content), {}),
+  });
+  await finished;
+  return { reactions, sent };
+}
+
+test('a reply with nothing in it ("🐼 …", empty, blank) is never sent: Panda signs off with a wave', async () => {
+  const results = await Promise.all(['🐼 …', '', '  \n ', '🐼', '...'].map((reply) => replied(reply)));
+  for (const { reactions, sent } of results) {
+    assert.deepEqual(sent, []);
+    assert.deepEqual(reactions, ['👋']);
+  }
+  const after = await replied('🐼 …', { reacted: true });
+  assert.deepEqual(after, { reactions: ['🔥'], sent: [] }, 'one reaction, no message');
+});
+
+test('a real reply is sent once, with no sign-off', async () => {
+  assert.deepEqual(await replied('sure, 7pm works'), { reactions: [], sent: ['sure, 7pm works'] });
+});
