@@ -9,24 +9,36 @@ const config = { databaseUrl: 'postgres://test', openrouterApiKey: 'k', jevEnabl
 
 // A fake context_messages table. Inserts keep only ids not stored yet (ON
 // CONFLICT DO NOTHING) and record each new row's [server, channel]; searches
-// answer `found` and record their parameters.
-function database({ stored = new Set(), found = [], down = false, used = 0 } = {}) {
-  const log = { inserted: [], where: [], searches: [] };
+// answer `found` when given, else stored lines of that channel with any query
+// word, and record their parameters. context_channels keeps indexing progress.
+function database({ stored = new Set(), found = null, down = false, used = 0 } = {}) {
+  const log = { inserted: [], where: [], searches: [], rows: [], progress: new Map() };
   db.query = async (_config, text, params) => {
     if (down) throw new Error('connect ECONNREFUSED');
     if (text.includes('as used')) return { rows: [{ used }] };
     if (text.includes('insert into context_messages')) {
-      const fresh = params[0].map((id, i) => [id, params[1][i], params[2][i]]).filter(([id]) => !stored.has(id));
-      fresh.forEach(([id, guild, channel]) => {
-        stored.add(id);
-        log.inserted.push(id);
-        log.where.push([guild, channel]);
+      const fresh = params[0].map((id, i) => i).filter((i) => !stored.has(params[0][i]));
+      fresh.forEach((i) => {
+        stored.add(params[0][i]);
+        log.inserted.push(params[0][i]);
+        log.where.push([params[1][i], params[2][i]]);
+        log.rows.push({ channel_id: params[2][i], author_id: params[3][i], content: params[4][i], created_at: params[5][i] });
       });
       return { rowCount: fresh.length, rows: [] };
     }
+    if (text.includes('from context_channels')) return { rows: log.progress.has(params[0]) ? [log.progress.get(params[0])] : [] };
+    if (text.includes('insert into context_channels')) {
+      log.progress.set(params[0], { newest_id: params[1], oldest_id: params[2], complete: params[3] });
+      return { rows: [] };
+    }
     if (text.includes('from context_messages')) {
       log.searches.push(params);
-      return { rows: found };
+      if (found) return { rows: found };
+      const [query, authorId, channelId] = params;
+      const words = query.toLowerCase().split(/\W+/).filter(Boolean);
+      return {
+        rows: log.rows.filter((r) => r.channel_id === channelId && (!authorId || r.author_id === authorId) && (!words.length || words.some((w) => r.content.toLowerCase().includes(w)))),
+      };
     }
     throw new Error(`unexpected query: ${text}`);
   };
@@ -101,7 +113,7 @@ test('a full context section stores nothing until a cleanup', async () => {
 test('search goes to the store first, with the author resolved to an id', async () => {
   const log = database({ found: [{ author_id: '42', content: 'flights are $900', created_at: '2026-10-01T14:01:00Z' }] });
   const out = await fetchHistory({ query: 'flights', author: '<@42>' }, { config, message: { guildId: G, channelId: C1 } });
-  assert.deepEqual(log.searches[0], ['flights', '42', C1], 'only this channel is searched');
+  assert.deepEqual(log.searches[0].slice(0, 3), ['flights', '42', C1], 'only this channel is searched');
   assert.match(out, /<@42>: flights are \$900/);
 });
 
@@ -132,17 +144,23 @@ const invocationIn = (here, others = {}, content = 'what was the plan') => ({
   message: { id: ID(999), guildId: G, channelId: here.id, channel: here, member: {}, author: { id: 'u' }, content },
 });
 
-test('nothing remembered yet: the last 1000 messages are searched, and only the matching lines are saved', async () => {
-  // Message 7 is 143 back, past the 100 an older scan read.
-  const general = channel(C1, 150, { content: (n) => (n === 7 ? 'the plan is the lake house' : `chat ${n}`) });
+test('nothing remembered: the whole channel is saved, then searched again, and only lines Jev keeps are shown', async () => {
+  const general = channel(C1, 250, { content: (n) => (n === 7 ? 'the plan is the lake house' : n === 9 ? 'no plan yet lol' : `chat ${n}`) });
   const log = database();
   const out = await withJev(
-    (line, focus) => focus === 'plan' && /plan/.test(line),
+    (line, focus) => focus === 'plan' && /lake/.test(line),
     () => fetchHistory({ query: 'plan' }, invocationIn(general)),
   );
-  assert.deepEqual(log.inserted, [ID(7)]);
+  assert.equal(log.inserted.length, 250, 'every message in the channel is saved');
+  assert.equal(log.searches.length, 2, 'searched, indexed, searched again');
   assert.match(out, /<@u1>: the plan is the lake house/);
-  assert.ok(!/chat 8/.test(out));
+  assert.ok(!/no plan yet/.test(out), 'a keyword hit Jev says does not answer it stays out');
+  assert.deepEqual(log.progress.get(C1), { newest_id: ID(250), oldest_id: ID(1), complete: true });
+
+  // The next miss only reads what is new since.
+  general.fetched.length = 0;
+  await withJev(() => false, () => fetchHistory({ query: 'boat' }, invocationIn(general)));
+  assert.equal(general.fetched.length, 1);
 });
 
 test('a failed lookup tells the model to carry on instead of throwing', async () => {

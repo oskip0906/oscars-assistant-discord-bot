@@ -2,7 +2,9 @@ import { db, configured } from '../db.js';
 import { decide } from './jev.js';
 import { askJson } from './research/askJson.js';
 import { isFull, noteWrite, pruneEmptyFolders } from '../storage.js';
-import { pickRelevant, relevantTo, worthRemembering } from './historyStore.js';
+import { pickRelevant, relevantTo, worthRemembering, orQuery } from './historyStore.js';
+
+export { orQuery };
 import { readChannelRange } from './tools/history.js';
 
 // Shared notes in db-1: a folder tree the model files each note into, like a
@@ -16,11 +18,6 @@ const MAX_TRANSCRIPT = 60_000; // characters the note writer is given
 const WINDOW = 10; // minutes a note covers by default
 const MAX_WINDOW_MESSAGES = 1000; // shortcut: a long, busy window is cut to its newest 1000 messages; page further if notes need more
 const COLUMNS = 'n.id, n.folder_id, n.title, n.description, n.body, n.author_id, n.created_at';
-
-// Any word may match: "trip budget japan" finds a note that only says "Japan".
-export function orQuery(text) {
-  return (String(text).match(/[\p{L}\p{N}]+/gu) || []).slice(0, 30).join(' or ');
-}
 
 export async function loadTree(config) {
   const [folders, notes] = await Promise.all([

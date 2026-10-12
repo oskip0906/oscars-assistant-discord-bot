@@ -33,6 +33,16 @@ create index if not exists context_messages_fts on context_messages using gin (f
 alter table context_messages add column if not exists guild_id text;
 alter table context_messages add column if not exists channel_id text;
 create index if not exists context_messages_channel on context_messages (channel_id, created_at);
+-- How far a channel's history has been copied in (src/discord/indexChannel.js):
+-- everything from oldest_id up to newest_id is stored, and complete means
+-- oldest_id is the channel's first message. A run picks up from here.
+create table if not exists context_channels (
+  channel_id text primary key,
+  newest_id text,
+  oldest_id text,
+  complete boolean not null default false,
+  updated_at timestamptz not null default now()
+);
 
 -- Notes: a folder tree the model organizes, plus links between related notes.
 create table if not exists note_folders (

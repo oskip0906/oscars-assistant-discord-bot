@@ -62,20 +62,41 @@ export async function saveContext(config, messages) {
   return rowCount;
 }
 
+// Any word may match: "trip budget japan" finds lines that only say "Japan".
+export function orQuery(text) {
+  return (String(text).match(/[\p{L}\p{N}]+/gu) || []).slice(0, 30).join(' or ');
+}
+
+// Where indexing of a channel got to (see indexChannel.js); null if never indexed.
+export const indexProgress = {
+  async load(config, channelId) {
+    const { rows } = await db.query(config, 'select newest_id, oldest_id, complete from context_channels where channel_id = $1', [channelId]);
+    return rows[0] ?? null;
+  },
+  async save(config, channelId, { newest_id, oldest_id, complete }) {
+    await db.query(
+      config,
+      `insert into context_channels (channel_id, newest_id, oldest_id, complete) values ($1, $2, $3, $4)
+       on conflict (channel_id) do update set newest_id = excluded.newest_id, oldest_id = excluded.oldest_id, complete = excluded.complete, updated_at = now()`,
+      [channelId, newest_id, oldest_id, complete],
+    );
+  },
+};
+
 // Best keyword matches in one channel (or its newest lines when there is no
 // query), oldest first. No channel matches nothing.
-export async function searchContext(config, { query = '', authorId = null, channelId = null } = {}) {
+export async function searchContext(config, { query = '', authorId = null, channelId = null, limit = 40 } = {}) {
   if (!configured(config)) throw new Error('the context database is not configured');
   const { rows } = await db.query(
     config,
     `select author_id, content, created_at from (
        select m.author_id, m.content, m.created_at
-       from context_messages m, websearch_to_tsquery('english', $1) q
+       from context_messages m, websearch_to_tsquery('english', $5) q
        where m.channel_id = $3 and ($1 = '' or m.fts @@ q) and ($2::text is null or m.author_id = $2)
        order by case when $1 = '' then extract(epoch from m.created_at) else ts_rank(m.fts, q) end desc
-       limit 40
+       limit $4
      ) s order by created_at`,
-    [query, authorId, channelId],
+    [query, authorId, channelId, limit, orQuery(query)],
   );
   return rows;
 }

@@ -38,8 +38,9 @@ Everything is stored in one PMS Postgres database (`DATABASE_URL`). `src/db.js` 
 
 **Storage budget** (`src/storage.js`): of the 1 GiB, persona gets 10 MB and the rest splits 75% context, 20% notes, 5% reminders. When a section is full, Panda DMs Oscar with **Delete oldest** / **Not now** and refuses new writes to it until trimmed.
 
-**Context (hidden).** Panda keeps no summary or transcript, only per-channel message rows that feed the model. DMs are never saved. Saved: each turn and reply, everything `fetch_history` ranges and `index_chat` read, and, when a search finds nothing, the lines Jev judges relevant from the channel scan below.
-- `fetch_history`: *range* mode reads the channel straight from Discord (default 30, max 100 messages); *search* mode (`query` / `author`) full-text searches what was remembered, then Jev keeps only the lines that answer it, so the model gets the part it needs (at most 40 lines). When none do, the channel is read back in sections of 500 messages, all the way to its start, stopping at the first section with a match (caps: 20,000 messages or 90 s). With Jev down, keyword hits are kept and the scan matches query words.
+**Context (hidden).** Panda keeps no summary or transcript, only per-channel message rows that feed the model. DMs are never saved. Everything else Panda sees is saved, after the reply is out: each turn, its reply and the 5 messages before it, everything `fetch_history` and `index_chat` read, and whole channels (below).
+- `fetch_history`: *range* mode reads the channel straight from Discord (default 30, max 100 messages); *search* mode (`query` / `author`) full-text searches what was remembered, then Jev keeps only the lines that answer it, so the model gets the part it needs (at most 40 lines). The keyword search matches any word of the query (up to 100 candidates). When nothing answers, the whole channel is indexed into the store and the search runs again. With Jev down, keyword hits are kept.
+- **Channel indexing** (`src/discord/indexChannel.js`, also `/index_channel` for Oscar) copies a channel's history into the store. `context_channels` records how far it got (newest and oldest message saved, and whether it reached the first message), so a run reads only what is new since the last one, then carries on back from where that one stopped. A search-triggered run is capped at 20,000 messages or 60 s per turn; the next miss continues it.
 - `index_chat`: given a message link or id, reads the 100 messages around it and remembers them. Other channels must be in this server and readable by the asker.
 
 **Notes (shared).** Everyone sees every note (`src/agent/notes.js`, `src/discord/notes.js`).
@@ -72,7 +73,7 @@ Jev decides; the conversation model writes. The model never chooses whether to a
 | Gate (`forPanda`) | Server message that isn't a ping or reply | sampled, never < 0.2; bots ≥ 0.8 | Silence |
 | Bot sign-off | Every bot message | ≥ 0.8 → 👋, stop | Farewell regex |
 | Triage | Every turn | sign-off ≥ 0.8; tool ≥ 0.5; unexplained ≥ 0.8; form sampled (needs words ≥ 0.6 → not reaction-only); mood = most likely | No tools, text reply |
-| Memory scan (`pickRelevant`) | `fetch_history` search hits and channel scan; long `/save_note` | line ≥ 0.5 | Search: keyword hits; notes: keep nothing |
+| Memory scan (`pickRelevant`) | `fetch_history` search hits (before and after indexing the channel); long `/save_note` | line ≥ 0.5 | Search: keyword hits; notes: keep nothing |
 | Source files (`how_i_work`) | A question about Panda with a topic | file ≥ 0.5, best 3 | Files whose path has a topic word |
 | Notes walk | `search_notes`, `/open_note` | folder ≥ 0.25 (max 6 levels, 8 folders) | Search every note |
 | Research fact-check | Each page read by `/research` | drop claim < 0.3 | Keep every claim |

@@ -172,9 +172,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         // What was said just before the batch, so "that" and "it" resolve without
         // searching history. Jev reads it too when picking tools.
         const self = client.user?.id;
-        const recent = (await readChannelRange(messages[0].channel, messages[0].id, { count: RECENT_COUNT }).catch(() => []))
-          .map((m) => historyLine(m, self))
-          .join('\n');
+        const before = await readChannelRange(messages[0].channel, messages[0].id, { count: RECENT_COUNT }).catch(() => []);
+        const recent = before.map((m) => historyLine(m, self)).join('\n');
         const trigger = messages[0].author;
         const triggerName = messages[0].member?.displayName || trigger.displayName || trigger.username;
         const turn = parts.join('\n');
@@ -267,8 +266,9 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         }
 
         // Saved after the reply is out, so the database can never delay or break it.
-        // The whole turn and the replies are kept, in this channel's memory; DMs never are.
-        saveContext(config, [...messages, ...sent]).catch((err) =>
+        // Everything Panda saw is kept, in this channel's memory: the messages
+        // before the turn, the turn and the replies. DMs never are.
+        saveContext(config, [...before, ...messages, ...sent]).catch((err) =>
           console.error('[history] save failed:', String(err.message || err).slice(0, 200)),
         );
       } finally {

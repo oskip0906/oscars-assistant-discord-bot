@@ -399,7 +399,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           });
           return await interaction.editReply(
             `✅ Indexed **${done.indexed}** messages from ${label}; **${done.skipped}** were already present or had no text.` +
-              (done.capped ? ` Stopped at the ${done.fetched}-message safety cap.` : ''),
+              (done.capped ? ` Stopped at the ${done.fetched}-message safety cap; run it again to carry on from there.` : ''),
           );
         } catch (err) {
           return await interaction.editReply(`❌ Indexing ${label} failed: ${redactSecrets(err.message).slice(0, 200)}`);
