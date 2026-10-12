@@ -7,7 +7,7 @@ import { suppressLinkEmbeds } from './messageHandler.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
-import { webSearch, webFetch, imageSearch } from '../agent/tools/search.js';
+import { webSearch, webFetch, imageSearch, videoSearch, newsSearch, wikiSearch } from '../agent/tools/search.js';
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
 import { runResearch } from '../agent/research/pipeline.js';
@@ -56,6 +56,18 @@ export const commandDefs = [
     .setName('image_search')
     .setDescription('Search for images')
     .addStringOption((o) => o.setName('query').setDescription('What to find pictures of').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('video_search')
+    .setDescription('Search for videos')
+    .addStringOption((o) => o.setName('query').setDescription('What to find videos about').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('news_search')
+    .setDescription('Search recent news')
+    .addStringOption((o) => o.setName('query').setDescription('News topic').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('wiki_search')
+    .setDescription('Search Wikipedia')
+    .addStringOption((o) => o.setName('query').setDescription('Topic to look up').setRequired(true)),
   new SlashCommandBuilder()
     .setName('research')
     .setDescription('Deep research: plan, crawl, verify, and report with sources')
@@ -444,6 +456,10 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           query: interaction.options.getString('query', true),
           count: undefined,
         });
+      }
+
+      for (const [cmd, fn] of [['video_search', videoSearch], ['news_search', newsSearch], ['wiki_search', wikiSearch]]) {
+        if (name === cmd) return await runTool(fn, { query: interaction.options.getString('query', true), count: undefined });
       }
 
       if (name === 'web_fetch') {

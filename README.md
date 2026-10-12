@@ -24,6 +24,9 @@ The same groups as `/menu`. Everything except the Power Tools also works by just
 | `/web_search <query>` | Search the web and cite links |
 | `/web_fetch <url>` | Read a full page |
 | `/image_search <query>` | Find pictures of anything |
+| `/video_search <query>` | Find videos |
+| `/news_search <query>` | Find recent news |
+| `/wiki_search <query>` | Look something up on Wikipedia |
 | `/create_poll <question> <answers> [hours] [multiple]` | Post a native Discord poll; answers separated by `\|` |
 | `/create_card <title> [description] [color] [url] [image] [thumbnail] [footer] [fields] [buttons] [menu]` | Post an embed card with optional buttons and a dropdown |
 

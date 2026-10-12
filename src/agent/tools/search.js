@@ -51,6 +51,51 @@ export const defs = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'video_search',
+      description: 'Search YouTube for videos. Returns numbered titles, video URLs, and descriptions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What to find videos about' },
+          count: { type: 'integer', description: 'Number of videos (1-8, default 5)' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'news_search',
+      description: 'Search recent news articles. Returns numbered headlines, URLs, and snippets.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'News topic' },
+          count: { type: 'integer', description: 'Number of articles (1-8, default 5)' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'wiki_search',
+      description: 'Search Wikipedia. Returns numbered article titles, URLs, and summaries.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Topic to look up' },
+          count: { type: 'integer', description: 'Number of articles (1-8, default 3)' },
+        },
+        required: ['query'],
+      },
+    },
+  },
 ];
 
 const stripHtml = (s) => String(s || '').replace(/<[^>]*>/g, '');
@@ -111,26 +156,46 @@ async function headOk(url, timeoutMs = 5000) {
 
 // --- Search providers ---------------------------------------------------
 
+// One main engine plus two fallbacks for general web search, tried in order
+// when the previous one errors or comes back empty.
+const WEB_ENGINES = ['bing', 'yahoo', 'mojeek'];
+// One dedicated engine each for the other kinds of search.
+const IMAGE_ENGINE = 'google images';
+const VIDEO_ENGINE = 'youtube';
+const NEWS_ENGINE = 'bing news';
+const WIKI_ENGINE = 'wikipedia';
+
 // The self-hosted SearXNG metasearch instance (docker, loopback) is the only
 // provider. It's our own server with the bot-limiter disabled, so there is no
 // external rate limit at all.
-async function searxngSearch(query, count, config) {
-  const url = `${config.searxngUrl}/search?q=${encodeURIComponent(query)}&format=json&safesearch=1`;
-  const res = await fetchWithRetry(url, { headers: { Accept: 'application/json' } }, { retries: 1, timeoutMs: 20000 });
+async function searxngQuery(query, { engines, categories }, config, headers = { Accept: 'application/json' }) {
+  const url = `${config.searxngUrl}/search?q=${encodeURIComponent(query)}&format=json&safesearch=1&engines=${encodeURIComponent(engines)}${categories ? `&categories=${categories}` : ''}`;
+  const res = await fetchWithRetry(url, { headers }, { retries: 1, timeoutMs: 20000 });
   if (!res.ok) throw new Error(`SearXNG HTTP ${res.status}`);
-  const data = await res.json();
-  const results = (data.results || [])
-    .filter((r) => r.url)
-    .slice(0, count)
-    .map((r) => ({ title: stripHtml(r.title || r.url), url: r.url, snippet: stripHtml(r.content || '') }));
-  if (!results.length) {
-    // Name the engines that failed (blocked, CAPTCHA, timeout), so "no results"
-    // says why in the logs and to the model.
-    const failing = (data.unresponsive_engines || []).map(([name, why]) => `${name}: ${why}`).join(', ');
-    console.warn(`[search] no results for "${query.slice(0, 80)}"${failing ? `; failing engines: ${failing}` : ''}`);
-    throw new Error(`SearXNG returned no results${failing ? ` (failing engines: ${failing})` : ''}`);
+  return res.json();
+}
+
+const failingEngines = (data) => (data.unresponsive_engines || []).map(([name, why]) => `${name}: ${why}`).join(', ');
+
+async function searxngSearch(query, count, config, { engines = WEB_ENGINES, categories } = {}) {
+  const errors = [];
+  for (const engine of engines) {
+    try {
+      const data = await searxngQuery(query, { engines: engine, categories }, config);
+      const results = (data.results || [])
+        .filter((r) => r.url)
+        .slice(0, count)
+        .map((r) => ({ title: stripHtml(r.title || r.url), url: r.url, snippet: stripHtml(r.content || '') }));
+      if (results.length) return results;
+      // Name why the engine failed (blocked, CAPTCHA, timeout), so "no results"
+      // says why in the logs and to the model.
+      errors.push(`${engine}: ${failingEngines(data) || 'no results'}`);
+    } catch (err) {
+      errors.push(`${engine}: ${err.message}`);
+    }
   }
-  return results;
+  console.warn(`[search] no results for "${query.slice(0, 80)}"; ${errors.join('; ')}`);
+  throw new Error(`SearXNG returned no results (${errors.join('; ')})`);
 }
 
 // --- Tools --------------------------------------------------------------
@@ -144,21 +209,38 @@ export async function searchResults(query, count, config) {
   return store(key, await searxngSearch(query, count, config)).slice(0, count);
 }
 
+// URLs are wrapped in <> — Discord's embed-suppression syntax. Keep them
+// wrapped when citing links in replies.
+const formatResults = (results) =>
+  results.map((r, i) => `${i + 1}. ${r.title}\n<${r.url}>${r.snippet ? `\n${r.snippet}` : ''}`).join('\n\n');
+
 export async function webSearch({ query, count }, invocation) {
   const n = clampCount(count, 5, 8);
-  let results;
   try {
-    results = await searchResults(query, n, invocation.config);
+    return formatResults(await searchResults(query, n, invocation.config));
   } catch (err) {
     return `No web results for "${query}" (${err.message}).`;
   }
-
-  // URLs are wrapped in <> — Discord's embed-suppression syntax. Keep them
-  // wrapped when citing links in replies.
-  return results
-    .map((r, i) => `${i + 1}. ${r.title}\n<${r.url}>${r.snippet ? `\n${r.snippet}` : ''}`)
-    .join('\n\n');
 }
+
+// Single-engine searches: video, news and wiki each have one dedicated engine.
+async function kindSearch(kind, engine, categories, dflt, { query, count }, invocation) {
+  const n = clampCount(count, dflt, 8);
+  const key = `${kind}:${query}`;
+  let results = cached(key);
+  if (!results) {
+    try {
+      results = store(key, await searxngSearch(query, 8, invocation.config, { engines: [engine], categories }));
+    } catch (err) {
+      return `No ${kind} results for "${query}" (${err.message}).`;
+    }
+  }
+  return formatResults(results.slice(0, n));
+}
+
+export const videoSearch = (args, invocation) => kindSearch('video', VIDEO_ENGINE, 'videos', 5, args, invocation);
+export const newsSearch = (args, invocation) => kindSearch('news', NEWS_ENGINE, 'news', 5, args, invocation);
+export const wikiSearch = (args, invocation) => kindSearch('wiki', WIKI_ENGINE, 'general', 3, args, invocation);
 
 // Structured page fetch: returns { title, url, content } or throws with a
 // human-readable reason. webFetch renders this; research consumes it directly.
@@ -206,10 +288,7 @@ const googleHeaders = {
 };
 
 async function searxngImages(query, config) {
-  const url = `${config.searxngUrl}/search?q=${encodeURIComponent(query)}&format=json&categories=images&engines=google_images&safesearch=1`;
-  const res = await fetchWithRetry(url, { headers: googleHeaders }, { retries: 1, timeoutMs: 20000 });
-  if (!res.ok) throw new Error(`SearXNG HTTP ${res.status}`);
-  const data = await res.json();
+  const data = await searxngQuery(query, { engines: IMAGE_ENGINE, categories: 'images' }, config, googleHeaders);
   const raw = (data.results || []).filter((r) => r.img_src);
   if (!raw.length) throw new Error('SearXNG: no images');
 

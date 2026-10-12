@@ -10,6 +10,7 @@ export const GITHUB_MCP_READONLY_URL = 'https://api.githubcopilot.com/mcp/readon
 // shadow ours in the executor lookup and silently break a working tool.
 const RESERVED = new Set([
   'get_user_id', 'get_message_sender', 'react', 'create_poll', 'send_card', 'web_search', 'web_fetch', 'image_search',
+  'video_search', 'news_search', 'wiki_search',
   'github', 'set_rule', 'self_fix', 'play_music',
   'fetch_history', 'index_chat', 'how_i_work', 'search_notes',
 ]);

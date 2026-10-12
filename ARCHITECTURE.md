@@ -88,7 +88,7 @@ Bars follow which mistake costs more: the gate is tight because butting in is wo
 | `server_info` | Read-only server overview, channels, roles, events, members, emojis, threads (hidden channels left out) |
 | `react` | React with one or more emoji |
 | `create_poll` / `send_card` | Post a poll / an embed card with buttons and dropdown |
-| `web_search` / `web_fetch` / `image_search` | SearXNG search; read a public page; up to 3 images |
+| `web_search` / `web_fetch` / `image_search` / `video_search` / `news_search` / `wiki_search` | SearXNG: web search (bing, falling back to yahoo then mojeek); read a public page; up to 3 images (google images); one dedicated engine each for videos (youtube), news (bing news), wiki (wikipedia) |
 | `fetch_history` / `index_chat` | Read or search older messages |
 | `search_notes` | Find saved notes |
 | `how_i_work` | Read this file |
@@ -99,7 +99,7 @@ Bars follow which mistake costs more: the gate is tight because butting in is wo
 
 "Oscar only" is checked in code against the sender's Discord user id.
 
-Slash commands: music (`/play /skip /pause /resume /stop /queue`), skills (`/research /web_search /web_fetch /image_search /create_poll /create_card`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private`).
+Slash commands: music (`/play /skip /pause /resume /stop /queue`), skills (`/research /web_search /web_fetch /image_search /video_search /news_search /wiki_search /create_poll /create_card`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private`).
 
 ## Deep research
 
