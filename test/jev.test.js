@@ -85,6 +85,36 @@ test('the gate is sampled, but never picks up what Jev is sure is not for Panda'
   assert.equal(await at({ for_assistant: { noul: 0.29 } }, 0), false, 'below the floor is always no');
 });
 
+test('the gate only samples what Jev leans yes on, from 0.5 up', async () => {
+  for (const p of [0.3, 0.4, 0.49]) assert.equal(await at({ for_assistant: { noul: p } }, 0), false, `a ${p} maybe is no longer picked up`);
+  assert.equal(await at({ for_assistant: { noul: 0.5 } }, 0.49), 'talk', 'at the floor it is sampled');
+  assert.equal(await at({ for_assistant: { noul: 0.5 } }, 0.5), false, 'and not always yes');
+  assert.equal(await at({ for_assistant: { noul: 0.9 } }, 0.85), 'talk', 'a clear yes is almost always answered');
+});
+
+test('a ping or a reply to Panda is answered even when the gate would say no', async () => {
+  const answered = [];
+  const channel = { sendTyping: async () => {}, send: async () => ({}), messages: { fetch: async () => new Map() } };
+  const handler = createMessageHandler({
+    client: { user: { id: 'bot' } },
+    config,
+    player: null,
+    privateMode: { isOn: () => false },
+    runAgentImpl: async (invocation) => (answered.push(invocation.message.content), ''),
+    decideImpl: jev({ for_assistant: { noul: 0 }, addressed: { noul: 0 }, follows_up: { noul: 0 } }),
+  });
+  const base = (id, content, extra) => ({
+    ...msg(id, 'a', content), channelId: `c${id}`, channel, guild: { id: 'g' }, attachments: new Map(), embeds: [],
+    react: async () => {}, reply: async () => ({}), mentions: { users: new Map() }, ...extra,
+  });
+  await handler(base('1', '<@bot> hi', { mentions: { users: new Map([['bot', {}]]) } }));
+  await handler(base('2', 'same', { reference: { messageId: '0' }, fetchReference: async () => ({ author: { id: 'bot' } }) }));
+  await handler(base('3', 'whatever'));
+  for (let i = 0; i < 60 && answered.length < 2; i++) await new Promise((r) => setTimeout(r, 100));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual(answered.sort(), ['<@bot> hi', 'same']);
+});
+
 test('bots are judged exactly like people, reactions included', async () => {
   const bot = { ...msg('7', 'b', 'hm'), author: { id: 'b', username: 'b', bot: true } };
   assert.equal(await forPanda(bot, [], 'bot', config, jev({ for_assistant: { noul: 0.6 } }), () => 0.5), 'talk');
