@@ -178,6 +178,8 @@ export function clickAsMessage(interaction) {
     reference: { messageId: card.id },
     fetchReference: async () => card,
     react: (emoji) => card.react(emoji),
+    // The card's own reactions, so a click never adds a second one from Panda (reactions.js).
+    reactions: card.reactions,
     reply: (payload) => interaction.followUp(payload),
   };
 }

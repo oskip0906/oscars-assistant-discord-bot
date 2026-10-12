@@ -33,7 +33,7 @@ const reactCall = (...emojis) => ({
 test('reaction only: one call that may only react, and the turn ends before it can add "Got it"', async () => {
   const { text, calls, reactions } = await turn({ respond_with: sure('reaction') }, [reactCall('🎲', '🔥'), { content: 'Got it' }]);
   assert.equal(text, '');
-  assert.deepEqual(reactions, ['🎲', '🔥'], 'reactions keep their order');
+  assert.deepEqual(reactions, ['🎲'], 'at most one reaction per message: the first one asked for');
   assert.deepEqual(calls, [{ tools: ['react'], toolChoice: 'required' }]);
 });
 

@@ -3,6 +3,7 @@ import { buildSystemPrompt, myNames } from './systemPrompt.js';
 import { toolDefs, executeTool, OWNER_ONLY_TOOLS } from './tools/index.js';
 import { decide, sampleChoice } from './jev.js';
 import { redactSecrets } from '../config.js';
+import { reactOnce } from '../discord/reactions.js';
 
 const TOOL_RESULT_CAP = 12000;
 const PICK_THRESHOLD = 0.8;
@@ -80,7 +81,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   log(contextKey, `triage: signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'} mood=${plan.mood ?? '?'} lookup=${plan.needsContext}`);
   // A goodbye gets a wave and nothing else, so the conversation can end.
   if (plan.signOff) {
-    await invocation.message.react('👋').then(() => (invocation.reacted = true), () => {});
+    if (await reactOnce(invocation.message, '👋')) invocation.reacted = true;
     return '';
   }
   const locked = plan.tools.find((name) => OWNER_ONLY_TOOLS.has(name));
@@ -104,7 +105,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   const picked = new Set(reacts ? [...plan.tools, 'react'] : plan.tools);
   const offered = allTools.filter((t) => picked.has(t.function.name));
   const reactNote = reacts
-    ? ` React with 1–2 emoji that fit the mood and vary them: for example ${moodEmoji(plan.mood, random).join(' ')}, or any better fit (not always the same one).`
+    ? ` React with exactly one emoji that fits the mood, and vary it: for example one of ${moodEmoji(plan.mood, random).join(' ')}, or any better fit (not always the same one). Only your first reaction is added.`
     : '';
   const lookupNote = plan.needsContext
     ? ' `message` refers to something the recent messages do not explain: call fetch_history with a `query` list of its key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) to find what was said about it, rather than guessing.'
@@ -133,7 +134,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     }
     messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: calls });
     (invocation.toolsUsed ??= []).push(...calls.map((c) => c.function.name));
-    // Everything runs at once, except reactions, which keep their order (they can spell a word).
+    // Everything runs at once, except reactions, which keep their order: only the first one lands (reactOnce).
     let reactions = Promise.resolve();
     const run = (call) => runTool(call, invocation, contextKey);
     messages.push(...(await Promise.all(calls.map((call) => (call.function.name === 'react' ? (reactions = reactions.then(() => run(call))) : run(call))))));
