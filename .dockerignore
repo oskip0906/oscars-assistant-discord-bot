@@ -9,5 +9,6 @@ test
 docs
 *.md
 !ARCHITECTURE.md
+!RULES.md
 .DS_Store
 npm-debug.log*

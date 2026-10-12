@@ -32,6 +32,8 @@ All behavior text lives in the database table `prompts` (`src/agent/prompts.js`)
 
 **`set_rule`** (tool and `/set_rule`, Oscar only): the development model rewrites `soul.md` with the instruction applied, the old one is saved to `history/`, and it applies from the next message.
 
+**Rules (`RULES.md`).** Oscar's standing rules ("remember…", "never answer X", "be meaner", "answer everything with a joke") live in `RULES.md` at the repo root (`RULES_FILE` moves it, e.g. under `data/` in Docker so it survives redeploys), one `- ` line each under `## Rules`. `add_rule` appends one and `remove_rule` deletes one by its number or text (both Oscar only, `src/agent/rulesFile.js`); writes are serialized and atomic. The system prompt reads the file on every turn and lists the rules, numbered, above `identity.md` and `soul.md`, so a change applies from the next message. A rule to stay silent is followed by answering `[NO REPLY]`, which sends nothing at all, not even the sign-off wave.
+
 ## Memory: context, notes and reminders
 
 Everything is stored in one PMS Postgres database (`DATABASE_URL`). `src/db.js` applies `src/schema.sql` at boot. Without it, chat works but there are no prompts, context, notes or reminders, and private mode starts OFF and can't be toggled.
@@ -82,6 +84,8 @@ Jev decides; the conversation model writes. The model never chooses whether to a
 
 Bars follow which mistake costs more: the gate talks only when Jev is fairly sure, because butting into chatter is worse than missing a chance, but reacts more freely, since an emoji costs nobody anything; tools are loose because an extra tool is cheap; folders are wide so near-miss filing is still found; research drops a claim only when Jev is fairly sure its quote doesn't support it.
 
+**Threads** are channels of their own to the message handler: Panda reads and answers in them, people and bots alike, exactly as in a channel. It joins every new thread (`ThreadCreate`) and the active ones at boot (`src/discord/threads.js`), since Discord only delivers a thread's messages reliably to its members, and the system prompt names the thread and its parent channel.
+
 **Privacy:** the gate means Jev sees every server message Panda can read, with the 2 before it. `JEV_ENABLED=false` stops that.
 
 ## Tools
@@ -90,6 +94,7 @@ Bars follow which mistake costs more: the gate talks only when Jev is fairly sur
 |------|--------------|
 | `get_user_id` / `get_message_sender` | Find a member's id; who sent a message |
 | `server_info` | Read-only server overview, channels, roles, events, members, emojis, threads (hidden channels left out) |
+| `create_thread` / `send_to_thread` | Open a thread (in this channel, another one, a forum, or off the message being answered; optionally private) and post a message in it / post in an existing thread (**Oscar only**) |
 | `react` | React with one emoji (at most one Panda reaction per message, `src/discord/reactions.js`) |
 | `create_poll` / `send_card` | Post a poll / an embed card with buttons and dropdown |
 | `web_search` / `web_fetch` / `image_search` / `video_search` / `news_search` / `wiki_search` | SearXNG: web search (bing, falling back to yahoo then mojeek); read a public page; up to 3 images (google images); one dedicated engine each for videos (youtube), news (bing news), wiki (wikipedia) |
@@ -104,7 +109,8 @@ Bars follow which mistake costs more: the gate talks only when Jev is fairly sur
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |
 | GitHub MCP tools | Every GitHub read (**Oscar only**) |
 | `github` | GitHub REST writes only (**Oscar only**) |
-| `self_fix` / `set_rule` | Change Panda's code / personality (**Oscar only**) |
+| `self_fix` / `set_rule` | Change Panda's code / rewrite `soul.md` (**Oscar only**) |
+| `add_rule` / `remove_rule` | Add / remove one of Oscar's standing rules in `RULES.md` (**Oscar only**) |
 | `set_model` / `private_mode` | Switch the model / private mode, as `/set_model` and `/private` (**Oscar only**) |
 
 "Oscar only" is checked in code against the sender's Discord user id.

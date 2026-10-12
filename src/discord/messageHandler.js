@@ -329,10 +329,11 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         }
 
         // Filler ("", "🐼 …") is never sent. If nothing else answered the turn
-        // (no reaction, poll or card), Panda signs off: a wave, no message.
+        // (no reaction, poll or card), Panda signs off: a wave, no message,
+        // unless one of Oscar's rules told it to stay silent (invocation.silent).
         if (isFiller(replyText)) {
           replyText = '';
-          if (!invocation.reacted && !invocation.posted) await signOff(invocation);
+          if (!invocation.reacted && !invocation.posted && !invocation.silent) await signOff(invocation);
         }
 
         const sent = [];
