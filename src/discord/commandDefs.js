@@ -7,7 +7,7 @@ import { SlashCommandBuilder } from 'discord.js';
 // from commands.js, which imports the agent, so the agent can import this.
 
 // Commands only Oscar can run, checked against the authenticated user id.
-export const OWNER_ONLY_COMMANDS = new Set(['set_model', 'self_fix', 'private', 'set_rule', 'index_channel']);
+export const OWNER_ONLY_COMMANDS = new Set(['set_model', 'self_fix', 'private', 'set_rule', 'index_channel', 'clear']);
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -155,5 +155,9 @@ export const commandDefs = [
     .addStringOption((o) => o.setName('fields').setDescription('Fields as name: value pairs separated by | (e.g. "A: 1 | B: 2")'))
     .addStringOption((o) => o.setName('buttons').setDescription('Button labels separated by | (e.g. "Yes | No"), up to 5'))
     .addStringOption((o) => o.setName('menu').setDescription('Dropdown choices separated by | (e.g. "Red | Green | Blue"), 2 to 25')),
+  new SlashCommandBuilder()
+    .setName('clear')
+    .setDescription('Delete recent messages in this channel, or all of them (owner only)')
+    .addStringOption((o) => o.setName('amount').setDescription('How many of the newest messages to delete, or "all" for the whole channel').setRequired(true)),
   new SlashCommandBuilder().setName('index_channel').setDescription("Owner only: save this channel's whole history into Panda's context"),
 ].map((b) => b.toJSON());

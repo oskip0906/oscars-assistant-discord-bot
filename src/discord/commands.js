@@ -23,6 +23,7 @@ import { NOTES_PREFIX, noteMessage, folderView, deleteNoteConfirm } from './note
 import { addReminder, activeReminders, reminderChoices, deleteReminder, timezoneChoices, repeatText } from '../reminders.js';
 import { remindersEmbed } from './reminders.js';
 import { indexChannel, INDEX_OWNER_ID } from './indexChannel.js';
+import { parseClearAmount, missingClearPermissions, clearChannel } from './clear.js';
 import { STORAGE_PREFIX, cleanup, dismiss, SECTIONS, mb } from '../storage.js';
 
 export { commandDefs };
@@ -329,6 +330,46 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           config,
         });
         return await interaction.editReply({ content: result.summary, allowedMentions: { parse: [] } });
+      }
+
+      if (name === 'clear') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Only Oscar can use this', flags: MessageFlags.Ephemeral });
+        }
+        const amount = parseClearAmount(interaction.options.getString('amount', true));
+        if (amount.error) return await interaction.reply({ content: `⚠️ ${amount.error}`, flags: MessageFlags.Ephemeral });
+        const missing = missingClearPermissions(interaction.channel);
+        if (!interaction.channel?.messages || missing === null) {
+          return await interaction.reply({ content: '🚫 I can’t clear messages here: I can only delete messages in a server channel.', flags: MessageFlags.Ephemeral });
+        }
+        if (missing.length) {
+          return await interaction.reply({
+            content: `🚫 I can’t clear messages here: I don’t have the ${missing.map((p) => `**${p}**`).join(', ')} permission${missing.length > 1 ? 's' : ''} in this channel.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+        const what = amount.all ? 'every message in this channel' : `the newest ${amount.count} message${amount.count > 1 ? 's' : ''}`;
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        let lastEdit = 0;
+        try {
+          const done = await clearChannel(interaction.channel, {
+            limit: amount.all ? Infinity : amount.count,
+            onProgress: async ({ deleted }) => {
+              if (Date.now() - lastEdit < 5000) return;
+              lastEdit = Date.now();
+              await interaction.editReply(`🧹 Clearing ${what}… ${deleted} deleted so far.`).catch(() => {});
+            },
+          });
+          return await interaction
+            .editReply(
+              `🧹 Deleted **${done.deleted}** message${done.deleted === 1 ? '' : 's'}.` +
+                (done.failed ? ` **${done.failed}** couldn’t be deleted (Discord doesn’t allow it for some system messages).` : ''),
+            )
+            .catch(() => {});
+        } catch (err) {
+          const why = err?.code === 50013 ? 'I don’t have permission to delete messages here.' : redactSecrets(err.message).slice(0, 200);
+          return await interaction.editReply(`🚫 I can’t clear messages here: ${why}`).catch(() => {});
+        }
       }
 
       // --- Tool slash commands (work in servers and DMs) ---------------

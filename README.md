@@ -6,7 +6,7 @@
 
 ## Commands
 
-The same groups as `/menu`. Everything also works by just asking in chat, except `/index_channel`; the Power Tools only for Oscar.
+The same groups as `/menu`. Everything also works by just asking in chat, except `/index_channel` and `/clear`; the Power Tools only for Oscar.
 
 **🎵 Music**
 | Command | What it does |
@@ -52,6 +52,7 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 | `/set_model <model> [provider]` | Switch the conversation model (OpenRouter), optionally pinned to one provider; saved in the database |
 | `/set_rule <instruction>` | Change Panda's personality or behavior for good |
 | `/private on\|off\|status` | Only respond to Oscar. Saved in the database (db-1 `pms` table), so it survives restarts; Panda's status shows whether it is ON or OFF |
+| `/clear <number\|all>` | Delete the newest messages in the channel, or `all` of them. Needs Panda to have **Manage Messages** (plus View Channel and Read Message History) there; otherwise it says it can't |
 
 **📖 Info**
 | Command | What it does |
