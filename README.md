@@ -49,7 +49,7 @@ The same groups as `/menu`. Everything except the Power Tools also works by just
 | Command | What it does |
 |---------|--------------|
 | `/self_fix <instruction>` | Approve a sandboxed self-fix PR, then restart after it merges |
-| `/set_model <model>` | Switch the conversation model (OpenRouter); saved in the database |
+| `/set_model <model> [provider]` | Switch the conversation model (OpenRouter), optionally pinned to one provider; saved in the database |
 | `/set_rule <instruction>` | Change Panda's personality or behavior for good |
 | `/private on\|off\|status` | Only respond to Oscar |
 

@@ -5,7 +5,7 @@ import { selfFixState } from '../../selfFixState.js';
 import { startDevRunLog } from '../../devRunLog.js';
 import { ApprovalCard } from '../../discord/approvalCard.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
-import { chatCompletion } from '../openrouter.js';
+import { chatCompletion, providerFor } from '../openrouter.js';
 
 export const approvalCard = new ApprovalCard(config.dataDir);
 
@@ -98,7 +98,7 @@ export async function requestDevelopmentApproval({ instruction, invocation, stat
 
 // Oscar's request is often a one-liner, and Claude Code sees nothing but the
 // prompt, so the chat model expands it into a full brief that Oscar approves.
-async function writeClaudeCodePrompt(instruction, { apiKey, model }) {
+async function writeClaudeCodePrompt(instruction, { apiKey, model, provider }) {
   const messages = [
     {
       role: 'system',
@@ -114,7 +114,7 @@ Do not invent file names, functions or facts you were not given; tell Claude Cod
     },
     { role: 'user', content: `Oscar's request: ${instruction}` },
   ];
-  const msg = await chatCompletion({ apiKey, model, messages });
+  const msg = await chatCompletion({ apiKey, model, provider, messages });
   const text = msg?.content?.trim();
   if (!text) throw new Error('empty response');
   return text.slice(0, 4000);
@@ -122,7 +122,7 @@ Do not invent file names, functions or facts you were not given; tell Claude Cod
 
 // Ask the model to turn a raw instruction into a clean commit title and
 // description, with the conversation model.
-async function generateCommitMessage(instruction, { apiKey, model }) {
+async function generateCommitMessage(instruction, { apiKey, model, provider }) {
   const messages = [
     {
       role: 'system',
@@ -135,7 +135,7 @@ Return ONLY the JSON object, no other text.`,
     },
     { role: 'user', content: `Instruction: ${instruction}` },
   ];
-  const msg = await chatCompletion({ apiKey, model, messages });
+  const msg = await chatCompletion({ apiKey, model, provider, messages });
   const text = msg?.content?.trim();
   if (!text) throw new Error('empty response');
   // Strip markdown fences if present.
@@ -175,7 +175,7 @@ export async function selfFix(
 
   let prompt = instruction;
   try {
-    prompt = await writeClaudeCodePrompt(instruction, { apiKey: config.openrouterApiKey, model: config.model });
+    prompt = await writeClaudeCodePrompt(instruction, { apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model) });
   } catch (err) {
     // The card then shows Oscar's own words, so he still approves exactly what runs.
     console.error('[self_fix] prompt generation failed, using the instruction as is:', err.message);
@@ -199,7 +199,7 @@ export async function selfFix(
   // it. The workflow commits; Claude's own summary becomes the commit body.
   let commitTitle = null;
   try {
-    commitTitle = (await generateCommitMessage(instruction, { apiKey: config.openrouterApiKey, model: config.model })).title;
+    commitTitle = (await generateCommitMessage(instruction, { apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model) })).title;
   } catch (err) {
     // Model call failed; runDevelopmentSandbox falls back to an automatic title.
     console.error('[self_fix] commit message generation failed, using the automatic title:', err.message);

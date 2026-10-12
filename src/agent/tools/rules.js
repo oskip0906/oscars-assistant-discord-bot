@@ -1,4 +1,4 @@
-import { chatCompletion } from '../openrouter.js';
+import { chatCompletion, providerFor } from '../openrouter.js';
 import { loadPrompt, writePrompt } from '../prompts.js';
 
 export const defs = [
@@ -46,6 +46,7 @@ export async function setRule({ instruction = '' } = {}, invocation, { chat = ch
     const msg = await chat({
       apiKey: config.openrouterApiKey,
       model,
+      provider: providerFor(config, model),
       messages: [
         { role: 'system', content: REWRITE },
         { role: 'user', content: `--- identity.md ---\n${identity}\n\n--- current soul.md ---\n${current}\n\n--- instruction ---\n${ask}` },

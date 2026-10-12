@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chatCompletion } from '../src/agent/openrouter.js';
+import { chatCompletion, providerFor } from '../src/agent/openrouter.js';
 
 const answer = (content) => new Response(JSON.stringify({ choices: [{ message: { content } }] }));
 // Never settles unless the caller gives up on it — a provider that went silent.
@@ -43,4 +43,41 @@ test('a real API error still fails at once, since retrying it can never work', a
     () => assert.rejects(chatCompletion({ apiKey: 'k', model: 'm', messages: [] }), /No such model/),
   );
   assert.equal(calls, 1);
+});
+
+// The JSON body of one chatCompletion call.
+async function sentBody(args) {
+  let body;
+  await withFetch(
+    (_url, init) => ((body = JSON.parse(init.body)), Promise.resolve(answer('ok'))),
+    () => chatCompletion({ apiKey: 'k', messages: [], ...args }),
+  );
+  return body;
+}
+
+test('a set provider is sent as a pinned provider preference, with the model id unchanged', async () => {
+  const body = await sentBody({ model: 'a/m', provider: ' deepinfra ' });
+  assert.equal(body.model, 'a/m');
+  assert.deepEqual(body.provider, { order: ['deepinfra'], allow_fallbacks: false });
+});
+
+test('a missing, empty or whitespace provider sends no provider field at all', async () => {
+  for (const provider of [undefined, null, '', '   ']) {
+    const body = await sentBody({ model: 'a/m', provider });
+    assert.equal(body.model, 'a/m');
+    assert.equal('provider' in body, false, `provider ${JSON.stringify(provider)}`);
+  }
+});
+
+test('providerFor resolves each model on its own, and legacy configs have none', async () => {
+  const config = { model: 'a/one', modelProviders: { 'a/one': 'together', 'c/three': ' ' } };
+  assert.equal(providerFor(config, 'a/one'), 'together');
+  assert.equal(providerFor(config, 'b/two'), '');
+  assert.equal(providerFor(config, 'c/three'), '');
+  assert.equal(providerFor({ model: 'a/one' }, 'a/one'), '', 'legacy config without modelProviders');
+
+  const pinned = await sentBody({ model: 'a/one', provider: providerFor(config, 'a/one') });
+  const plain = await sentBody({ model: 'b/two', provider: providerFor(config, 'b/two') });
+  assert.deepEqual(pinned.provider.order, ['together']);
+  assert.equal('provider' in plain, false);
 });

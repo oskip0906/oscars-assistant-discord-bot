@@ -1,4 +1,4 @@
-import { chatCompletion } from './openrouter.js';
+import { chatCompletion, providerFor } from './openrouter.js';
 import { buildSystemPrompt } from './systemPrompt.js';
 import { toolDefs, executeTool, OWNER_ONLY_TOOLS } from './tools/index.js';
 import { decide } from './jev.js';
@@ -56,7 +56,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   let step = 0;
   const ask = async (msgs, tools, toolChoice) => {
     const callStart = Date.now();
-    const msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, messages: msgs, tools, toolChoice });
+    const msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model), messages: msgs, tools, toolChoice });
     log(contextKey, `model #${++step} ${Date.now() - callStart}ms → ${
       msg.tool_calls?.length ? `tools: ${msg.tool_calls.map((c) => c.function.name).join(', ')}` : `text (${(msg.content || '').length} chars)`
     }`);
