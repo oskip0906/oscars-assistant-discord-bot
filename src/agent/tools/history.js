@@ -1,5 +1,5 @@
 import { PermissionFlagsBits } from 'discord.js';
-import { searchContext, formatContext, saveContext, pickRelevant, relevantTo } from '../historyStore.js';
+import { searchContext, formatContext, saveContext } from '../historyStore.js';
 import { formatEnvelope } from '../../discord/envelope.js';
 import { configured } from '../../db.js';
 import { indexChannel } from '../../discord/indexChannel.js';
@@ -11,8 +11,6 @@ const MAX_SKIP = 500;
 // these caps only bound one turn; the next miss carries on.
 const INDEX_MAX = 20_000;
 const INDEX_MS = 60_000;
-const CANDIDATES = 100; // keyword hits Jev reads per search
-const SHOWN = 40; // most lines a search hands the model
 const AROUND = 100; // Discord's most: about 50 before and 50 after
 const MESSAGE_LINK = /discord(?:app)?\.com\/channels\/(\d+|@me)\/(\d+)\/(\d+)/;
 
@@ -22,7 +20,7 @@ export const defs = [
     function: {
       name: 'fetch_history',
       description:
-        'Get more context than the few messages you were shown. Two modes. (1) No `query` and no `author`: read a range of this channel straight from Discord, newest-first counting back from the message you are answering — `count` messages after skipping the `skip` most recent. Use it whenever the shown messages are not enough to follow the conversation ("as I said", "that one", a thread that started earlier, your own earlier replies). E.g. {count: 30} for the run-up, then {skip: 30, count: 50} to go further back. (2) `query` and/or `author`: search what you remember from earlier chats in this channel ("what did we decide", "remember when", "what did X say about Y"), keeping only the lines that answer it; when none do, the whole channel is saved into memory and searched again. To find what a person said, put their name in `author`, not in `query`: `query` only searches message text. Results are oldest first.',
+        'Get more context than the few messages you were shown. Two modes. (1) No `query` and no `author`: read a range of this channel straight from Discord, newest-first counting back from the message you are answering — `count` messages after skipping the `skip` most recent. Use it whenever the shown messages are not enough to follow the conversation ("as I said", "that one", a thread that started earlier, your own earlier replies). E.g. {count: 30} for the run-up, then {skip: 30, count: 50} to go further back. (2) `query` and/or `author`: search everything saved from this channel ("what did we decide", "remember when", "what did X say about Y"). It returns every saved message that contains ANY of the `query` words or phrases and, when `author` is given, was sent by ANY of those people, so cast a wide net: several words, synonyms and phrases. If nothing saved matches, the whole channel is saved and searched again. Results are oldest first.',
       parameters: {
         type: 'object',
         properties: {
@@ -35,12 +33,14 @@ export const defs = [
             description: `Range mode: how many of the most recent messages to skip first (default 0, max ${MAX_SKIP}). Use it to page further back.`,
           },
           query: {
-            type: 'string',
-            description: 'Search mode: keywords to search for, e.g. "trip budget".',
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Search mode: words and phrases, any of which may match, e.g. ["trip", "budget", "lake house", "airbnb"].',
           },
           author: {
-            type: 'string',
-            description: 'Search mode: only match messages sent by this person (their display name, a <@mention>, or their id), e.g. "DerpZ". Combine with query for "what did X say about Y".',
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Search mode: only messages sent by any of these people (display name, <@mention> or id), e.g. ["DerpZ", "Rice Farmer"]. Leave out to search everyone.',
           },
         },
       },
@@ -95,11 +95,17 @@ async function authorId(author, guild) {
 }
 
 // Never fails the turn: no match or a broken lookup both tell the model to go on without it.
-export async function fetchHistory({ query = '', author = '', skip, count } = {}, invocation) {
+// A list from the model, which may also send one string.
+const list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 20);
+
+// Never fails the turn: no match or a broken lookup both tell the model to go on without it.
+export async function fetchHistory({ query, author, skip, count } = {}, invocation) {
   const message = invocation.message;
   if (!message) return 'Stored history is only available in chat — answer without it.';
+  const terms = list(query);
+  const authors = list(author);
   try {
-    if (!query && !author) {
+    if (!terms.length && !authors.length) {
       const range = { skip: clamp(skip, 0, MAX_SKIP), count: clamp(count, 30, MAX_COUNT) || 1 };
       const msgs = await readChannelRange(message.channel, message.id, range);
       if (!msgs.length) return 'No earlier messages in this channel.';
@@ -112,30 +118,36 @@ export async function fetchHistory({ query = '', author = '', skip, count } = {}
     }
     const config = invocation.config;
     if (!configured(config)) return 'Stored history is unavailable right now — answer without it.';
-    const id = author ? await authorId(author, message.guild) : null;
-    if (author && !id) return `I can't find anyone called "${author}" in this server — ask who they mean instead of guessing.`;
-    const users = invocation.client?.users?.cache;
-    // Keyword hits are only candidates: Jev keeps the lines that answer the
-    // question, so the model gets the part it needs and nothing more. With Jev
-    // down the keyword hits are the best there is.
-    const search = async () => {
-      const rows = await searchContext(config, { query, authorId: id, channelId: message.channelId, limit: CANDIDATES });
-      if (!query || !rows.length) return rows.slice(-SHOWN);
-      const lines = rows.map((r) => ({ ...r, author: { id: r.author_id, username: users?.get(r.author_id)?.username || r.author_id } }));
-      return (await pickRelevant(config, lines, relevantTo, query, undefined, () => true)).slice(-SHOWN);
-    };
+    const resolved = await Promise.all(authors.map(async (name) => [name, await authorId(name, message.guild)]));
+    const authorIds = resolved.filter(([, id]) => id).map(([, id]) => id);
+    const unknown = resolved.filter(([, id]) => !id).map(([name]) => name);
+    if (authors.length && !authorIds.length) return `I can't find anyone called ${unknown.map((n) => `"${n}"`).join(' or ')} in this server — ask who they mean instead of guessing.`;
+    const searched = [
+      terms.length ? `any of ${terms.map((t) => `"${t}"`).join(', ')}` : '',
+      authorIds.length ? `from ${authorIds.map((id) => `<@${id}>`).join(' or ')}` : '',
+      unknown.length ? `(no one here is called ${unknown.map((n) => `"${n}"`).join(', ')})` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const search = () => searchContext(config, { terms, authorIds, channelId: message.channelId });
     let rows = await search();
-    let note = '';
+    let partial = false;
     if (!rows.length && message.channel?.messages) {
-      // Not in memory: save the whole channel, then search again.
+      // Not saved yet: save the whole channel, then search again.
       const done = await indexChannel(config, message.channel, { max: INDEX_MAX, ms: INDEX_MS }).catch((err) => {
         console.error('[history] channel index failed:', String(err.message || err).slice(0, 200));
         return null;
       });
       if (done) rows = await search();
-      if (done?.capped) note = `\n(Only part of this channel's history is saved so far; older messages get added on the next search.)`;
+      partial = !done || done.capped;
     }
-    return rows.length ? formatContext(rows, (uid) => users?.get(uid)?.username) + note : `No earlier conversations matched — answer without them, and don't guess what was said.${note}`;
+    if (!rows.length) {
+      return `[STORED CONTEXT — no message in this channel matched ${searched}. ${
+        partial ? 'Only part of the channel is saved so far; the next search saves more.' : 'The whole channel was searched.'
+      } Say you couldn't find it; don't guess what was said.]`;
+    }
+    const users = invocation.client?.users?.cache;
+    return formatContext(rows, (uid) => users?.get(uid)?.username, { searched });
   } catch (err) {
     console.error('[history] fetch failed:', String(err.message || err).slice(0, 200));
     return 'Stored history is unavailable right now — answer without it.';

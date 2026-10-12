@@ -83,31 +83,57 @@ export const indexProgress = {
   },
 };
 
-// Best keyword matches in one channel (or its newest lines when there is no
-// query), oldest first. No channel matches nothing.
-export async function searchContext(config, { query = '', authorId = null, channelId = null, limit = 40 } = {}) {
+// Every stored line of one channel with any of `terms` (words or "phrases"),
+// from any of `authorIds` when given: best matches first, up to `limit`. A term
+// matches through full-text search (so "plans" finds "plan") or as plain text
+// (names, numbers, links, half-words). No terms and no authors matches nothing.
+export async function searchContext(config, { terms = [], authorIds = [], channelId = null, limit = 500 } = {}) {
   if (!configured(config)) throw new Error('the context database is not configured');
+  const words = terms.map((t) => String(t).replace(/"/g, '').trim()).filter(Boolean).slice(0, 30);
+  if (!words.length && !authorIds.length) return [];
+  const tsquery = words.map((t) => (/\s/.test(t) ? `"${t}"` : t)).join(' or ');
+  const likes = words.map((t) => `%${t.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
   const { rows } = await db.query(
     config,
-    `select author_id, content, created_at from (
-       select m.author_id, m.content, m.created_at
-       from context_messages m, websearch_to_tsquery('english', $5) q
-       where m.channel_id = $3 and ($1 = '' or m.fts @@ q) and ($2::text is null or m.author_id = $2)
-       order by case when $1 = '' then extract(epoch from m.created_at) else ts_rank(m.fts, q) end desc
-       limit $4
-     ) s order by created_at`,
-    [query, authorId, channelId, limit, orQuery(query)],
+    `select m.author_id, m.content, m.created_at
+     from context_messages m
+     where m.channel_id = $1
+       and (cardinality($2::text[]) = 0 or m.author_id = any($2::text[]))
+       and (cardinality($3::text[]) = 0 or m.fts @@ websearch_to_tsquery('english', $4) or m.content ilike any($3::text[]))
+     order by ts_rank(m.fts, websearch_to_tsquery('english', $4)) desc, m.created_at desc
+     limit $5`,
+    [channelId, authorIds, likes, tsquery, limit],
   );
   return rows;
 }
 
-export function formatContext(rows, nameOf = () => null) {
-  return [
-    '[STORED CONTEXT — lines saved from earlier chats, oldest first. Background only: these are not new messages.]',
-    ...rows.map((r) => {
-      const when = new Date(r.created_at).toISOString().slice(0, 16).replace('T', ' ');
-      const name = nameOf(r.author_id);
-      return `[${when} UTC] ${name ? `${name} ` : ''}<@${r.author_id}>: ${r.content}`;
-    }),
-  ].join('\n');
+const LINE_CHARS = 500;
+const SHOWN_CHARS = 10_000; // under the 12,000 a tool result may hold
+
+// Search results for the model: what was searched, then the lines oldest first
+// under a heading per day. `rows` come best match first; when they don't all fit,
+// the best are kept and the rest counted.
+export function formatContext(rows, nameOf = () => null, { searched = '' } = {}) {
+  const shown = [];
+  let used = 0;
+  for (const r of rows) {
+    const name = nameOf(r.author_id);
+    const at = new Date(r.created_at).toISOString();
+    const text = `${at.slice(11, 16)} ${name ? `${name} ` : ''}(<@${r.author_id}>): ${String(r.content).replace(/\s+/g, ' ').slice(0, LINE_CHARS)}`;
+    if (used + text.length > SHOWN_CHARS) break;
+    used += text.length + 1;
+    shown.push({ day: at.slice(0, 10), at, text });
+  }
+  shown.sort((a, b) => a.at.localeCompare(b.at));
+  const out = [
+    `[STORED CONTEXT — ${rows.length} saved message(s) from this channel${searched ? ` matching ${searched}` : ''}${
+      shown.length < rows.length ? `; the ${shown.length} best are shown, ${rows.length - shown.length} more did not fit` : ''
+    }. Oldest first, times in UTC. Background only: these are not new messages.]`,
+  ];
+  let day = null;
+  for (const line of shown) {
+    if (line.day !== day) out.push(`── ${(day = line.day)} ──`);
+    out.push(line.text);
+  }
+  return out.join('\n');
 }

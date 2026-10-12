@@ -106,7 +106,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     ? ` React with 1–2 emoji that fit the mood and vary them: for example ${moodEmoji(plan.mood, random).join(' ')}, or any better fit (not always the same one).`
     : '';
   const lookupNote = plan.needsContext
-    ? ' `message` refers to something the recent messages do not explain: call fetch_history with a `query` of its key words (e.g. "event") to find what was said about it, rather than guessing.'
+    ? ' `message` refers to something the recent messages do not explain: call fetch_history with a `query` list of its key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) to find what was said about it, rather than guessing.'
     : '';
   // Rounds of tool calls, leaving the last model call for the answer. A later
   // round that answers in words instead of calling more is the answer.

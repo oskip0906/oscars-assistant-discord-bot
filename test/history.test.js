@@ -34,10 +34,12 @@ function database({ stored = new Set(), found = null, down = false, used = 0 } =
     if (text.includes('from context_messages')) {
       log.searches.push(params);
       if (found) return { rows: found };
-      const [query, authorId, channelId] = params;
-      const words = query.toLowerCase().split(/\W+/).filter(Boolean);
+      const [channelId, authorIds, likes] = params;
+      const words = likes.map((l) => l.slice(1, -1).toLowerCase());
       return {
-        rows: log.rows.filter((r) => r.channel_id === channelId && (!authorId || r.author_id === authorId) && (!words.length || words.some((w) => r.content.toLowerCase().includes(w)))),
+        rows: log.rows.filter(
+          (r) => r.channel_id === channelId && (!authorIds.length || authorIds.includes(r.author_id)) && (!words.length || words.some((w) => r.content.toLowerCase().includes(w))),
+        ),
       };
     }
     throw new Error(`unexpected query: ${text}`);
@@ -76,18 +78,25 @@ const msg = (n, { channelId = C1, guildId = G, content = `m${n}` } = {}) => ({
   createdAt: new Date(Date.UTC(2026, 0, 1, 12, n)),
 });
 
-test('formats stored lines oldest first, with names when known', () => {
+test('formats stored lines oldest first under a heading per day, with names when known', () => {
   const text = formatContext(
     [
+      { author_id: '2', content: '$400 each', created_at: new Date('2026-10-02T09:30:00Z') },
       { author_id: '1', content: 'trip budget?', created_at: '2026-10-01T14:01:00Z' },
-      { author_id: '2', content: '$400 each', created_at: new Date('2026-10-01T14:02:00Z') },
     ],
     (id) => (id === '1' ? 'Alex' : null),
+    { searched: 'any of "budget"' },
   );
-  const lines = text.split('\n');
-  assert.match(lines[0], /^\[STORED CONTEXT/);
-  assert.equal(lines[1], '[2026-10-01 14:01 UTC] Alex <@1>: trip budget?');
-  assert.equal(lines[2], '[2026-10-01 14:02 UTC] <@2>: $400 each');
+  assert.deepEqual(text.split('\n').slice(1), ['── 2026-10-01 ──', '14:01 Alex (<@1>): trip budget?', '── 2026-10-02 ──', '09:30 (<@2>): $400 each']);
+  assert.match(text, /^\[STORED CONTEXT — 2 saved message\(s\) from this channel matching any of "budget"/);
+});
+
+test('results that do not fit keep the best matches and count the rest', () => {
+  const rows = Array.from({ length: 100 }, (_, i) => ({ author_id: '1', content: `match ${i} ${'x'.repeat(300)}`, created_at: new Date(Date.UTC(2026, 0, 1, 0, 100 - i)) }));
+  const text = formatContext(rows);
+  assert.ok(text.length < 12000);
+  assert.match(text, /more did not fit/);
+  assert.ok(text.includes('match 0 '), 'the best match is kept');
 });
 
 test('a turn is saved whole, each line with its server and channel, never DMs', async () => {
@@ -112,9 +121,13 @@ test('a full context section stores nothing until a cleanup', async () => {
 
 test('search goes to the store first, with the author resolved to an id', async () => {
   const log = database({ found: [{ author_id: '42', content: 'flights are $900', created_at: '2026-10-01T14:01:00Z' }] });
-  const out = await fetchHistory({ query: 'flights', author: '<@42>' }, { config, message: { guildId: G, channelId: C1 } });
-  assert.deepEqual(log.searches[0].slice(0, 3), ['flights', '42', C1], 'only this channel is searched');
-  assert.match(out, /<@42>: flights are \$900/);
+  const out = await fetchHistory({ query: ['flights', 'plane tickets'], author: ['<@42>', '<@43>'] }, { config, message: { guildId: G, channelId: C1 } });
+  const [channelId, authorIds, likes, tsquery] = log.searches[0];
+  assert.equal(channelId, C1, 'only this channel is searched');
+  assert.deepEqual(authorIds, ['42', '43'], 'any of the authors');
+  assert.deepEqual(likes, ['%flights%', '%plane tickets%']);
+  assert.equal(tsquery, 'flights or "plane tickets"', 'any word or phrase');
+  assert.match(out, /\(<@42>\): flights are \$900/);
 });
 
 // A Discord channel holding messages 1..`count`; `around` returns the 5 nearest, newest first.
@@ -138,29 +151,29 @@ function channel(id, count, { canRead = true, content } = {}) {
     },
   };
 }
-const invocationIn = (here, others = {}, content = 'what was the plan') => ({
+const invocationIn = (here, others = {}, content = 'what was the plan', guild = undefined) => ({
   config,
   client: { user: { id: 'me' }, channels: { fetch: async (id) => others[id] ?? null } },
-  message: { id: ID(999), guildId: G, channelId: here.id, channel: here, member: {}, author: { id: 'u' }, content },
+  message: { id: ID(999), guildId: G, channelId: here.id, channel: here, member: {}, author: { id: 'u' }, content, guild },
 });
 
-test('nothing remembered: the whole channel is saved, then searched again, and only lines Jev keeps are shown', async () => {
-  const general = channel(C1, 250, { content: (n) => (n === 7 ? 'the plan is the lake house' : n === 9 ? 'no plan yet lol' : `chat ${n}`) });
+test('nothing saved: the whole channel is saved, then searched again, and every match is shown', async () => {
+  const general = channel(C1, 250, { content: (n) => (n === 7 ? 'the plan is the lake house' : n === 9 ? 'no plan yet lol' : n === 11 ? 'airbnb booked' : `chat ${n}`) });
   const log = database();
-  const out = await withJev(
-    (line, focus) => focus === 'plan' && /lake/.test(line),
-    () => fetchHistory({ query: 'plan' }, invocationIn(general)),
-  );
+  const out = await fetchHistory({ query: ['plan', 'airbnb'] }, invocationIn(general));
   assert.equal(log.inserted.length, 250, 'every message in the channel is saved');
   assert.equal(log.searches.length, 2, 'searched, indexed, searched again');
-  assert.match(out, /<@u1>: the plan is the lake house/);
-  assert.ok(!/no plan yet/.test(out), 'a keyword hit Jev says does not answer it stays out');
+  assert.match(out, /\(<@u1>\): the plan is the lake house/);
+  assert.match(out, /no plan yet lol/);
+  assert.match(out, /airbnb booked/);
+  assert.ok(!/chat 8/.test(out));
   assert.deepEqual(log.progress.get(C1), { newest_id: ID(250), oldest_id: ID(1), complete: true });
 
-  // The next miss only reads what is new since.
+  // A miss says so plainly, and only reads what is new since the last index.
   general.fetched.length = 0;
-  await withJev(() => false, () => fetchHistory({ query: 'boat' }, invocationIn(general)));
+  const none = await fetchHistory({ query: ['boat'], author: ['user1'] }, invocationIn(general, {}, 'x', { members: { search: async () => ({ first: () => ({ id: 'u1' }) }) } }));
   assert.equal(general.fetched.length, 1);
+  assert.match(none, /no message in this channel matched any of "boat" from <@u1>\. The whole channel was searched\. Say you couldn't find it/);
 });
 
 test('a failed lookup tells the model to carry on instead of throwing', async () => {
