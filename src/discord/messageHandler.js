@@ -182,6 +182,15 @@ export function toolsLine(names = []) {
   return counts.size ? `-# 🔧 ${[...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ')}` : '';
 }
 
+// "-# 📥 1,204 in · 📤 87 out · 💸 $0.0021 · ⏱️ 4.2s total · 🧠 2.9s model":
+// what the turn's model calls used and cost, and how long the turn and the
+// model took, as subtext under the reply. No model call, no line.
+export function statsLine(stats, totalMs) {
+  if (!stats) return '';
+  const secs = (ms) => `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
+  return `-# 📥 ${stats.inputTokens.toLocaleString('en-US')} in · 📤 ${stats.outputTokens.toLocaleString('en-US')} out · 💸 $${stats.cost.toFixed(4)} · ⏱️ ${secs(totalMs)} total · 🧠 ${secs(stats.modelMs)} model`;
+}
+
 export function suppressLinkEmbeds(text) {
   return String(text ?? '').replace(/(?<![<(`])\bhttps?:\/\/\S+/g, (url) =>
     IMAGE_URL.test(url) ? url : `<${url}>`,
@@ -233,6 +242,7 @@ export function createMessageHandler({ client, config, player, privateMode, runA
     const contextKey = anchor.guild ? anchor.guild.id : `dm:${anchor.author.id}`;
 
     await enqueueContext(contextKey, async () => {
+      const turnStart = Date.now();
       anchor.channel.sendTyping().catch(() => {});
       const typing = setInterval(() => anchor.channel.sendTyping().catch(() => {}), 8000);
       try {
@@ -325,7 +335,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         if (replyText.trim()) {
           replyText = suppressLinkEmbeds(redactSecrets(replyText));
           const tools = toolsLine(invocation.toolsUsed);
-          const parts = chunkMessage(tools ? `${tools}\n${replyText}` : replyText);
+          const stats = statsLine(invocation.stats, Date.now() - turnStart);
+          const parts = chunkMessage([tools, replyText, stats].filter(Boolean).join('\n'));
           let first = true;
           for (const chunk of parts) {
             const payload = { content: chunk, allowedMentions: { parse: ['users'], repliedUser: true } };

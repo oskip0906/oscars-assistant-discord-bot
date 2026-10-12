@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
 import { config, validateConfig } from './config.js';
 import { PrivateMode } from './privateMode.js';
+import { updatePresence } from './presence.js';
 import { createPlayer } from './music/player.js';
 import { createMessageHandler } from './discord/messageHandler.js';
 import { commandDefs, createInteractionHandler } from './discord/commands.js';
@@ -44,6 +45,7 @@ async function boot(intents) {
 
   client.once(Events.ClientReady, async (readyClient) => {
     console.log(`[panda] Logged in as ${readyClient.user.tag} (id ${readyClient.user.id})`);
+    updatePresence(readyClient, privateMode);
     let registered = 0;
     for (const guild of readyClient.guilds.cache.values()) {
       try {
