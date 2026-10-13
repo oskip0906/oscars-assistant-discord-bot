@@ -220,3 +220,12 @@ test('stop racing the end of a turn: once stopped, the finished reply is never s
   await sleep(50);
   assert.ok(!sent.some((s) => s.content.includes('stale')));
 });
+
+test("Panda's own grey subtext lines (tools used, token stats) are left out of the recent messages", async () => {
+  const seen = [];
+  const { handler, msg } = harness({ runAgentImpl: async (inv) => (seen.push(inv.recent), 'ok') });
+  const own = { id: 'm0', content: '-# 🔧 web_fetch ×8\n**Quick take:** it is a monolith\n-# 📥 19,743 in · 📤 115 out', author: { id: bot.id, username: 'Panda', bot: true }, mentions: { users: new Map() }, attachments: new Map(), embeds: [], createdTimestamp: 0 };
+  await handler(msg('rice', '<@bot> and the tests?', { ping: true, before: [own] }));
+  await waitFor(() => seen.length === 1);
+  assert.match(seen[0], /^\(you\) Panda \(@Panda, id:bot\) \[BOT\]: \*\*Quick take:\*\* it is a monolith$/);
+});

@@ -189,6 +189,7 @@ export const COMMAND_TOOLS = {
   web_search: { tool: 'web_search' },
   web_fetch: { tool: 'web_fetch' },
   image_search: { tool: 'image_search' },
+  reverse_image_search: { tool: 'reverse_image_search' },
   video_search: { tool: 'video_search' },
   news_search: { tool: 'news_search' },
   wiki_search: { tool: 'wiki_search' },

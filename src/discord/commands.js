@@ -10,7 +10,7 @@ import { updatePresence } from '../presence.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { buildSearchQuery } from '../agent/research/searchQuery.js';
-import { webSearch, webFetch, imageSearch, videoSearch, newsSearch, wikiSearch } from '../agent/tools/search.js';
+import { webSearch, webFetch, imageSearch, reverseImageSearch, videoSearch, newsSearch, wikiSearch } from '../agent/tools/search.js';
 import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
 import { selfFixState } from '../selfFixState.js';
 import { runResearch } from '../agent/research/pipeline.js';
@@ -438,6 +438,12 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           await sendToolResult(result?.text ?? result);
         }
         return;
+      }
+
+      if (name === 'reverse_image_search') {
+        const image = interaction.options.getAttachment('image')?.url || interaction.options.getString('url');
+        if (!image) return await interaction.reply({ content: 'Attach a picture or give its URL.', flags: MessageFlags.Ephemeral });
+        return await runTool(reverseImageSearch, { image, count: undefined });
       }
 
       if (name === 'self_fix') {

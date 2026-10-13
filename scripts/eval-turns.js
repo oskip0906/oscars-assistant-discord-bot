@@ -21,6 +21,7 @@ import { config } from '../src/config.js';
 const commons = (path) => `https://upload.wikimedia.org/wikipedia/commons/${path}`;
 const image = (name, url, size = 300_000) => ({ id: name, name, contentType: name.endsWith('.png') ? 'image/png' : 'image/jpeg', size, url, sender: 'Rice (@rice)' });
 const LIVE_TOOLS = ['web_search', 'news_search', 'web_fetch', 'wiki_search'];
+// Answer first: a turn that looks something up spends one call saying so (need_more_info).
 
 const CASES = {
   photo: {
@@ -98,6 +99,8 @@ async function runCase(name, spec) {
     posted: false,
     toolsUsed: [],
     embeds: [],
+    // The links behind the [ATTACHMENTS] numbers, as messageHandler sets them.
+    attachmentUrls: (spec.attachments ?? []).map((a) => a.url),
   };
   const turn = `Rice (@rice, id:2): @Panda (id:bot) ${spec.text}`;
   const combined = [

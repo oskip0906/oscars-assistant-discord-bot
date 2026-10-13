@@ -54,6 +54,22 @@ export const defs = [
   {
     type: 'function',
     function: {
+      name: 'reverse_image_search',
+      description:
+        "Search by image (Yandex, through SearXNG): pages on the web that carry pictures matching this one, with those pictures, and the search engine's best guesses at what it shows. Matches can be lookalikes, so weigh them against what you see.",
+      parameters: {
+        type: 'object',
+        properties: {
+          image: { type: 'string', description: 'The picture: its number in [ATTACHMENTS] (e.g. "1"), or a public image URL.' },
+          count: { type: 'integer', description: 'Number of matches (1-15, default 8)' },
+        },
+        required: ['image'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'video_search',
       description: 'Search YouTube for videos. Returns numbered titles, video URLs, and descriptions.',
       parameters: {
@@ -307,6 +323,34 @@ async function searxngImages(query, config) {
     .map((c) => c.value);
   if (!results.length) throw new Error('SearXNG: all image URLs unreachable');
   return results;
+}
+
+// The SearXNG engine Panda adds itself (searxng/engines/yandex_reverse.py).
+const REVERSE_ENGINE = 'yandex reverse';
+
+export async function reverseImageSearch({ image, count }, invocation) {
+  const n = clampCount(count, 8, 15);
+  const ref = String(image).trim();
+  // An attachment number resolves to its link; Yandex fetches the picture itself.
+  const url = /^#?\d+$/.test(ref) ? invocation.attachmentUrls?.[Number(ref.replace('#', '')) - 1] : ref;
+  if (!url) return `There is no attachment ${ref} in this turn. Use a number from [ATTACHMENTS] or an image URL.`;
+  if (!/^https?:\/\//i.test(url)) return 'reverse_image_search needs an http(s) image URL or an attachment number.';
+  let data;
+  try {
+    data = await searxngQuery(url, { engines: REVERSE_ENGINE }, invocation.config);
+  } catch (err) {
+    return `Search by image is unreachable (SearXNG: ${err.message}). Say so; answer from what you can see.`;
+  }
+  const matches = (data.results || []).filter((r) => r.url && r.img_src).slice(0, n);
+  const guesses = data.suggestions || [];
+  if (!matches.length && !guesses.length) {
+    return `Search by image found nothing for that picture${failingEngines(data) ? ` (${failingEngines(data)})` : ''}. Say so; answer from what you can see.`;
+  }
+  return [
+    `[SEARCH BY IMAGE — ${matches.length} page(s) with matching pictures. Matches can be lookalikes: weigh them against what you see.]`,
+    guesses.length ? `Best guesses: ${guesses.join(', ')}` : '',
+    ...matches.map((r, i) => `${i + 1}. **${stripHtml(r.title || r.url)}**${r.content ? ` — ${stripHtml(r.content).slice(0, 160)}` : ''}\n   Image: ${r.img_src}\n   Page: <${r.url}>`),
+  ].filter(Boolean).join('\n');
 }
 
 export async function imageSearch({ query, count }, invocation) {

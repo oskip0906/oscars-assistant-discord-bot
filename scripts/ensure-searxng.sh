@@ -70,6 +70,10 @@ fi
 
 # Loopback only, whatever settings.yml says: its bind_address of 0.0.0.0 is for
 # the deploy container, and here it would put search on the local network.
+# Panda's own engines (searxng/engines) go beside the upstream ones, the only
+# place SearXNG loads engines from; copied every start, so an edit is picked up.
+cp searxng/engines/*.py searxng/src/searx/engines/ 2>/dev/null
+
 echo "[searxng] starting local SearXNG…"
 PYTHONPATH=searxng/src \
   SEARXNG_SETTINGS_PATH="$PWD/searxng/config/settings.yml" \

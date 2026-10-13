@@ -40,6 +40,7 @@ export function buildMenuEmbeds(client, config) {
         '`/web_search <query>` : Search the web and cite links',
         '`/web_fetch <url>` : Read a full page',
         '`/image_search <query>` : Find pictures of anything',
+        '`/reverse_image_search <image|url>` : Search by image — pages with matching pictures, and what it likely shows',
         '`/video_search <query>` : Find videos',
         '`/news_search <query>` : Find recent news',
         '`/wiki_search <query>` : Look something up on Wikipedia',

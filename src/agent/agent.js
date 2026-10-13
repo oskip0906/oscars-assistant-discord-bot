@@ -1,6 +1,6 @@
 import { chatCompletion, providerFor } from './openrouter.js';
 import { buildSystemPrompt, myNames, NO_REPLY } from './systemPrompt.js';
-import { toolDefs, executeTool, OWNER_ONLY_TOOLS } from './tools/index.js';
+import { toolDefs, executeTool, OWNER_ONLY_TOOLS, isLookup } from './tools/index.js';
 import { decide, sampleChoice } from './jev.js';
 import { redactSecrets } from '../config.js';
 import { reactOnce } from '../discord/reactions.js';
@@ -62,11 +62,11 @@ export async function signOff(invocation) {
   return '';
 }
 
-// Offered on every turn with words, whatever Jev picked: reading a link and
-// looking up something live must never be out of reach.
+// Opened with whatever lookups need_more_info asks for: searching and reading
+// a link go together.
 export const CORE_TOOLS = ['web_search', 'web_fetch'];
-// The fallback for a tool Jev did not pick: the model names it, it is added for
-// the next round. Handled here, never by executeTool.
+// The fallback for an action tool Jev did not pick: the model names it, it is
+// added for the next round. Handled here, never by executeTool.
 export const MORE_TOOLS = 'more_tools';
 const moreToolsDef = (names) => ({
   type: 'function',
@@ -76,19 +76,42 @@ const moreToolsDef = (names) => ({
     parameters: { type: 'object', properties: { names: { type: 'array', items: { type: 'string', enum: names } } }, required: ['names'] },
   },
 });
+// Answer first: a turn starts without lookup tools (isLookup). The model answers
+// from what it has; only when it can't does it say so here, naming what is
+// missing, and the lookups it names (with CORE_TOOLS) open for the next round.
+export const NEED_MORE_INFO = 'need_more_info';
+const needMoreInfoDef = (names) => ({
+  type: 'function',
+  function: {
+    name: NEED_MORE_INFO,
+    description:
+      "Only when you can't answer from what's in front of you (the messages, the attachments) and what you know: say what is missing, and pick the lookup tools to get it. They are listed from the next step on. Never to double-check an answer you are sure of.",
+    parameters: {
+      type: 'object',
+      properties: {
+        missing: { type: 'string', description: 'What you need to know and do not.' },
+        tools: { type: 'array', items: { type: 'string', enum: names }, description: 'The lookup tools to get it.' },
+      },
+      required: ['missing', 'tools'],
+    },
+  },
+});
+const PLUMBING = new Set([MORE_TOOLS, NEED_MORE_INFO]);
 
 // One turn, at most MAX_MODEL_CALLS model calls after one Jev call:
 // 1. Jev (triage) decides in what form to answer, the mood, and which tools it
 //    expects: a yes/no per tool.
-// 2. A turn with words is offered CORE_TOOLS plus Jev's picks, and more_tools
-//    for anything else it may use; a reaction-only turn Jev's picks and react.
-//    Jev's picks are advice: the tool choice is always auto, so a turn whose
-//    messages and attachments already answer it is one call with no tools.
-//    Called tools all run at once. The model may go another round when the
-//    results call for it (search, then read a page), and stops as soon as it
-//    calls none; words without a tool call are the answer.
+// 2. Answer first. A turn with words is offered the action tools Jev picked
+//    (more_tools adds others) and need_more_info, but no lookup tools: the
+//    model answers from the turn, the attachments and what it knows. Only when
+//    it can't does it call need_more_info, and the lookups it names open for
+//    the next round. A reaction-only turn gets Jev's picks and react. Jev's
+//    picks are advice: the tool choice is always auto, so a turn the model can
+//    answer is one call with no tools. Called tools all run at once. The model
+//    may go another round when the results call for it (search, then read a
+//    page), and stops as soon as it calls none; words without a call are the answer.
 // 3. Otherwise the last call writes the reply from the results, with no tools left.
-// Jev down means no advice to trim by, so every tool is offered.
+// Jev down means no picks to go by, so every action tool is offered.
 //
 // What the turn refers to comes from the recent messages the handler puts above
 // it (`invocation.recent`), not from searching history.
@@ -145,32 +168,41 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   if (plan.mood) messages.push({ role: 'user', content: `[TONE] Jev reads the turn as ${plan.mood}: ${MOOD_NOTE[plan.mood]}` });
 
   // A reaction is a tool call too, so the forms that react offer `react`. A
-  // reaction-only turn gets just Jev's picks; a turn with words CORE_TOOLS and
-  // Jev's picks (Oscar's only for Oscar), and more_tools for the rest.
+  // reaction-only turn gets just Jev's picks; a turn with words Jev's action
+  // picks (Oscar's only for Oscar), more_tools for the other actions, and
+  // need_more_info for the lookups.
   const reacts = plan.form === 'reaction' || plan.form === 'both';
   const wordy = plan.form !== 'reaction';
   const picked = new Set(plan.tools);
   const eligible = allTools.filter(({ function: { name } }) => name !== 'react' && (invocation.isOwner || !OWNER_ONLY_TOOLS.has(name)));
+  const lookups = eligible.filter((t) => isLookup(t.function.name));
   const offered = allTools.filter(({ function: { name } }) =>
-    name === 'react' ? reacts : picked.has(name) || (wordy && eligible.some((t) => t.function.name === name) && (plan.jevDown || CORE_TOOLS.includes(name))),
+    name === 'react' ? reacts : wordy ? !isLookup(name) && eligible.some((t) => t.function.name === name) && (plan.jevDown || picked.has(name)) : picked.has(name),
   );
-  const unoffered = () => eligible.filter((t) => !offered.includes(t)).map((t) => t.function.name);
+  // Set once need_more_info has been called: lookups may then be added by name too.
+  let lookingUp = false;
+  const unoffered = () => eligible.filter((t) => !offered.includes(t) && (lookingUp || !isLookup(t.function.name))).map((t) => t.function.name);
   const suggested = moodEmoji(plan.mood, random);
   const notes = [
-    picked.size ? `Jev's guess at tools that may help: ${[...picked].join(', ')}. Advice, not a must.` : '',
+    picked.size ? `Jev's guess at tools that may help: ${[...picked].join(', ')}. Advice, not a must: a lookup among them is only worth need_more_info if you can't answer without it.` : '',
     reacts ? `React with exactly one emoji that fits the mood, and vary it: for example one of ${suggested.join(' ')}, or any better fit (not always the same one). Only your first reaction is added.${wordy ? ' Write your reply as text in the same message as the reaction.' : ' No words.'}` : '',
     plan.needsContext
-      ? '`message` refers to something the recent messages do not explain: call fetch_history with a `query` list of its key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) to find what was said about it, rather than guessing.'
+      ? '`message` may refer to something the recent messages do not explain. If you can\'t tell what, call need_more_info for fetch_history, then search it with a `query` list of key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) rather than guessing.'
       : '',
   ].filter(Boolean);
   // Rounds of tool calls, leaving the last model call for the answer. A later
   // round that answers in words instead of calling more is the answer.
   let answer = null;
   let listed = [];
-  for (let round = 1; offered.length && round < MAX_MODEL_CALLS; round++) {
+  for (let round = 1; round < MAX_MODEL_CALLS; round++) {
     // react is offered until it has been used, so a later round can't pile on more.
     const more = wordy ? unoffered() : [];
-    listed = [...(invocation.reacted ? offered.filter((t) => t.function.name !== 'react') : offered), ...(more.length ? [moreToolsDef(more)] : [])];
+    const closed = wordy && !lookingUp ? lookups.map((t) => t.function.name) : [];
+    listed = [
+      ...(invocation.reacted ? offered.filter((t) => t.function.name !== 'react') : offered),
+      ...(more.length ? [moreToolsDef(more)] : []),
+      ...(closed.length ? [needMoreInfoDef(closed)] : []),
+    ];
     if (!listed.length) break;
     stats.toolsOffered = Math.max(stats.toolsOffered || 0, listed.length);
     const note =
@@ -187,10 +219,16 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
       break;
     }
     messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: calls });
-    (invocation.toolsUsed ??= []).push(...calls.map((c) => c.function.name).filter((name) => name !== MORE_TOOLS));
+    (invocation.toolsUsed ??= []).push(...calls.map((c) => c.function.name).filter((name) => !PLUMBING.has(name)));
     // Everything runs at once, except reactions, which keep their order: only the first one lands (reactOnce).
     let reactions = Promise.resolve();
-    const run = (call) => (call.function.name === MORE_TOOLS ? addTools(call, eligible, offered) : runTool(call, invocation, contextKey));
+    const run = (call) => {
+      // Lookups open only through need_more_info, never by name here.
+      if (call.function.name === MORE_TOOLS) return addTools(call, eligible.filter((t) => lookingUp || !isLookup(t.function.name)), offered);
+      if (call.function.name !== NEED_MORE_INFO) return runTool(call, invocation, contextKey);
+      lookingUp = true;
+      return openLookups(call, lookups, offered, contextKey);
+    };
     const toolsStart = Date.now();
     messages.push(...(await Promise.all(calls.map((call) => (call.function.name === 'react' ? (reactions = reactions.then(() => run(call))) : run(call))))));
     signal?.throwIfAborted();
@@ -233,6 +271,23 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     log(contextKey, `turn ${signal?.aborted ? 'stopped' : 'failed'} after ${Date.now() - turnStart}ms: ${err.message || err}`);
     throw err;
   }
+}
+
+// need_more_info: the lookups named (and CORE_TOOLS) join the offer from the next round.
+function openLookups(call, lookups, offered, contextKey) {
+  let args = {};
+  try {
+    args = JSON.parse(call.function.arguments || '{}');
+  } catch {}
+  const names = new Set([...[].concat(args.tools ?? []), ...CORE_TOOLS]);
+  const added = lookups.filter((t) => names.has(t.function.name) && !offered.includes(t));
+  offered.push(...added);
+  log(contextKey, `need_more_info: ${clip(args.missing ?? '', 200)} → ${added.map((t) => t.function.name).join(', ') || 'nothing new'}`);
+  return {
+    role: 'tool',
+    tool_call_id: call.id,
+    content: `Opened: ${added.map((t) => t.function.name).join(', ') || 'nothing new'}. Look up what is missing now${args.missing ? ` (${String(args.missing).slice(0, 300)})` : ''}, then answer.`,
+  };
 }
 
 // more_tools: the named tools this sender may use join the offer from the next round.

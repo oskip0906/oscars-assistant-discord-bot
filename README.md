@@ -24,6 +24,7 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 | `/web_search <query>` | Search the web and cite links |
 | `/web_fetch <url>` | Read a full page |
 | `/image_search <query>` | Find pictures of anything |
+| `/reverse_image_search <image\|url>` | Search by image: pages with matching pictures, and what it likely shows |
 | `/video_search <query>` | Find videos |
 | `/news_search <query>` | Find recent news |
 | `/wiki_search <query>` | Look something up on Wikipedia |
@@ -66,7 +67,7 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 Beyond the slash commands, Panda calls these on its own while chatting (details in [ARCHITECTURE.md](ARCHITECTURE.md#tools)):
 
 - **Discord:** look up members and message senders, read server info (channels, roles, events, emojis, threads), react with emoji, post polls and embed cards (link buttons, clickable buttons, dropdowns). Panda listens and answers in threads too, to people and bots alike.
-- **Web:** search the web and images, read any public page.
+- **Web:** search the web and images, search by image (pages with matching pictures), read any public page.
 - **Memory:** read further back in a channel, search what it remembered, index the messages around an old one, and save, list, open and find notes, create notes and files (.txt, .md and other text files) that are stored with the notes and sent as attachments or cards, and send any saved note back as a file (deleting one posts the same confirmation as `/delete_note`).
 - **Reminders and research:** add, show and delete reminders, and run the full `/research` pipeline.
 - **Slash commands:** explain any command from its registered definition, say which model it runs on (the live setting), and report spend.

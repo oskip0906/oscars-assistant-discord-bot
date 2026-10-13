@@ -24,6 +24,8 @@ async function turn(answers, replies, extra = {}) {
 
 const sure = (choice, p = 0.95) => ({ choice, probabilities: { [choice]: p } });
 const yes = (...names) => Object.fromEntries(names.map((name) => [`use_${name}`, { noul: 0.9 }]));
+// The model saying it doesn't know enough, asking for these lookups.
+const needMore = (...names) => ({ content: '', tool_calls: [{ id: 'n', function: { name: 'need_more_info', arguments: JSON.stringify({ missing: 'x', tools: names }) } }] });
 const step = (...names) => ({ content: '', tool_calls: names.map((name, i) => ({ id: String(i), function: { name, arguments: '{}' } })) });
 const reactCall = (...emojis) => ({
   content: '',
@@ -55,43 +57,60 @@ test("reaction only with a tool: Jev's tool and the reaction go in the same sing
   assert.deepEqual([...calls[0].tools].sort(), ['get_message_sender', 'react']);
 });
 
-test('no tools picked: the core tools and more_tools are offered, and an answer without a call is sent from that one call', async () => {
+test('no tools picked: no lookups either, just more_tools and need_more_info, and an answer without a call is sent from that one call', async () => {
   const { text, calls } = await turn({ respond_with: sure('message') }, [{ content: '391' }]);
   assert.equal(text, '391');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].toolChoice, 'auto');
-  assert.deepEqual(calls[0].tools, [...CORE_TOOLS, 'more_tools'], 'a link can always be read, live facts looked up, and any other tool added');
+  assert.deepEqual(calls[0].tools, ['more_tools', 'need_more_info'], 'answer first: lookups only once the model says it needs them');
   assert.ok(!calls[0].messages.some((m) => String(m.content).startsWith('[TOOLS]')), 'no tool note when there is nothing to say');
 });
 
-test('more_tools adds a tool the sender may use for the next round; Oscar-only tools stay out of reach for a guest', async () => {
-  const more = (...names) => ({ content: '', tool_calls: [{ id: 'm', function: { name: 'more_tools', arguments: JSON.stringify({ names }) } }] });
-  const { text, calls, invocation } = await turn({ respond_with: sure('message') }, [more('get_user_id', 'self_fix'), step('get_user_id'), { content: 'found them' }]);
-  assert.equal(text, 'found them');
-  const offer = calls[0].messages && calls.map((c) => c.tools);
-  assert.ok(!offer[0].includes('get_user_id'));
-  assert.ok(offer[1].includes('get_user_id'), 'added for the next round');
-  assert.ok(offer.every((tools) => !tools.includes('self_fix')), 'never offered to a guest');
-  const added = calls[1].messages.find((m) => m.role === 'tool').content;
-  assert.match(added, /Added: get_user_id\./);
-  assert.deepEqual(invocation.toolsUsed, ['get_user_id'], 'more_tools is plumbing, not shown as a tool');
-  // The more_tools enum for a guest never names Oscar's tools.
-  const { calls: guest } = await turn({ respond_with: sure('message') }, [{ content: 'ok' }]);
-  assert.ok(guest[0].tools.includes('more_tools'));
+test('need_more_info opens the lookups it names (with web_search and web_fetch) for the next round, and the answer comes from them', async () => {
+  const { text, calls, invocation } = await turn({ respond_with: sure('message') }, [needMore('wiki_search'), step('wiki_search'), { content: 'per wikipedia, 1889' }]);
+  assert.equal(text, 'per wikipedia, 1889');
+  assert.equal(calls.length, 3);
+  assert.deepEqual([...calls[1].tools].sort(), ['more_tools', 'web_fetch', 'web_search', 'wiki_search']);
+  assert.match(calls[1].messages.find((m) => m.role === 'tool').content, /^Opened: wiki_search, web_search, web_fetch|^Opened: web_search, web_fetch, wiki_search|^Opened: web_search, wiki_search, web_fetch/);
+  assert.deepEqual(invocation.toolsUsed, ['wiki_search'], 'need_more_info is plumbing, not shown as a tool');
 });
 
-test('Jev picks several tools: they run in one round, then the model answers with nothing left to call', async () => {
-  const { text, calls, invocation } = await turn({ ...yes('get_message_sender', 'get_user_id'), respond_with: sure('message') }, [
-    step('get_message_sender', 'get_user_id', 'not_a_tool'),
-    { content: 'you are someone' },
+test('a lookup called without need_more_info never runs, and more_tools cannot open one', async () => {
+  const more = { content: '', tool_calls: [{ id: 'm', function: { name: 'more_tools', arguments: '{"names":["web_search"]}' } }] };
+  const { text, calls, invocation } = await turn({ respond_with: sure('message') }, [step('web_search'), { content: 'from memory' }]);
+  assert.deepEqual(invocation.toolsUsed ?? [], [], 'the call is dropped, nothing runs');
+  assert.equal(text, 'from memory');
+  assert.deepEqual(calls.map((c) => c.toolChoice), ['auto', 'none'], 'it answers with nothing left to call');
+  const viaMore = await turn({ respond_with: sure('message') }, [more, step('web_search'), { content: 'still no search' }]);
+  assert.match(viaMore.calls[1].messages.find((m) => m.role === 'tool').content, /^Nothing added/);
+  assert.ok(!viaMore.calls[1].tools.includes('web_search'));
+});
+
+test('more_tools adds an action tool the sender may use for the next round; Oscar-only tools stay out of reach for a guest', async () => {
+  const more = (...names) => ({ content: '', tool_calls: [{ id: 'm', function: { name: 'more_tools', arguments: JSON.stringify({ names }) } }] });
+  const { text, calls, invocation } = await turn({ respond_with: sure('message') }, [more('add_reminder', 'self_fix'), step('add_reminder'), { content: 'set' }]);
+  assert.equal(text, 'set');
+  const offer = calls.map((c) => c.tools);
+  assert.ok(!offer[0].includes('add_reminder'));
+  assert.ok(offer[1].includes('add_reminder'), 'added for the next round');
+  assert.ok(offer.every((tools) => !tools.includes('self_fix')), 'never offered to a guest');
+  assert.match(calls[1].messages.find((m) => m.role === 'tool').content, /Added: add_reminder\./);
+  assert.deepEqual(invocation.toolsUsed, ['add_reminder'], 'more_tools is plumbing, not shown as a tool');
+});
+
+test('Jev picks several action tools: they run in one round, then the model answers with nothing left to call', async () => {
+  const { text, calls, invocation } = await turn({ ...yes('create_poll', 'add_reminder'), respond_with: sure('message') }, [
+    step('create_poll', 'add_reminder', 'not_a_tool'),
+    { content: 'done both' },
   ]);
-  assert.equal(text, 'you are someone');
+  assert.equal(text, 'done both');
   assert.equal(calls.length, 2);
-  assert.ok(['get_message_sender', 'get_user_id', 'web_fetch'].every((name) => calls[0].tools.includes(name)));
+  assert.ok(['create_poll', 'add_reminder', 'need_more_info'].every((name) => calls[0].tools.includes(name)));
+  assert.ok(!calls[0].tools.includes('web_fetch'), 'no lookups before the model asks for them');
   assert.equal(calls[0].toolChoice, 'auto', "Jev's picks are advice, never forced");
-  assert.match(calls[0].messages.at(-1).content, /Jev's guess at tools that may help: get_user_id, get_message_sender\. Advice, not a must\./);
+  assert.match(calls[0].messages.at(-1).content, /Jev's guess at tools that may help: .*create_poll.* Advice, not a must/);
   assert.equal(calls[1].toolChoice, 'auto', 'a second round may call the tools again, or answer');
-  assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id'], 'a tool that was not offered never runs');
+  assert.deepEqual(invocation.toolsUsed, ['create_poll', 'add_reminder'], 'a tool that was not offered never runs');
 });
 
 test('both: the model reacts, then answers in text, and an echoed emoji is dropped', async () => {
@@ -163,8 +182,8 @@ test('the mood sets the tone and which reactions are suggested, varied each turn
 });
 
 test(`a turn never makes more than ${MAX_MODEL_CALLS} model calls, the last one the answer`, async () => {
-  const replies = Array.from({ length: 10 }, () => step('get_message_sender'));
-  const { calls } = await turn({ ...yes('get_message_sender'), respond_with: sure('message') }, replies);
+  const replies = Array.from({ length: 10 }, () => step('create_poll'));
+  const { calls } = await turn({ ...yes('create_poll'), respond_with: sure('message') }, replies);
   assert.equal(calls.length, MAX_MODEL_CALLS);
   assert.equal(calls.at(-1).toolChoice, 'none');
 });
@@ -186,29 +205,30 @@ test('a request that needs an Oscar-only tool stops for anyone else', async () =
   assert.equal(owner.calls[0].toolChoice, 'auto');
 });
 
-test('with Jev down every tool the sender may use is offered, and one call can answer', async () => {
+test('with Jev down every action tool the sender may use is offered, lookups still wait for need_more_info, and one call can answer', async () => {
   const { text, calls } = await turn(null, [{ content: 'rolled a 4' }]);
   assert.equal(text, 'rolled a 4');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].toolChoice, 'auto');
-  assert.ok(['web_fetch', 'research', 'add_reminder', 'play_music'].every((name) => calls[0].tools.includes(name)));
-  assert.ok(!calls[0].tools.includes('self_fix') && !calls[0].tools.includes('more_tools'), "Oscar's tools stay his; nothing left to add");
+  assert.ok(['add_reminder', 'play_music', 'create_poll', 'need_more_info'].every((name) => calls[0].tools.includes(name)));
+  assert.ok(!calls[0].tools.includes('web_fetch') && !calls[0].tools.includes('research'));
+  assert.ok(!calls[0].tools.includes('self_fix') && !calls[0].tools.includes('more_tools'), "Oscar's tools stay his; no action left to add");
 });
 
-test('the catalog a guest is offered is a fraction of the full one, which Oscar alone gets in full when Jev is down', async () => {
-  const size = (calls) => calls[0].tools.length;
-  const picked = await turn({ ...yes('research'), respond_with: sure('message') }, [{ content: 'ok' }]);
-  assert.deepEqual(picked.calls[0].tools, ['web_search', 'web_fetch', 'research', 'more_tools'], 'research stays reachable when Jev picks it');
+test('a guest starts with just the action tools Jev picked; Oscar with Jev down gets every action tool, his own included', async () => {
+  const picked = await turn({ ...yes('create_poll', 'research'), respond_with: sure('message') }, [{ content: 'ok' }]);
+  assert.deepEqual(picked.calls[0].tools, ['create_poll', 'more_tools', 'need_more_info'], 'research is a lookup: reachable through need_more_info');
   const full = await turn(null, [{ content: 'ok' }], { isOwner: true });
   assert.ok(full.calls[0].tools.includes('self_fix'));
-  assert.ok(size(picked.calls) * 5 < size(full.calls));
+  assert.ok(picked.calls[0].tools.length * 5 < full.calls[0].tools.length);
 });
 
-test('research keeps its multiple rounds: search, read, then answer', async () => {
+test('a real lookup keeps its multiple rounds: ask, search, read, then answer', async () => {
   const fetchCall = { content: '', tool_calls: [{ id: 'f', function: { name: 'web_fetch', arguments: '{"url":"https://example.com"}' } }] };
-  const { calls } = await turn({ respond_with: sure('message') }, [step('web_search'), fetchCall, { content: 'answer' }]);
-  assert.equal(calls.length, 3);
+  const { calls, invocation } = await turn({ respond_with: sure('message') }, [needMore('web_search'), step('web_search'), fetchCall, { content: 'answer' }]);
+  assert.equal(calls.length, 4);
   assert.ok(calls.every((c) => c.toolChoice === 'auto'));
+  assert.deepEqual(invocation.toolsUsed, ['web_search', 'web_fetch']);
 });
 
 test('a stopped turn makes no more model calls and runs none of the tools the model asked for', async () => {
@@ -243,16 +263,17 @@ test('Jev gets one yes/no per tool (react excepted) and the recent messages', as
   assert.ok(!seen.questions.use_react);
 });
 
-test('a reference nothing shown explains sends the model to search history, though Jev did not pick the tool', async () => {
+test('a reference nothing shown explains points the model at fetch_history, which it opens only if it needs to', async () => {
   const seen = [];
-  const replies = [step('fetch_history'), { content: 'the hackathon? yes!' }];
+  const replies = [needMore('fetch_history'), step('fetch_history'), { content: 'the hackathon? yes!' }];
   const chat = async ({ messages, tools, toolChoice }) => (seen.push({ note: messages.at(-1).content, tools: tools.map((t) => t.function.name), toolChoice }), replies.shift());
   const invocation = { contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' }, message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' } } };
   const text = await runAgent(invocation, 'q', 'are you excited for the event', { chat, decideImpl: async () => ({ unexplained: { noul: 0.95 }, use_fetch_history: { noul: 0.1 }, respond_with: sure('message') }) });
   assert.equal(text, 'the hackathon? yes!');
-  assert.ok(seen[0].tools.includes('fetch_history'));
+  assert.ok(!seen[0].tools.includes('fetch_history') && seen[0].tools.includes('need_more_info'));
   assert.equal(seen[0].toolChoice, 'auto', 'advice, not forced');
-  assert.match(seen[0].note, /fetch_history with a `query`/);
+  assert.match(seen[0].note, /need_more_info for fetch_history/);
+  assert.ok(seen[1].tools.includes('fetch_history'));
   assert.deepEqual(invocation.toolsUsed, ['fetch_history']);
 });
 
@@ -287,9 +308,9 @@ test("the bot's secrets never reach the model or a message, however they leak", 
       message: { channel: { name: 'general' }, author: { id: '2', username: 'sk-or-v1-abcdef' } },
       isOwner: false,
     };
-    const replies = [leaky, { content: 'done' }];
+    const replies = [needMore('get_message_sender'), leaky, { content: 'done' }];
     await runAgent(invocation, 'q', 'q', { chat: async ({ messages }) => (seen.push(...messages), replies.shift()), decideImpl: async () => yes('get_message_sender') });
-    const toolResult = seen.find((m) => m.role === 'tool').content;
+    const toolResult = seen.find((m) => m.role === 'tool' && m.tool_call_id !== 'n').content;
     assert.match(toolResult, /\[redacted\]/);
     assert.ok(!toolResult.includes('sk-or-v1-abcdef'));
   } finally {
@@ -299,9 +320,9 @@ test("the bot's secrets never reach the model or a message, however they leak", 
 
 test('every tool a turn calls is recorded, in order, for the line above the reply', async () => {
   const { toolsLine } = await import('../src/discord/messageHandler.js');
-  const { invocation } = await turn(yes('get_message_sender', 'get_user_id'), [step('get_message_sender', 'get_user_id', 'get_message_sender'), { content: 'done' }]);
-  assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id', 'get_message_sender']);
-  assert.equal(toolsLine(invocation.toolsUsed), '-# 🔧 get_message_sender ×2 · get_user_id');
+  const { invocation } = await turn(yes('create_poll', 'add_reminder'), [step('create_poll', 'add_reminder', 'create_poll'), { content: 'done' }]);
+  assert.deepEqual(invocation.toolsUsed, ['create_poll', 'add_reminder', 'create_poll']);
+  assert.equal(toolsLine(invocation.toolsUsed), '-# 🔧 create_poll ×2 · add_reminder');
   assert.equal(toolsLine([]), '');
   assert.equal(toolsLine(['react', 'react']), '', 'a reaction is never shown as a tool');
   assert.equal(toolsLine(['react', 'web_search']), '-# 🔧 web_search');

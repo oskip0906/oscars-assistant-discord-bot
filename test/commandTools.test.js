@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { commandDefs, OWNER_ONLY_COMMANDS } from '../src/discord/commandDefs.js';
 import { commandDefs as registered } from '../src/discord/commands.js';
 import { COMMAND_TOOLS, pandaCommands, currentModel, usage, setModel, research } from '../src/agent/tools/commands.js';
-import { toolDefs, executeTool, validateArgs, OWNER_ONLY_TOOLS } from '../src/agent/tools/index.js';
+import { toolDefs, executeTool, validateArgs, OWNER_ONLY_TOOLS, LOOKUP_TOOLS, isLookup } from '../src/agent/tools/index.js';
 import { buildSystemPrompt } from '../src/agent/systemPrompt.js';
 import { runAgent } from '../src/agent/agent.js';
 import { JEV_MODEL } from '../src/agent/jev.js';
@@ -239,14 +239,20 @@ async function turn({ picks, calls, isOwner = false, cfg = config() }) {
     isOwner,
     reacted: false,
   };
-  const replies = [{ content: '', tool_calls: calls.map(([name, args], i) => ({ id: String(i), function: { name, arguments: args } })) }, { content: 'answer' }];
+  // Lookups open only once the model says it needs them (need_more_info).
+  const lookups = calls.map(([name]) => name).filter(isLookup);
+  const replies = [
+    ...(lookups.length ? [{ content: '', tool_calls: [{ id: 'n', function: { name: 'need_more_info', arguments: JSON.stringify({ missing: 'x', tools: lookups }) } }] }] : []),
+    { content: '', tool_calls: calls.map(([name, args], i) => ({ id: String(i), function: { name, arguments: args } })) },
+    { content: 'answer' },
+  ];
   const chat = async ({ messages }) => {
     sent.push(messages);
     return replies.shift() ?? { content: 'answer' };
   };
   const answers = { ...Object.fromEntries(picks.map((n) => [`use_${n}`, { noul: 0.9 }])), respond_with: { choice: 'message', probabilities: { message: 1 } } };
   const text = await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => answers });
-  const toolResults = (sent.at(-1) || []).filter((m) => m.role === 'tool').map((m) => m.content);
+  const toolResults = (sent.at(-1) || []).filter((m) => m.role === 'tool' && m.tool_call_id !== 'n').map((m) => m.content);
   return { text, toolResults, invocation };
 }
 
@@ -270,4 +276,13 @@ test('several tool calls run in one round, and bad JSON or bad args never run a 
 test('a guest whose turn needs an owner-only tool is refused before the model runs', async () => {
   const { text } = await turn({ picks: ['set_model'], calls: [['set_model', '{"model":"a/b"}']] });
   assert.equal(text, 'Only Oscar can use `set_model`.');
+});
+
+test('every lookup tool exists, and none of them does anything or is Oscar-only', async () => {
+  const names = new Set((await toolDefs({ isOwner: true, config: config() })).map((t) => t.function.name));
+  for (const name of LOOKUP_TOOLS) {
+    assert.ok(names.has(name), `${name} is a tool`);
+    assert.ok(!OWNER_ONLY_TOOLS.has(name), `${name} is a read anyone may use`);
+  }
+  for (const action of ['react', 'create_poll', 'add_reminder', 'play_music', 'self_fix', 'save_note']) assert.equal(isLookup(action), false, action);
 });

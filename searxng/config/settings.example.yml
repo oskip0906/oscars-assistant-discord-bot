@@ -36,6 +36,14 @@ engines:
     disabled: false
   - name: bing news
     disabled: false
+  # Search by image (Panda's reverse_image_search): not upstream, it is
+  # searxng/engines/yandex_reverse.py, copied in by the Dockerfile and
+  # scripts/ensure-searxng.sh. It only runs on a query that is an image URL.
+  - name: yandex reverse
+    engine: yandex_reverse
+    shortcut: yrev
+    timeout: 15.0       # Yandex takes a few seconds to match an image
+    disabled: false
 
 ui:
   static_use_hash: true

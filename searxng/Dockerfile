@@ -3,4 +3,6 @@
 # Owned by uid 1000 because PMS runs every container as that user.
 FROM searxng/searxng:latest
 COPY --chown=1000:1000 config/settings.example.yml /etc/searxng/settings.yml
+# Panda's own engines go beside the upstream ones, the only place SearXNG loads engines from.
+COPY --chown=1000:1000 engines/ /usr/local/searxng/searx/engines/
 RUN chown -R 1000:1000 /etc/searxng /var/cache/searxng

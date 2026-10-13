@@ -40,14 +40,13 @@ function turn(answers, extra = {}) {
   return runAgent(invocation, 'q', 'q', { chat, decideImpl: jev(answers) }).then((reply) => Object.assign(calls, { reply, invocation }));
 }
 
-test("Jev's picks are offered (not forced) with the core tools, then the model answers", async () => {
+test("Jev's picks are advice: a lookup it picked waits for need_more_info, so the model can answer in one call", async () => {
   const calls = await turn({ use_get_user_id: { noul: 0.9 }, use_play_music: { noul: 0.2 } });
   assert.equal(calls[0].toolChoice, 'auto');
-  assert.ok(calls[0].tools.includes('get_user_id') && calls[0].tools.includes('web_fetch'));
+  assert.ok(!calls[0].tools.includes('get_user_id') && calls[0].tools.includes('need_more_info'));
   assert.ok(!calls[0].tools.includes('play_music'), 'a tool Jev is unsure of is left to more_tools');
-  assert.equal(calls[1].toolChoice, 'auto');
-  assert.equal(calls.length, 2, 'answering in round 2 saves the extra call');
-  assert.deepEqual(calls.invocation.toolsUsed, ['get_user_id']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls.reply, 'done');
 });
 
 test('with no sure pick (or a made-up one) nothing is forced: the model may answer straight away', async () => {

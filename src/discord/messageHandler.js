@@ -151,7 +151,10 @@ export function isStop(message, config, user, direct = false) {
 }
 
 // One line of channel history as Panda reads it; its own lines are marked (you).
-const historyLine = (m, self) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`.slice(0, RECENT_CHARS);
+// The small grey `-# ` lines on Panda's own replies (the tools it used, the
+// token stats) are left out: noise, and they read as "always use tools".
+const historyLine = (m, self) =>
+  (m.author.id === self ? `(you) ${formatEnvelope(m).replace(/(?<=^|\n|: )-# [^\n]*(\n|$)/g, '').trimEnd()}` : formatEnvelope(m)).slice(0, RECENT_CHARS);
 
 // Is a message that is not a ping, a reply to Panda or a DM still one to join,
 // and how? Jev reads it with the RECENT_COUNT messages before it:
@@ -392,6 +395,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         // the model for this turn only; memory keeps the text, whose attachment
         // URLs expire and would break later turns.
         const media = attachments.length ? await attachmentParts(attachments, await modelInputs(config)) : [];
+        // The links behind the [ATTACHMENTS] numbers, in the same order, so a tool can take "#1".
+        invocation.attachmentUrls = [...new Set(attachments.map((a) => a.url).filter(Boolean))];
         stage(`attachments (${attachments.length})`);
         if (signal.aborted) return;
 

@@ -48,6 +48,11 @@ export const commandDefs = [
     .setDescription('Search for images')
     .addStringOption((o) => o.setName('query').setDescription('What to find pictures of').setRequired(true)),
   new SlashCommandBuilder()
+    .setName('reverse_image_search')
+    .setDescription('Search by image: pages with matching pictures, and what it likely shows')
+    .addAttachmentOption((o) => o.setName('image').setDescription('The picture to search by'))
+    .addStringOption((o) => o.setName('url').setDescription('Or a public image URL (http:// or https://)')),
+  new SlashCommandBuilder()
     .setName('video_search')
     .setDescription('Search for videos')
     .addStringOption((o) => o.setName('query').setDescription('What to find videos about').setRequired(true)),

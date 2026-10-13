@@ -19,6 +19,18 @@ import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.
 // /private, so chat can't do what the command refuses.
 export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'add_rule', 'remove_rule', 'create_thread', 'send_to_thread', 'github', 'set_model', 'private_mode']);
 
+// Tools that only read or look something up. A turn starts without them: the
+// model answers from what it has, and calls need_more_info (agent.js) to get
+// them only when it can't. Every GitHub MCP tool is a read too. Everything
+// else does something (react, poll, reminder, music, self_fix…) and is offered
+// as before.
+export const LOOKUP_TOOLS = new Set([
+  'web_search', 'web_fetch', 'image_search', 'reverse_image_search', 'video_search', 'news_search', 'wiki_search', 'research',
+  'fetch_history', 'index_chat', 'search_notes', 'list_notes', 'open_note', 'show_reminders',
+  'how_i_work', 'panda_commands', 'current_model', 'usage', 'server_info', 'get_user_id', 'get_message_sender',
+]);
+export const isLookup = (name) => LOOKUP_TOOLS.has(name) || isGithubMcpTool(name);
+
 const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools, commandTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
@@ -35,6 +47,7 @@ const executors = {
   web_search: searchTools.webSearch,
   web_fetch: searchTools.webFetch,
   image_search: searchTools.imageSearch,
+  reverse_image_search: searchTools.reverseImageSearch,
   video_search: searchTools.videoSearch,
   news_search: searchTools.newsSearch,
   wiki_search: searchTools.wikiSearch,
