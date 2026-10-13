@@ -16,6 +16,13 @@ create table if not exists bot_settings (
   value text not null
 );
 
+-- Private mode (src/privateMode.js): one row, id 1. No row means OFF.
+create table if not exists pms (
+  id smallint primary key default 1 check (id = 1),
+  enabled boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
 -- Hidden chat context, split by channel: a search only returns lines from the
 -- channel it runs in (a thread is its own channel). Everything Panda was given
 -- is saved, never DMs. The Discord message id makes a re-save a no-op.
@@ -72,6 +79,9 @@ create table if not exists note_links (
   to_id bigint not null references notes (id) on delete cascade,
   primary key (from_id, to_id)
 );
+-- A note can be a file (create_note with a file name): its body is the file's
+-- text and file_name what it is sent back as ("plan.md", "list.csv").
+alter table notes add column if not exists file_name text;
 
 -- Reminders. next_at is absolute; repeats are recomputed from local_time in the
 -- creator's timezone so they survive daylight saving changes.

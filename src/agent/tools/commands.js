@@ -4,6 +4,7 @@ import { switchModel } from '../../discord/model.js';
 import { usageLines } from '../../discord/usage.js';
 import { deleteNoteConfirm } from '../../discord/notes.js';
 import { providerFor } from '../openrouter.js';
+import { updatePresence } from '../../presence.js';
 import { JEV_MODEL } from '../jev.js';
 import { runResearch } from '../research/pipeline.js';
 import { renderReport } from '../research/render.js';
@@ -204,6 +205,10 @@ export const COMMAND_TOOLS = {
   set_rule: { tool: 'set_rule' },
   create_poll: { tool: 'create_poll' },
   create_card: { tool: 'send_card' },
+  clear: {
+    gated:
+      'It deletes messages for good and only Oscar may run it, so it is never run from chat: Oscar runs /clear himself, with a number or "all".',
+  },
   index_channel: {
     gated:
       'It reads a whole channel (up to 10,000 messages) and only Oscar may start it, so it is never run from chat: Oscar runs /index_channel himself. To read around one old message, index_chat does that in chat.',
@@ -273,11 +278,13 @@ export async function setModel({ model, provider = '' } = {}, invocation, { swit
   return result.ok ? result.summary : `${result.summary}\n(The switch did not happen; say so.)`;
 }
 
-export function privateModeTool({ state } = {}, invocation) {
+export async function privateModeTool({ state } = {}, invocation) {
   const mode = invocation.privateMode;
   if (!mode) return 'Private mode is unavailable here.';
   if (state === 'status') return `Private mode is ${mode.isOn() ? 'ON' : 'OFF'}.`;
-  mode.set(state === 'on');
+  const saved = await mode.set(state === 'on');
+  if (!saved.ok) return `${saved.error}\nPrivate mode is still ${saved.on ? 'ON' : 'OFF'}. (The switch did not happen; say so.)`;
+  updatePresence(invocation.client, mode);
   return state === 'on'
     ? 'Private mode is now ON: from the next message on, only Oscar gets answers.'
     : 'Private mode is now OFF: everyone gets answers again.';
@@ -305,7 +312,7 @@ export async function openNoteTool({ title } = {}, invocation) {
   const note = await openNote(config, String(title));
   if (!note) return `No note matches "${title}". Say so; do not make one up.`;
   const { folders } = await loadTree(config);
-  return `[NOTE — "${note.title}" in 📁 ${folderPath(folders, note.folder_id).join(' / ') || 'Unsorted'}, by user id:${note.author_id}]\n${note.description}\n\n${note.body.slice(0, MAX_NOTE_BODY)}`;
+  return `[NOTE — "${note.title}" in 📁 ${folderPath(folders, note.folder_id).join(' / ') || 'Unsorted'}, by user id:${note.author_id}${note.file_name ? `, a file: ${note.file_name} (send_note_file sends it)` : ''}]\n${note.description}\n\n${note.body.slice(0, MAX_NOTE_BODY)}`;
 }
 
 // The same confirmation /delete_note shows: the click handler checks again that

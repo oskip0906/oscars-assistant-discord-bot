@@ -334,3 +334,22 @@ test('a real reply is sent as is, with no sign-off', async () => {
   assert.equal(text, 'sure, 7pm works');
   assert.deepEqual(reactions, []);
 });
+
+test('the reply ends with the tokens, cost and time the turn took', async () => {
+  const { statsLine } = await import('../src/discord/messageHandler.js');
+  assert.equal(statsLine(undefined, 100), '');
+  assert.equal(
+    statsLine({ inputTokens: 1204, outputTokens: 87, cost: 0.00213, modelMs: 2900 }, 4210),
+    '-# 📥 1,204 in · 📤 87 out · 💸 $0.0021 · ⏱️ 4.2s total · 🧠 2.9s model',
+  );
+});
+
+test('a turn adds up the tokens and cost of every model call it makes', async () => {
+  const invocation = { contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' }, message: { channel: { name: 'general' }, author: { id: '2', username: 'someone' } }, isOwner: false };
+  const chat = async ({ onUsage }) => (onUsage({ prompt_tokens: 100, completion_tokens: 20, cost: 0.001 }), { content: 'hi there' });
+  assert.equal(await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => ({ respond_with: sure('message') }) }), 'hi there');
+  assert.equal(invocation.stats.inputTokens, 100);
+  assert.equal(invocation.stats.outputTokens, 20);
+  assert.equal(invocation.stats.cost, 0.001);
+  assert.ok(invocation.stats.modelMs >= 0);
+});

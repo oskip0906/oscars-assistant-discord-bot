@@ -84,14 +84,14 @@ test('Jev decides whether an unpinged message is for Panda, reading the 5 lines 
 
 const at = (answers, r, before = []) => forPanda(msg('7', 'a', 'hm'), before, 'bot', config, jev(answers), () => r);
 
-test('unpinged, Panda talks only when Jev is at least 70% sure, never by chance', async () => {
+test('unpinged, Panda talks only when Jev is at least 80% sure, never by chance', async () => {
   for (const r of [0, 0.5]) {
-    assert.equal(await at({ addressed: { noul: 0.69 } }, r), false);
-    assert.equal(await at({ follows_up: { noul: 0.69 } }, r, [msg('5', 'bot', 'hi')]), false);
+    assert.equal(await at({ addressed: { noul: 0.79 } }, r), false);
+    assert.equal(await at({ follows_up: { noul: 0.79 } }, r, [msg('5', 'bot', 'hi')]), false);
   }
 });
 
-test('a maybe never talks: only the 70% addressed / follow-up checks do', async () => {
+test('a maybe never talks: only the 80% addressed / follow-up checks do', async () => {
   for (const r of [0, 0.5]) assert.equal(await at({ for_assistant: { noul: 0.99 } }, r), false);
 });
 
@@ -120,13 +120,13 @@ test('a ping or a reply to Panda is answered even when the gate would say no', a
 
 test('bots are judged exactly like people, reactions included', async () => {
   const bot = { ...msg('7', 'b', 'hm'), author: { id: 'b', username: 'b', bot: true } };
-  assert.equal(await forPanda(bot, [], 'bot', config, jev({ addressed: { noul: 0.7 } }), () => 0.5), 'talk');
+  assert.equal(await forPanda(bot, [], 'bot', config, jev({ addressed: { noul: 0.8 } }), () => 0.5), 'talk');
   assert.equal(await forPanda(bot, [], 'bot', config, jev({ worth_reacting: { noul: 0.8 } }), () => 0.5), 'react');
 });
 
 test('a message Jev is fairly sure is addressed to Panda is always answered, judged against identity.md', async () => {
-  assert.equal(await at({ addressed: { noul: 0.7 } }, 0.999), 'talk', 'not sampled');
-  assert.equal(await at({ addressed: { noul: 0.69 } }, 0.999), false);
+  assert.equal(await at({ addressed: { noul: 0.8 } }, 0.999), 'talk', 'not sampled');
+  assert.equal(await at({ addressed: { noul: 0.79 } }, 0.999), false);
   let seen;
   await forPanda(msg('7', 'a', 'hm'), [], 'bot', config, async (_c, s, q) => ((seen = { s, q }), null));
   assert.ok('assistant_identity' in seen.s);
@@ -135,8 +135,8 @@ test('a message Jev is fairly sure is addressed to Panda is always answered, jud
 
 test("a reply to one of Panda's own lines is always answered, but only when Panda really said something there", async () => {
   const pandaSpoke = [msg('5', 'bot', 'pineapple belongs on pizza'), msg('6', 'b', 'lol')];
-  assert.equal(await at({ follows_up: { noul: 0.7 } }, 0.999, pandaSpoke), 'talk', 'not sampled');
-  assert.equal(await at({ follows_up: { noul: 0.7 } }, 0.999, [msg('6', 'b', 'lol')]), false, 'no (you) line, nothing to follow up');
+  assert.equal(await at({ follows_up: { noul: 0.8 } }, 0.999, pandaSpoke), 'talk', 'not sampled');
+  assert.equal(await at({ follows_up: { noul: 0.8 } }, 0.999, [msg('6', 'b', 'lol')]), false, 'no (you) line, nothing to follow up');
   assert.equal(await at({ follows_up: { noul: 0.4 } }, 0.999, pandaSpoke), false);
 });
 

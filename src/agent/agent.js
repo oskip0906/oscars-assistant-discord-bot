@@ -1,5 +1,5 @@
 import { chatCompletion, providerFor } from './openrouter.js';
-import { buildSystemPrompt, myNames } from './systemPrompt.js';
+import { buildSystemPrompt, myNames, NO_REPLY } from './systemPrompt.js';
 import { toolDefs, executeTool, OWNER_ONLY_TOOLS } from './tools/index.js';
 import { decide, sampleChoice } from './jev.js';
 import { redactSecrets } from '../config.js';
@@ -52,6 +52,7 @@ const log = (tag, ...parts) => console.log(`[agent ${tag}]`, ...parts);
 export const saysNothing = (text) => !/[\p{L}\p{N}]/u.test(text.replace(/<a?:\w+:\d+>/g, ''));
 // Nothing to say at all: empty, or only a 🐼 and punctuation ("🐼 …", "...").
 // An emoji the model chose ("🔥") is still a reply; this is filler.
+export const isNoReply = (text) => String(text ?? '').trim().toUpperCase().replace(/[\s.]+$/, '') === NO_REPLY;
 export const isFiller = (text) => !String(text ?? '').replace(/🐼|[\s\p{P}]/gu, '');
 
 // A sign-off: a wave and no words, so the conversation can end. The wave is
@@ -99,7 +100,13 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   const { config, contextKey, signal } = invocation;
   const who = invocation.message?.author?.username ?? '?';
   const turnStart = Date.now();
-  const stats = (invocation.stats = { modelCalls: 0, promptTokens: 0, completionTokens: 0, toolsOffered: 0 });
+  // Tokens, cost and time of this turn's model calls, shown under the reply.
+  const stats = (invocation.stats ??= { inputTokens: 0, outputTokens: 0, cost: 0, modelMs: 0, modelCalls: 0, toolsOffered: 0 });
+  const onUsage = (usage) => {
+    stats.inputTokens += Number(usage.prompt_tokens) || 0;
+    stats.outputTokens += Number(usage.completion_tokens) || 0;
+    stats.cost += Number(usage.cost) || 0;
+  };
   log(contextKey, `turn start from @${who} (model ${config.model}): ${clip(turnText, 150)}`);
 
   try {
@@ -119,12 +126,16 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
 
   const ask = async (msgs, tools, toolChoice) => {
     const callStart = Date.now();
-    const msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model), messages: msgs, tools, toolChoice, signal });
+    const before = stats.inputTokens;
+    let msg;
+    try {
+      msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model), messages: msgs, tools, toolChoice, onUsage, signal });
+    } finally {
+      stats.modelMs += Date.now() - callStart;
+    }
     signal?.throwIfAborted();
-    stats.modelCalls++;
-    stats.promptTokens += msg.usage?.prompt_tokens ?? 0;
-    stats.completionTokens += msg.usage?.completion_tokens ?? 0;
-    log(contextKey, `model #${stats.modelCalls} ${Date.now() - callStart}ms, ${tools?.length ?? 0} tools offered${msg.usage ? `, ${msg.usage.prompt_tokens} in / ${msg.usage.completion_tokens} out tokens` : ''} → ${
+    stats.modelCalls = (stats.modelCalls || 0) + 1;
+    log(contextKey, `model #${stats.modelCalls} ${Date.now() - callStart}ms, ${tools?.length ?? 0} tools offered, ${stats.inputTokens - before} tokens in → ${
       msg.tool_calls?.length ? `tools: ${msg.tool_calls.map((c) => c.function.name).join(', ')}` : `text (${(msg.content || '').length} chars)`
     }`);
     return msg;
@@ -161,7 +172,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     const more = wordy ? unoffered() : [];
     listed = [...(invocation.reacted ? offered.filter((t) => t.function.name !== 'react') : offered), ...(more.length ? [moreToolsDef(more)] : [])];
     if (!listed.length) break;
-    stats.toolsOffered = Math.max(stats.toolsOffered, listed.length);
+    stats.toolsOffered = Math.max(stats.toolsOffered || 0, listed.length);
     const note =
       round === 1
         ? notes.length && { role: 'user', content: `[TOOLS] ${notes.join(' ')}` }
@@ -205,7 +216,12 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   const ran = messages.some((m) => m.role === 'tool');
   const msg = answer ?? (await ask(messages, ran ? listed : [], 'none'));
   const text = msg.content?.trim() || '';
-  log(contextKey, `turn done in ${Date.now() - turnStart}ms after ${stats.modelCalls} model call(s), ${stats.promptTokens} in / ${stats.completionTokens} out tokens`);
+  log(contextKey, `turn done in ${Date.now() - turnStart}ms after ${stats.modelCalls} model call(s), ${stats.inputTokens} in / ${stats.outputTokens} out tokens`);
+  // A rule says to stay silent: nothing is sent, not even the sign-off wave.
+  if (isNoReply(text)) {
+    invocation.silent = true;
+    return '';
+  }
   // After a reaction, poll or card, a reply with no words (usually the same
   // emoji echoed) is dropped: something was already sent. A ping or reply is
   // always answered in words, so there it is kept.

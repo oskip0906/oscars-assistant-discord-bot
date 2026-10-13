@@ -6,7 +6,7 @@
 
 ## Commands
 
-The same groups as `/menu`. Everything also works by just asking in chat, except `/index_channel`; the Power Tools only for Oscar. Saying "@Panda stop" aborts your request that is still running or waiting (Oscar's, everyone's in that channel).
+The same groups as `/menu`. Everything also works by just asking in chat, except `/index_channel` and `/clear`; the Power Tools only for Oscar. Saying "@Panda stop" aborts your request that is still running or waiting (Oscar's, everyone's in that channel).
 
 **🎵 Music**
 | Command | What it does |
@@ -51,7 +51,8 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 | `/self_fix <instruction>` | Approve a sandboxed self-fix PR, then restart after it merges |
 | `/set_model <model> [provider]` | Switch the conversation model (OpenRouter), optionally pinned to one provider; saved in the database |
 | `/set_rule <instruction>` | Change Panda's personality or behavior for good |
-| `/private on\|off\|status` | Only respond to Oscar |
+| `/private on\|off\|status` | Only respond to Oscar. Saved in the database (db-1 `pms` table), so it survives restarts; Panda's status shows whether it is ON or OFF |
+| `/clear <number\|all>` | Delete the newest messages in the channel, or `all` of them. Needs Panda to have **Manage Messages** (plus View Channel and Read Message History) there; otherwise it says it can't |
 
 **📖 Info**
 | Command | What it does |
@@ -64,13 +65,13 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 
 Beyond the slash commands, Panda calls these on its own while chatting (details in [ARCHITECTURE.md](ARCHITECTURE.md#tools)):
 
-- **Discord:** look up members and message senders, read server info (channels, roles, events, emojis, threads), react with emoji, post polls and embed cards (link buttons, clickable buttons, dropdowns).
+- **Discord:** look up members and message senders, read server info (channels, roles, events, emojis, threads), react with emoji, post polls and embed cards (link buttons, clickable buttons, dropdowns). Panda listens and answers in threads too, to people and bots alike.
 - **Web:** search the web and images, read any public page.
-- **Memory:** read further back in a channel, search what it remembered, index the messages around an old one, and save, list, open and find notes (deleting one posts the same confirmation as `/delete_note`).
+- **Memory:** read further back in a channel, search what it remembered, index the messages around an old one, and save, list, open and find notes, create notes and files (.txt, .md and other text files) that are stored with the notes and sent as attachments or cards, and send any saved note back as a file (deleting one posts the same confirmation as `/delete_note`).
 - **Reminders and research:** add, show and delete reminders, and run the full `/research` pipeline.
 - **Slash commands:** explain any command from its registered definition, say which model it runs on (the live setting), and report spend.
 - **Music:** play, skip, pause, resume, stop and show the queue.
 - **Self-knowledge:** read ARCHITECTURE.md and its own source on GitHub to explain how it works.
-- **Oscar only:** read GitHub (files, commits, issues, PRs, code search, Actions runs), make GitHub writes such as issues and comments, change its own code through an approved `self_fix` PR, change its personality with `set_rule`, switch models with `set_model`, and toggle private mode.
+- **Oscar only:** read GitHub (files, commits, issues, PRs, code search, Actions runs), make GitHub writes such as issues and comments, change its own code through an approved `self_fix` PR, remember standing rules in `RULES.md` with `add_rule` / `remove_rule` (followed in every reply), create threads and post in them with `create_thread` / `send_to_thread`, change its personality with `set_rule`, switch models with `set_model`, and toggle private mode.
 
 Everything else — how a message becomes a reply, how Jev makes Panda's decisions, the prompts, memory, models, tools, the research pipeline, the sandbox, safety and deployment — lives in **[ARCHITECTURE.md](ARCHITECTURE.md)**.

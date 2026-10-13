@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
 import { config, validateConfig } from './config.js';
 import { PrivateMode } from './privateMode.js';
+import { updatePresence } from './presence.js';
 import { createPlayer } from './music/player.js';
 import { createMessageHandler } from './discord/messageHandler.js';
 import { commandDefs, createInteractionHandler } from './discord/commands.js';
@@ -13,6 +14,7 @@ import { ensureSchema } from './db.js';
 import { loadModel } from './discord/model.js';
 import { startReminders } from './reminders.js';
 import { watchStorage } from './storage.js';
+import { joinThread, joinActiveThreads } from './discord/threads.js';
 
 validateConfig();
 // A database that is down at boot leaves chat working; its features fail on use.
@@ -29,8 +31,9 @@ const BASE_INTENTS = [
 
 async function boot(intents) {
   const client = new Client({ intents, partials: [Partials.Channel] });
-  const privateMode = new PrivateMode(config.dataDir);
-  if (privateMode.isOn()) console.log('[panda] Private mode is ON (restored from flag file)');
+  // Loaded before login, so no message is answered before the saved state applies.
+  const privateMode = new PrivateMode(config);
+  console.log(`[panda] Private mode is ${(await privateMode.load()) ? 'ON' : 'OFF'}`);
 
   let player = null;
   try {
@@ -44,6 +47,7 @@ async function boot(intents) {
 
   client.once(Events.ClientReady, async (readyClient) => {
     console.log(`[panda] Logged in as ${readyClient.user.tag} (id ${readyClient.user.id})`);
+    updatePresence(readyClient, privateMode);
     let registered = 0;
     for (const guild of readyClient.guilds.cache.values()) {
       try {
@@ -60,6 +64,9 @@ async function boot(intents) {
     // was still in flight gets the finish line and the DM its process never
     // lived to send. A self-fix ends in a restart, so this is the normal path
     // for reporting one — not an edge case.
+    joinActiveThreads(readyClient)
+      .then((n) => n && console.log(`[panda] Joined ${n} active thread(s)`))
+      .catch((err) => console.error('[panda] could not join the active threads:', err.message));
     await approvalCard.retireStale(readyClient).catch(() => {});
     startReminders(readyClient, config);
     watchStorage(readyClient, config);
@@ -75,6 +82,7 @@ async function boot(intents) {
   client.on(Events.GuildCreate, (guild) => {
     guild.commands.set(commandDefs).catch(() => {});
   });
+  client.on(Events.ThreadCreate, (thread) => joinThread(thread));
   const onMessage = createMessageHandler({ client, config, player, privateMode });
   client.on(Events.MessageCreate, onMessage);
   client.on(Events.InteractionCreate, createInteractionHandler({ client, config, player, privateMode, onMessage }));

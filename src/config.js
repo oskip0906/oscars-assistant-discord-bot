@@ -73,6 +73,10 @@ export const config = {
   // The PMS Postgres (db-1): persona prompts, hidden chat context, notes and
   // reminders (src/schema.sql). Unset = none of those work, but chat still does.
   databaseUrl: process.env.DATABASE_URL || '',
+  // Oscar's standing rules (add_rule / remove_rule), read into every system
+  // prompt. Defaults to RULES.md in the repo; RULES_FILE moves it (e.g. into
+  // data/ so a container keeps it across redeploys).
+  rulesFile: process.env.RULES_FILE || path.join(projectRoot, 'RULES.md'),
 };
 
 // The bot's secrets only ever go into auth headers; none is put in front of the

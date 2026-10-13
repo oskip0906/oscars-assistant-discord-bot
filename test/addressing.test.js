@@ -8,19 +8,26 @@ const bot = { id: 'bot', username: 'Panda' };
 const from = (author, content, extra = {}) => ({ content, author: { id: author, username: author }, mentions: { users: new Map() }, ...extra });
 
 test('"my bot" and "my assistant" mean Panda only when Oscar says them', () => {
-  for (const text of ['my bot is acting up lol', 'can my assistant look this up', 'hey my bot, play something']) {
+  for (const text of ['my bot what time is it', 'can you look this up, my assistant?', 'hey my bot, play something']) {
     assert.equal(addressee(from(OSCAR, text), config, bot), 'panda', text);
     assert.equal(addressee(from('guest', text), config, bot), null, `from a guest: ${text}`);
   }
+  // Talking about it is only naming it: Jev decides.
+  for (const text of ['my bot is acting up lol', 'can my assistant look this up']) assert.equal(addressee(from(OSCAR, text), config, bot), 'named', text);
 });
 
 test('other people call Panda "panda bot", "Oscar\'s bot", "the bot" or Panda', () => {
-  const texts = ['panda bot whats the weather', "Oscar's bot, what's 2+2", 'oscars bot can you help', 'hey the bot, you there?', 'yo panda play lofi', 'what does pandabot think', "is oscar's assistant awake"];
+  const texts = ['panda bot whats the weather', "Oscar's bot, what's 2+2", 'oscars bot can you help', 'hey the bot, you there?', 'yo panda play lofi', 'what does pandabot think, panda?', "is it raining, oscar's assistant"];
   for (const text of texts) assert.equal(addressee(from('guest', text), config, bot), 'panda', text);
   // Its Discord name counts too.
   assert.equal(addressee(from('guest', 'bamboo, you up?'), config, { id: 'bot', username: 'Bamboo' }), 'panda');
   // Unrelated words don't.
   for (const text of ['pandas are so cute', 'my bot is better', 'nice weather today']) assert.equal(addressee(from('guest', text), config, bot), null, text);
+});
+
+test('a message that only mentions Panda is not necessarily to it: Jev decides', () => {
+  const texts = ['I think panda is broken', 'panda is so slow today', 'ask panda later', 'the bot keeps crashing', 'what does pandabot think', "is oscar's assistant awake"];
+  for (const text of texts) assert.equal(addressee(from('guest', text), config, bot), 'named', text);
 });
 
 test('a message put to Oscar is his, not Panda\'s', () => {
@@ -31,7 +38,7 @@ test('a message put to Oscar is his, not Panda\'s', () => {
   // Calling Panda first keeps it Panda's, and talk about Oscar is not to him.
   assert.equal(addressee(from('guest', 'Panda, ask oscar if he is free'), config, bot), 'panda');
   assert.equal(addressee(from('guest', 'oscar is cooking tonight'), config, bot), null);
-  assert.equal(addressee(from(OSCAR, 'oscar here, my bot ok?'), config, bot), 'panda', 'Oscar is never kept from his own bot');
+  assert.equal(addressee(from(OSCAR, 'oscar here, my bot ok?'), config, bot), 'named', 'Oscar is never kept from his own bot');
 });
 
 // The real handler with Jev scripted, answering whatever reaches the agent.
@@ -65,6 +72,13 @@ test('with Jev down, Panda still answers when called by name, and Oscar\'s "my b
     null,
   );
   assert.deepEqual(seen.sort(), ["Oscar's bot, hi", 'my bot what time is it', 'panda bot tell me a joke']);
+});
+
+test('naming Panda mid-sentence talks only when Jev is at least 80% sure it is addressed, and not at all with Jev down', async () => {
+  const says = (p) => ({ follows_up: { noul: 0 }, addressed: { noul: p }, worth_reacting: { noul: 0 } });
+  assert.deepEqual(await answered([['guest', 'I think panda is broken']], says(0.75)), []);
+  assert.deepEqual(await answered([['guest', 'ask panda what the weather is']], says(0.85)), ['ask panda what the weather is']);
+  assert.deepEqual(await answered([['guest', 'panda is so slow today']], null), []);
 });
 
 test('a message directed at Oscar gets no reply from Panda, even when Jev would have joined in', async () => {
@@ -115,4 +129,32 @@ test('a reply with nothing in it ("🐼 …", empty, blank) is never sent: Panda
 
 test('a real reply is sent once, with no sign-off', async () => {
   assert.deepEqual(await replied('sure, 7pm works'), { reactions: [], sent: ['sure, 7pm works'] });
+});
+
+test('in private mode a guest is ignored entirely (no reply, no Jev, no agent) while Oscar is still answered', async () => {
+  const seen = [];
+  const replies = [];
+  let jevCalls = 0;
+  const channel = { sendTyping: async () => {}, send: async () => ({}), messages: { fetch: async () => new Map() } };
+  const handler = createMessageHandler({
+    client: { user: bot },
+    config,
+    player: null,
+    privateMode: { isOn: () => true },
+    runAgentImpl: async (invocation) => (seen.push(invocation.message.content), 'ok'),
+    decideImpl: async () => (jevCalls++, null),
+  });
+  const ping = { mentions: { users: new Map([[bot.id, {}]]) } };
+  let id = 0;
+  for (const [author, content] of [['guest', `<@${bot.id}> hello?`], ['guest', 'what is everyone up to'], [OSCAR, `<@${bot.id}> hi`]]) {
+    id += 1;
+    await handler({
+      ...from(author, content, ping), id: `p${id}`, channelId: `pc${id}`, channel, guild: { id: 'g' }, createdAt: new Date(id),
+      attachments: new Map(), embeds: [], react: async () => {}, reply: async (p) => (replies.push(p), {}),
+    });
+  }
+  for (let i = 0; i < 60 && !seen.length; i++) await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(seen, [`<@${bot.id}> hi`]);
+  assert.equal(jevCalls, 0);
+  assert.equal(replies.filter((p) => /private conversation/.test(p.content ?? '')).length, 0);
 });

@@ -13,6 +13,6 @@ test('every slash command builds, with /set_rule in and the memory commands gone
   }
   assert.ok(names.includes('create_poll'));
   assert.ok(names.includes('create_card'));
-  assert.ok(!names.includes('clear') && !names.includes('clearall'));
+  assert.ok(names.includes('clear') && !names.includes('clearall'));
   assert.equal(new Set(names).size, names.length);
 });

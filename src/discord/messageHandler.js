@@ -1,10 +1,9 @@
 import { runAgent, isFiller, signOff } from '../agent/agent.js';
 import { formatEnvelope } from './envelope.js';
 import { chunkMessage } from './chunk.js';
-import { PRIVATE_MESSAGE } from '../privateMode.js';
 import { decide, sampleYes } from '../agent/jev.js';
 import { saveContext } from '../agent/historyStore.js';
-import { attachmentParts, gifPreviews } from './attachments.js';
+import { attachmentParts, mediaOf } from './attachments.js';
 import { modelInputs } from './model.js';
 import { redactSecrets } from '../config.js';
 import { readChannelRange } from '../agent/tools/history.js';
@@ -32,7 +31,7 @@ const RECENT_COUNT = 5;
 const RECENT_CHARS = 500;
 // Panda talks unpinged only when Jev is this sure the message is addressed to
 // it or responds to something it said; below that it never talks.
-const TALK = 0.7;
+const TALK = 0.8;
 // identity.md is cut to this for Jev, which reads it to tell what is meant for Panda.
 const IDENTITY_CHARS = 2000;
 // Unaddressed messages are reacted to only when Jev leans yes, then sampled.
@@ -87,6 +86,10 @@ export async function signsOff(text, clientUserId, config, decideImpl = decide) 
 // Panda (or its Discord name), "panda bot", "Oscar's bot" or "the bot". A message
 // put to Oscar himself (his @mention, a reply to him, "Oscar, can you…") is his
 // to answer, so Panda stays out of it rather than answering in his place.
+// Being named is not being addressed: only a name in calling position (the start
+// of the message, or tagged on the end: "…, panda?") counts as calling Panda.
+// Named anywhere else ("I think panda is broken", "ask panda later") it is
+// 'named' and Jev decides; with Jev down, Panda stays out of it.
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const OWNER = 'oscar';
 const OWNER_POSSESSIVE = `${OWNER}(?:'|’)?s`;
@@ -94,6 +97,9 @@ const OWNER_POSSESSIVE = `${OWNER}(?:'|’)?s`;
 const OPENER = "(?:(?:hey|hi|hello|yo|oi|ok|okay|so|um|uh|pls|please|sup|wait|ayo|ay)[\\s,!.]+)*";
 // Greetings that make the next name the one being called ("hey oscar how's it going").
 const GREETING = "(?:(?:hey|hi|hello|yo|oi|sup|ayo|ay|dear|thanks|thx|ty)[\\s,!.]+)+";
+// Words after a name at the start that make the message about Panda, not to it ("panda is so slow").
+const ABOUT =
+  "is|isn't|was|wasn't|are|were|has|hasn't|had|have|keeps|kept|seems|seemed|just|always|never|still|did|didn't|does|doesn't|can't|cannot|won't|wouldn't|couldn't|got|gets|went|said|says|told|thinks|thought|knows|kinda|really|sucks|broke|crashed";
 
 // Every phrase that names Panda when `isOwner` (or not) says it.
 export function pandaAliases(config, user, isOwner = false) {
@@ -106,7 +112,8 @@ export function pandaAliases(config, user, isOwner = false) {
 }
 
 // 'panda' when the message calls Panda, 'owner' when it is put to Oscar instead,
-// null when this check can't tell (then Jev decides, as before).
+// 'named' when it names Panda without calling it, null when it doesn't name it
+// (for both, Jev decides).
 export function addressee(message, config, user, repliedTo = null) {
   const isOwner = Boolean(config.ownerId) && message.author?.id === config.ownerId;
   const text = stripBotMention(message.content, user?.id ?? '').toLowerCase();
@@ -116,6 +123,10 @@ export function addressee(message, config, user, repliedTo = null) {
   const callsPanda = new RegExp(`^\\W*(?:${GREETING}@?${alias}(?![\\w'’])|${OPENER}@?${alias}\\s*[,:!])`, 'i');
   // "Panda, ask Oscar…" is for Panda however it goes on.
   if (callsPanda.test(text)) return 'panda';
+  // Its name opening the message, unless the message goes on to talk about it
+  // ("panda bot is down again"); or tagged on the end ("what time is it, panda?").
+  const opens = new RegExp(`^\\W*${OPENER}@?${alias}(?![\\w'’])(?!\\s*(?:${ABOUT})(?![\\w'’]))`, 'i');
+  const tagged = new RegExp(`(?:,\\s*|^\\W*)@?${alias}[\\s?!.]*$|(?<![\\w'’])${alias}\\s*\\?[\\s?!.]*$`, 'i');
   if (!isOwner && config.ownerId) {
     const pingsOwner =
       message.mentions?.users?.has?.(config.ownerId) || new RegExp(`<@!?${config.ownerId}>`).test(message.content ?? '');
@@ -127,7 +138,8 @@ export function addressee(message, config, user, repliedTo = null) {
     ).test(text);
     if (pingsOwner || repliesToOwner || namesOwner) return 'owner';
   }
-  return aliases.test(text) ? 'panda' : null;
+  if (opens.test(text) || tagged.test(text)) return 'panda';
+  return aliases.test(text) ? 'named' : null;
 }
 
 // A stop meant for Panda: pinged or replied to (`direct`), or naming it.
@@ -143,14 +155,14 @@ const historyLine = (m, self) => `${m.author.id === self ? '(you) ' : ''}${forma
 
 // Is a message that is not a ping, a reply to Panda or a DM still one to join,
 // and how? Jev reads it with the RECENT_COUNT messages before it:
-// - 'talk' only when Jev is at least 70% sure it responds to one of Panda's
+// - 'talk' only when Jev is at least 80% sure it responds to one of Panda's
 //   own recent lines (only trusted when Panda really spoke there) or is
 //   addressed to Panda (judged against identity.md and the recent lines).
 // - 'react' when it is not for Panda but worth an emoji (funny, wild, dumb,
 //   big news), sampled too, so Panda doesn't react to everything.
 // - false otherwise. Bots are judged exactly like people. Jev off or down
 //   means false: then only pings, replies and DMs are answered.
-export async function forPanda(message, before, self, config, decideImpl = decide, random = Math.random) {
+export async function forPanda(message, before, self, config, decideImpl = decide, random = Math.random, named = false) {
   const recent = before.slice(-RECENT_COUNT);
   const state = {
     message: formatEnvelope(message),
@@ -159,6 +171,7 @@ export async function forPanda(message, before, self, config, decideImpl = decid
     assistant_identity: (await readPrompt(config, 'identity.md')).slice(0, IDENTITY_CHARS) || '(unknown)',
     owner_name: 'Oscar',
     sender_is_owner: message.author?.id && message.author.id === config.ownerId ? 'yes' : 'no',
+    names_assistant: named ? 'yes, but not at the start or end where someone would call it' : 'no',
   };
   const answers = await decideImpl(config, state, {
     follows_up: {
@@ -169,7 +182,7 @@ export async function forPanda(message, before, self, config, decideImpl = decid
     addressed: {
       type: 'noul',
       instructions:
-        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else (a name or @mention not in `assistant_names`: another bot or nickname such as \"slopbot\" is NOT the assistant), if it is about the assistant rather than to it, if people are talking among themselves, or if it only might be for it. \"my bot\" or \"my assistant\" means the assistant only when `sender_is_owner` is yes; from anyone else it is their own bot. No when it is put to `owner_name` himself (a question or request for him): the assistant never answers in his place.",
+        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else (a name or @mention not in `assistant_names`: another bot or nickname such as \"slopbot\" is NOT the assistant), if it is about the assistant rather than to it, if people are talking among themselves, or if it only might be for it. Naming the assistant is not addressing it (see `names_assistant`): \"panda is so slow today\", \"ask panda later\", \"I told the bot to stop\" or \"lol panda got it wrong\" talk about it, not to it; yes only when the message itself asks or tells it something. \"my bot\" or \"my assistant\" means the assistant only when `sender_is_owner` is yes; from anyone else it is their own bot. No when it is put to `owner_name` himself (a question or request for him): the assistant never answers in his place.",
     },
     worth_reacting: {
       type: 'noul',
@@ -194,6 +207,15 @@ export function toolsLine(names = []) {
   const counts = new Map();
   for (const name of names) if (name !== 'react') counts.set(name, (counts.get(name) || 0) + 1);
   return counts.size ? `-# 🔧 ${[...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ')}` : '';
+}
+
+// "-# 📥 1,204 in · 📤 87 out · 💸 $0.0021 · ⏱️ 4.2s total · 🧠 2.9s model":
+// what the turn's model calls used and cost, and how long the turn and the
+// model took, as subtext under the reply. No model call, no line.
+export function statsLine(stats, totalMs) {
+  if (!stats) return '';
+  const secs = (ms) => `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
+  return `-# 📥 ${stats.inputTokens.toLocaleString('en-US')} in · 📤 ${stats.outputTokens.toLocaleString('en-US')} out · 💸 $${stats.cost.toFixed(4)} · ⏱️ ${secs(totalMs)} total · 🧠 ${secs(stats.modelMs)} model`;
 }
 
 export function suppressLinkEmbeds(text) {
@@ -296,26 +318,18 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         stages.push(`${name} ${Date.now() - stageStart}ms`);
         stageStart = Date.now();
       };
+      const turnStart = Date.now();
       anchor.channel.sendTyping().catch(() => {});
       const typing = setInterval(() => anchor.channel.sendTyping().catch(() => {}), 8000);
       try {
         const parts = [];
         const attachments = [];
-        const seen = new Set();
         for (const m of messages) {
           let ref = null;
           if (m.reference?.messageId) ref = refs.has(m) ? refs.get(m) : await m.fetchReference().catch(() => null);
           parts.push(`${formatEnvelope(m, ref)}${m.reference?.messageId && !ref ? ' (replying to a message that could not be loaded)' : ''}`);
           // A reply to someone's picture ("what's this?") is about that picture.
-          // One that several messages reply to goes in once.
-          for (const msg of [m, ref]) {
-            for (const a of [...(msg?.attachments?.values() ?? []), ...gifPreviews(msg)]) {
-              if (seen.has(a.id ?? a.url)) continue;
-              seen.add(a.id ?? a.url);
-              const sender = msg.member?.displayName || msg.author?.displayName || msg.author?.username;
-              attachments.push({ ...a, sender: sender ? `${sender} (@${msg.author.username})` : undefined, inReply: msg === ref });
-            }
-          }
+          attachments.push(...mediaOf(m, 'in the turn'), ...mediaOf(ref, 'in the message replied to'));
         }
 
         // What was said just before the batch, so "that" and "it" resolve without
@@ -327,6 +341,10 @@ export function createMessageHandler({ client, config, player, privateMode, runA
             : await readChannelRange(messages[0].channel, messages[0].id, { count: RECENT_COUNT }).catch(() => []);
         stage('context');
         const recent = before.map((m) => historyLine(m, self)).join('\n');
+        // "What do you think of this?" often points at a picture, GIF or file
+        // posted just before, maybe on its own with no text: those are read
+        // too, newest first, after the turn's own.
+        for (const m of [...before].reverse()) attachments.push(...mediaOf(m, 'in the recent messages'));
         const trigger = messages[0].author;
         const triggerName = messages[0].member?.displayName || trigger.displayName || trigger.username;
         const turn = parts.join('\n');
@@ -370,8 +388,9 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           embeds: [],
         };
 
-        // Media goes to the model for this turn only; memory keeps the text,
-        // whose attachment URLs expire and would break later turns.
+        // Media is downloaded only here, for a turn Panda answers, and goes to
+        // the model for this turn only; memory keeps the text, whose attachment
+        // URLs expire and would break later turns.
         const media = attachments.length ? await attachmentParts(attachments, await modelInputs(config)) : [];
         stage(`attachments (${attachments.length})`);
         if (signal.aborted) return;
@@ -401,17 +420,19 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         }
 
         // Filler ("", "🐼 …") is never sent. If nothing else answered the turn
-        // (no reaction, poll or card), Panda signs off: a wave, no message.
+        // (no reaction, poll or card), Panda signs off: a wave, no message,
+        // unless one of Oscar's rules told it to stay silent (invocation.silent).
         if (isFiller(replyText)) {
           replyText = '';
-          if (!invocation.reacted && !invocation.posted) await signOff(invocation);
+          if (!invocation.reacted && !invocation.posted && !invocation.silent) await signOff(invocation);
         }
 
         const sent = [];
         if (replyText.trim()) {
           replyText = suppressLinkEmbeds(redactSecrets(replyText));
           const tools = toolsLine(invocation.toolsUsed);
-          const parts = chunkMessage(tools ? `${tools}\n${replyText}` : replyText);
+          const stats = statsLine(invocation.stats, Date.now() - turnStart);
+          const parts = chunkMessage([tools, replyText, stats].filter(Boolean).join('\n'));
           let first = true;
           for (const chunk of parts) {
             if (signal.aborted) break;
@@ -460,6 +481,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           // An earlier message whose Jev check came back late was queued in front: it goes first.
           if (state.queue[0] !== batch) continue;
           state.queue.shift();
+          // Private mode switched on while this batch was collecting: a guest's is dropped unprocessed.
+          if (privateMode?.isOn() && batch.claimantId !== config.ownerId) continue;
           try {
             await processBatch(batch);
           } catch (err) {
@@ -477,6 +500,12 @@ export function createMessageHandler({ client, config, player, privateMode, runA
   return async (message) => {
     try {
       if (message.author.id === client.user.id) return;
+
+      // Private mode: anything not from Oscar is dropped right here. No reply,
+      // no reaction, no batch, no Jev, nothing saved.
+      if (privateMode?.isOn()) {
+        if (message.author.id !== config.ownerId) return;
+      }
 
       const channelId = message.channelId;
 
@@ -523,15 +552,16 @@ export function createMessageHandler({ client, config, player, privateMode, runA
       const direct = isDM || mentioned || repliedToBot;
       let joined = 'talk';
       let before = null;
-      // Called by name ("panda bot", "Oscar's bot", Oscar's "my bot") it talks;
-      // a message put to Oscar is his, so Panda neither answers nor reacts.
+      // Called by name ("panda bot, …", "Oscar's bot, …", Oscar's "my bot …") it
+      // talks; only named (talked about) it is Jev's call like any other message.
+      // A message put to Oscar is his, so Panda neither answers nor reacts.
       const to = direct ? null : addressee(message, config, client.user, ref);
       if (to === 'owner') return;
       if (!direct && to !== 'panda') {
         // A full queue would drop it anyway, so Jev is not asked.
         if ((channels.get(channelId)?.queue.length ?? 0) >= MAX_QUEUE) return;
         before = [...(await message.channel.messages.fetch({ limit: RECENT_COUNT, before: message.id }).catch(() => [])).values()].reverse();
-        joined = await forPanda(message, before, client.user.id, config, decideImpl);
+        joined = await forPanda(message, before, client.user.id, config, decideImpl, Math.random, to === 'named');
         if (!joined) return;
         // A follow-up of theirs may have opened a batch while Jev was deciding.
         if (foldIn()) return;
@@ -548,15 +578,6 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           await reactOnce(message, '👋');
           return;
         }
-      }
-
-      // Private mode: a non-owner trigger gets the hardcoded refusal immediately
-      // (no batch, no model). Bots are ignored silently to avoid loops.
-      if (privateMode?.isOn() && message.author.id !== config.ownerId) {
-        if (!message.author.bot) {
-          await message.reply({ content: PRIVATE_MESSAGE, allowedMentions: { parse: [] } }).catch(() => {});
-        }
-        return;
       }
 
       // Open a new collection batch in this channel's queue, placed by when the

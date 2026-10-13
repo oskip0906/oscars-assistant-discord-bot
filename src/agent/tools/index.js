@@ -17,7 +17,7 @@ import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
 // set_model and private_mode are the tools behind the owner-only /set_model and
 // /private, so chat can't do what the command refuses.
-export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'github', 'set_model', 'private_mode']);
+export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'add_rule', 'remove_rule', 'create_thread', 'send_to_thread', 'github', 'set_model', 'private_mode']);
 
 const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools, commandTools];
 
@@ -28,6 +28,8 @@ const executors = {
   get_message_sender: discordTools.getMessageSender,
   server_info: discordTools.serverInfo,
   react: discordTools.react,
+  create_thread: discordTools.createThread,
+  send_to_thread: discordTools.sendToThread,
   create_poll: uiTools.createPoll,
   send_card: uiTools.sendCard,
   web_search: searchTools.webSearch,
@@ -38,6 +40,8 @@ const executors = {
   wiki_search: searchTools.wikiSearch,
   github: githubTools.githubApi,
   set_rule: rulesTools.setRule,
+  add_rule: rulesTools.addRule,
+  remove_rule: rulesTools.removeRule,
   self_fix: sourceTools.selfFix,
   play_music: musicTools.playMusic,
   fetch_history: historyTools.fetchHistory,
@@ -45,6 +49,8 @@ const executors = {
   how_i_work: aboutTools.howIWork,
   search_notes: notesTools.searchNotes,
   save_note: notesTools.saveNoteFromChat,
+  create_note: notesTools.createNoteFromChat,
+  send_note_file: notesTools.sendNoteFile,
   panda_commands: commandTools.pandaCommands,
   current_model: commandTools.currentModel,
   usage: commandTools.usage,

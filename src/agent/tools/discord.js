@@ -1,5 +1,7 @@
 import { ChannelType, PermissionFlagsBits, GuildScheduledEventStatus } from 'discord.js';
 import { reactOnce, hasReacted } from '../../discord/reactions.js';
+import { chunkMessage } from '../../discord/chunk.js';
+import { redactSecrets } from '../../config.js';
 
 export const defs = [
   {
@@ -55,6 +57,41 @@ export const defs = [
       description:
         'Get the user id, username, and display name of whoever sent the message you are currently answering (it is also inline in the message prefix).',
       parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_thread',
+      description:
+        "Create a new Discord thread and post a message in it. Use it whenever Oscar asks you to start a thread, or to send or say something \"in a new thread\": the thread is made and `message` is posted there, not in this channel. By default it opens in this channel (in its parent channel when you are already in a thread); `channel` picks another one. `from_message` hangs it off the message you are answering instead. You read and answer messages in threads like in any channel. Oscar only.",
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Thread title, up to 100 characters.' },
+          message: { type: 'string', description: 'What to post in the new thread (required in a forum channel).' },
+          channel: { type: 'string', description: 'Where to open it: a channel id, <#id> mention or name (default: this channel).' },
+          from_message: { type: 'boolean', description: 'Start the thread from the message you are answering (default false).' },
+          private: { type: 'boolean', description: 'A private thread only invited people see; the sender is added (default false).' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'send_to_thread',
+      description:
+        "Post a message in an existing thread (not the one you are answering in: there, just reply). Use it when Oscar asks you to say or send something in a thread that already exists. `thread` is its id, <#id> mention or name (server_info's 'threads' section lists the active ones). Oscar only.",
+      parameters: {
+        type: 'object',
+        properties: {
+          thread: { type: 'string', description: 'The thread: id, <#id> mention or name.' },
+          message: { type: 'string', description: 'What to post there.' },
+        },
+        required: ['thread', 'message'],
+      },
     },
   },
 ];
@@ -262,4 +299,90 @@ export async function serverInfo({ section, query = '' }, invocation) {
     default:
       return `Unknown section "${section}". Use one of: overview, channels, roles, events, members, user, emojis, threads.`;
   }
+}
+
+// --- threads --------------------------------------------------------------------
+
+const THREAD_PARENTS = [ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum, ChannelType.GuildMedia];
+const FORUMS = [ChannelType.GuildForum, ChannelType.GuildMedia];
+const channelId = (ref) => String(ref ?? '').trim().match(/^<#(\d+)>$|^(\d{15,})$/)?.slice(1).find(Boolean);
+const bareName = (ref) => String(ref ?? '').trim().replace(/^#/, '').toLowerCase();
+
+async function findChannel(guild, ref) {
+  const id = channelId(ref);
+  if (id) return guild.channels.cache.get(id) ?? (await guild.channels.fetch(id).catch(() => null));
+  const name = bareName(ref);
+  return [...guild.channels.cache.values()].find((c) => c.name?.toLowerCase() === name) ?? null;
+}
+
+async function findThread(guild, ref) {
+  const id = channelId(ref);
+  const byId = id ? guild.channels.cache.get(id) ?? (await guild.channels.fetch(id).catch(() => null)) : null;
+  if (byId) return byId.isThread?.() ? byId : null;
+  const name = bareName(ref);
+  const active = await guild.channels.fetchActiveThreads().catch(() => null);
+  const threads = [...(active?.threads?.values() ?? []), ...guild.channels.cache.values()].filter((c) => c.isThread?.());
+  return threads.find((t) => t.name.toLowerCase() === name) ?? threads.find((t) => t.name.toLowerCase().includes(name)) ?? null;
+}
+
+// Sent from the tool, so it skips the reply path: scrubbed and chunked the same way.
+async function post(channel, text) {
+  for (const content of chunkMessage(redactSecrets(text))) await channel.send({ content, allowedMentions: { parse: ['users'] } });
+}
+
+const failed = (what, err) => `${what}: ${String(err?.message || err).slice(0, 200)}`;
+
+export async function createThread({ name = '', message = '', channel = '', from_message: fromMessage = false, private: isPrivate = false } = {}, invocation) {
+  const guild = invocation.guild;
+  if (!guild) return 'Threads only exist in a server, not in DMs.';
+  const title = String(name).trim().slice(0, 100);
+  if (!title) return 'A thread needs a name.';
+  const text = String(message ?? '').trim();
+  const here = invocation.message?.channel;
+  let thread;
+  try {
+    if (fromMessage) {
+      if (here?.isThread?.()) return 'The message you are answering is already in a thread; a thread cannot start from it. Leave out from_message to open a new one.';
+      thread = await invocation.message.startThread({ name: title, autoArchiveDuration: 1440 });
+    } else {
+      const target = channel ? await findChannel(guild, channel) : here?.isThread?.() ? here.parent : here;
+      if (!target) return `No channel "${channel}" in this server. Check the name with server_info's 'channels' section.`;
+      if (!THREAD_PARENTS.includes(target.type) || !target.threads?.create) return `#${target.name} cannot hold threads; pick a text, announcement or forum channel.`;
+      if (FORUMS.includes(target.type)) {
+        if (!text) return `#${target.name} is a forum: a new post needs a message.`;
+        thread = await target.threads.create({ name: title, autoArchiveDuration: 1440, message: { content: redactSecrets(text).slice(0, 2000), allowedMentions: { parse: ['users'] } } });
+      } else {
+        thread = await target.threads.create({ name: title, autoArchiveDuration: 1440, ...(isPrivate ? { type: ChannelType.PrivateThread, invitable: true } : {}) });
+        if (isPrivate) await thread.members.add(invocation.message.author.id).catch(() => {});
+      }
+    }
+  } catch (err) {
+    return failed("Discord wouldn't create the thread", err);
+  }
+  const posted = text && !FORUMS.includes(thread.parent?.type);
+  if (posted) {
+    try {
+      await post(thread, text);
+    } catch (err) {
+      return failed(`Created the thread <#${thread.id}>, but Discord rejected the message in it`, err);
+    }
+  }
+  return `Created the thread <#${thread.id}> ("${thread.name}")${posted || FORUMS.includes(thread.parent?.type) ? ' and posted the message there' : ''}. Tell them briefly where it is (<#${thread.id}> links to it); don't repeat the message here.`;
+}
+
+export async function sendToThread({ thread = '', message = '' } = {}, invocation) {
+  const guild = invocation.guild;
+  if (!guild) return 'Threads only exist in a server, not in DMs.';
+  const text = String(message).trim();
+  if (!text) return 'Give the message to post.';
+  const target = await findThread(guild, thread);
+  if (!target) return `No thread "${thread}" found. server_info's 'threads' section lists the active ones; create_thread makes a new one.`;
+  try {
+    if (target.archived) await target.setArchived(false).catch(() => {});
+    if (!target.joined && target.joinable) await target.join().catch(() => {});
+    await post(target, text);
+  } catch (err) {
+    return failed(`Discord rejected the message in <#${target.id}>`, err);
+  }
+  return `Posted in <#${target.id}> ("${target.name}"). Tell them briefly; don't repeat the message here.`;
 }

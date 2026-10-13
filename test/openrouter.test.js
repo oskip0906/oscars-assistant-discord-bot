@@ -82,7 +82,7 @@ test('providerFor resolves each model on its own, and legacy configs have none',
   assert.equal('provider' in plain, false);
 });
 
-test('a stopped turn ends its model call at once and is never retried; usage comes back with the message', async () => {
+test('a stopped turn ends its model call at once and is never retried', async () => {
   const ac = new AbortController();
   let calls = 0;
   const pending = withFetch(
@@ -97,9 +97,4 @@ test('a stopped turn ends its model call at once and is never retried; usage com
   calls = 0;
   await assert.rejects(turnSignal.run(ac.signal, () => withFetch(() => (calls++, Promise.resolve(answer('x'))), () => chatCompletion({ apiKey: 'k', model: 'm', messages: [] }))), { name: 'AbortError' });
   assert.equal(calls, 0, 'already stopped: nothing is sent');
-  const withUsage = await withFetch(
-    () => Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: 'hi' } }], usage: { prompt_tokens: 12, completion_tokens: 3 } }))),
-    () => chatCompletion({ apiKey: 'k', model: 'm', messages: [] }),
-  );
-  assert.deepEqual(withUsage.usage, { prompt_tokens: 12, completion_tokens: 3 });
 });

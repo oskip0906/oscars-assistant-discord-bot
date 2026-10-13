@@ -109,7 +109,7 @@ test('current_model and the system prompt report the live model setting', async 
 
 test('owner-only tools refuse guests before running, and run for Oscar', async () => {
   let flips = 0;
-  const privateMode = { on: false, isOn() { return this.on; }, set(v) { flips++; this.on = v; } };
+  const privateMode = { on: false, isOn() { return this.on; }, async set(v) { flips++; this.on = v; return { ok: true, on: v }; } };
   const guest = chatInvocation({ privateMode });
   for (const [name, args] of [['private_mode', { state: 'on' }], ['set_model', { model: 'x/y' }], ['set_rule', { instruction: 'be rude' }], ['self_fix', { instruction: 'x' }]]) {
     assert.match(await executeTool(name, args, guest), /restricted to Oscar/, name);
@@ -121,6 +121,12 @@ test('owner-only tools refuse guests before running, and run for Oscar', async (
   assert.equal(await executeTool('private_mode', { state: 'status' }, owner), 'Private mode is OFF.');
   assert.match(await executeTool('private_mode', { state: 'on' }, owner), /now ON/);
   assert.equal(privateMode.on, true);
+
+  const failing = { isOn: () => false, set: async () => ({ ok: false, on: false, error: 'Could not save private mode: db down' }) };
+  const reply = await executeTool('private_mode', { state: 'on' }, chatInvocation({ privateMode: failing, isOwner: true }));
+  assert.match(reply, /Could not save private mode/);
+  assert.match(reply, /still OFF/);
+  assert.doesNotMatch(reply, /now ON/);
 });
 
 test('set_model goes through switchModel and never claims a failed switch', async () => {

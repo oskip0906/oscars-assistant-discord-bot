@@ -1,114 +1,187 @@
-// Discord attachments as OpenRouter content parts for the turn's first model
-// request, so the model sees the picture, PDF or file itself rather than just
-// the URL formatEnvelope writes. Every attachment gets a numbered label (name,
-// type, sender, status) whether or not it is shown, so nothing is dropped
-// silently and the model can say what it could not see.
+// Discord attachments as OpenRouter content parts, so the model sees the
+// picture, PDF or file itself rather than just the URL formatEnvelope writes.
+// A numbered manifest lists every file, sent or not, so none is lost silently.
+// Only done for a turn Panda answers: deciding whether to answer reads text alone.
 
-const MAX_ATTACHMENTS = 10;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // the strictest provider limit
-const MAX_IMAGE_SIDE = 2048; // an image over MAX_IMAGE_BYTES is shrunk to this by Discord's media proxy
-const MAX_PDF_BYTES = 20 * 1024 * 1024;
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
+const MAX_TEXT_BYTES = 200 * 1024;
 const TEXT_CHARS = 20000;
-const TEXT_BYTES = TEXT_CHARS * 4; // the most read of a text file: UTF-8 is at most 4 bytes a character
+const TEXT_TYPE = /^(text\/|application\/(json|xml|javascript|x-yaml|x-sh))/;
+// Files sent per turn, the turn's own first, so a busy channel can't flood the
+// request. Anything past it is still listed in the manifest as omitted.
+export const MAX_ATTACHMENTS = 30;
+// Downloaded bytes inlined per turn; files past it go as their link instead.
+const MAX_INLINE_BYTES = 40 * 1024 * 1024;
+// Longest side an oversized image is shrunk to by Discord's media proxy.
+const RESIZE_SIDES = [2048, 1280];
+// A download that hangs gives up after this, and the file is marked as not read.
 const DOWNLOAD_MS = 10_000;
-const TEXT_TYPE = /^(text\/|application\/(json|xml|javascript|x-yaml|yaml|x-sh|toml|sql|csv))/;
-// Discord leaves contentType empty (or octet-stream) for some uploads; the extension decides then.
-const BY_EXTENSION = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf',
-  ...Object.fromEntries('txt md markdown csv tsv log json yaml yml toml xml html css js mjs cjs ts tsx jsx py rb go rs java c h cpp cs sh sql ini env'.split(' ').map((ext) => [ext, 'text/plain'])),
-};
 
-// Picker GIFs (Tenor, Giphy) arrive as a link with a `gifv` embed, and a pasted
-// image link as an `image` embed, not an attachment. Their thumbnail goes in as an image.
+// Picker GIFs (Tenor, Giphy) arrive as a link with a `gifv` embed, not an
+// attachment. Its thumbnail is a still frame, so it goes in as an image.
 export const gifPreviews = (message) =>
   (message?.embeds ?? [])
-    .filter((e) => ['gifv', 'image'].includes(e.data?.type) && e.thumbnail?.url)
-    .map((e) => ({ name: e.data.type === 'gifv' ? 'gif preview' : 'linked image', contentType: 'image/preview', size: 0, url: e.thumbnail.url }));
+    .filter((e) => e.data?.type === 'gifv' && e.thumbnail?.url)
+    .map((e) => ({ name: 'gif preview', contentType: 'image/preview', size: 0, url: e.thumbnail.url }));
 
-const typeOf = (a) => {
-  const type = String(a.contentType || '').split(';')[0].trim().toLowerCase();
-  if (type && type !== 'application/octet-stream') return type;
-  return BY_EXTENSION[String(a.name || '').split('.').pop().toLowerCase()] || type;
-};
-const size = (bytes) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`);
-
-// `attachments` are Discord attachments (or gifPreviews), optionally with
-// `sender` (who posted it) and `inReply` (it is on the message being replied
-// to). `inputs` is what the model takes (modelInputs).
-export async function attachmentParts(attachments, inputs, fetchImpl = fetch) {
-  const parts = [];
-  for (const [i, a] of attachments.entries()) {
-    const type = typeOf(a);
-    const { status, part } =
-      i < MAX_ATTACHMENTS ? await read(a, type, inputs, fetchImpl) : { status: `not shown: only the first ${MAX_ATTACHMENTS} attachments are read` };
-    const from = `from ${a.sender || 'someone'}${a.inReply ? ' (on the message replied to)' : ''}`;
-    parts.push({ type: 'text', text: `[attachment ${i + 1}: ${a.name || 'unnamed'} · ${type || 'unknown type'} · ${from} · ${status}]` });
-    if (part) parts.push(part);
-  }
-  return parts;
+// Everything one message carries, each labelled with whose message it is and
+// where it sits ("in the turn", "in the recent messages"), so the model can
+// tell which picture someone means.
+export function mediaOf(message, where) {
+  if (!message) return [];
+  const from = `@${message.author?.username ?? '?'}${where ? ` ${where}` : ''}`;
+  return [...(message.attachments?.values() ?? []), ...gifPreviews(message)].map((a) => ({
+    name: a.name,
+    contentType: a.contentType,
+    size: a.size,
+    url: a.url,
+    proxyURL: a.proxyURL,
+    width: a.width,
+    height: a.height,
+    from,
+  }));
 }
 
-async function read(a, type, inputs, fetchImpl) {
+
+// The file itself as a data URL, so the model gets it even when the provider
+// can't fetch Discord's link. Null when it can't be downloaded or is too big;
+// the caller then falls back to the link or marks the file unreadable.
+async function download(url, maxBytes, fetchImpl, fallbackType = '') {
+  try {
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(DOWNLOAD_MS) });
+    if (!res.ok) return null;
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (!bytes.length || bytes.length > maxBytes) return null;
+    const type = (res.headers?.get?.('content-type') || fallbackType || '').split(';')[0].trim();
+    if (!type || type === 'image/preview') return null;
+    return { data: `data:${type};base64,${bytes.toString('base64')}`, bytes: bytes.length };
+  } catch (err) {
+    console.error('[panda] attachment download failed:', url.slice(0, 120), String(err.message || err).slice(0, 200));
+    return null;
+  }
+}
+
+// An image over the cap, shrunk and re-encoded by Discord's media proxy. Needs
+// the image's dimensions to keep its shape; null when it still doesn't fit.
+async function shrink(a, fetchImpl) {
+  const base = a.proxyURL || a.url.replace('://cdn.discordapp.com/', '://media.discordapp.net/');
+  if (!a.width || !a.height || !base.includes('media.discordapp.net')) return null;
+  for (const side of RESIZE_SIDES) {
+    const scale = Math.min(1, side / Math.max(a.width, a.height));
+    const link = `${base}${base.includes('?') ? '&' : '?'}width=${Math.round(a.width * scale)}&height=${Math.round(a.height * scale)}&format=webp`;
+    const got = await download(link, MAX_IMAGE_BYTES, fetchImpl, 'image/webp');
+    if (got) return { ...got, link };
+  }
+  return null;
+}
+
+// Why the model can't be given this file at all, or null when it can.
+function unreadableReason(a, inputs) {
+  const type = (a.contentType || '').split(';')[0].trim();
+  if (type.startsWith('image/')) return inputs.includes('image') ? null : 'the current model cannot see images';
+  if (type === 'application/pdf') return null;
+  if (TEXT_TYPE.test(type)) return a.size > MAX_TEXT_BYTES ? 'text file over 200 KB' : null;
+  return `not a readable file type (${type || 'unknown type'})`;
+}
+
+// One file as a content part: { part, bytes, link, note } when sent, { error } when not.
+async function attachmentPart(a, fetchImpl) {
+  const type = a.contentType || '';
   if (type.startsWith('image/')) {
-    if (!inputs.includes('image')) return { status: 'not shown: the current model does not take images' };
-    if (!a.size || a.size <= MAX_IMAGE_BYTES) return { status: 'shown below', part: { type: 'image_url', image_url: { url: a.url } } };
-    const small = downscaled(a);
-    return small
-      ? { status: `shown below, downscaled to ${small.width}×${small.height} from ${a.width}×${a.height}`, part: { type: 'image_url', image_url: { url: small.url } } }
-      : { status: `not shown: ${size(a.size)} is over the ${size(MAX_IMAGE_BYTES)} image limit` };
+    if (a.size > MAX_IMAGE_BYTES) {
+      const small = await shrink(a, fetchImpl);
+      if (!small) return { error: `image over ${MAX_IMAGE_BYTES / 1024 / 1024} MB that could not be shrunk to fit` };
+      return { part: { type: 'image_url', image_url: { url: small.data } }, bytes: small.bytes, link: small.link, note: 'shrunk to fit' };
+    }
+    const got = await download(a.url, MAX_IMAGE_BYTES, fetchImpl, a.contentType);
+    if (got) return { part: { type: 'image_url', image_url: { url: got.data } }, bytes: got.bytes, link: a.url };
+    return { part: { type: 'image_url', image_url: { url: a.url } }, note: 'sent as a link (download failed), so it may not load' };
   }
   if (type === 'application/pdf') {
-    if (a.size > MAX_PDF_BYTES) return { status: `not shown: ${size(a.size)} is over the ${size(MAX_PDF_BYTES)} PDF limit` };
     // OpenRouter reads PDFs for every model: natively, or through its own parser.
-    return { status: 'shown below', part: { type: 'file', file: { filename: a.name, file_data: a.url } } };
+    const got = a.size <= MAX_PDF_BYTES ? await download(a.url, MAX_PDF_BYTES, fetchImpl, a.contentType) : null;
+    const file = (data) => ({ type: 'file', file: { filename: a.name, file_data: data } });
+    if (got) return { part: file(got.data), bytes: got.bytes, link: a.url, linkPart: file(a.url) };
+    return { part: file(a.url), note: 'sent as a link, so it may not load' };
   }
-  if (TEXT_TYPE.test(type)) return readText(a, fetchImpl);
-  return { status: `not shown: ${type || 'this kind of file'} can't be read here, only its link is in the message` };
-}
-
-// shortcut: the proxy's output size isn't checked; if a provider rejects one, download and re-encode instead.
-function downscaled(a) {
-  const longest = Math.max(a.width || 0, a.height || 0);
-  if (!a.proxyURL || !longest) return null;
-  const scale = Math.min(1, MAX_IMAGE_SIDE / longest);
-  const width = Math.round(a.width * scale);
-  const height = Math.round(a.height * scale);
-  const url = new URL(a.proxyURL);
-  url.searchParams.set('format', 'webp');
-  url.searchParams.set('width', width);
-  url.searchParams.set('height', height);
-  return { url: url.href, width, height };
-}
-
-// Downloads at most TEXT_BYTES, within DOWNLOAD_MS, whatever size Discord reported.
-async function readText(a, fetchImpl) {
-  let bytes;
-  let capped = false;
   try {
     const res = await fetchImpl(a.url, { signal: AbortSignal.timeout(DOWNLOAD_MS) });
-    if (!res.ok) return { status: `not shown: the download failed (HTTP ${res.status})` };
-    const chunks = [];
-    let read = 0;
-    for await (const chunk of res.body ?? []) {
-      chunks.push(chunk);
-      read += chunk.length;
-      if (read >= TEXT_BYTES) {
-        capped = true;
-        break;
-      }
-    }
-    bytes = Buffer.concat(chunks).subarray(0, TEXT_BYTES);
+    if (res.ok) return { part: { type: 'text', text: `[contents of ${a.name}]\n${(await res.text()).slice(0, TEXT_CHARS)}` } };
   } catch (err) {
     console.error('[panda] attachment fetch failed:', a.name, String(err.message || err).slice(0, 200));
-    return { status: `not shown: the download failed (${err.name === 'TimeoutError' ? 'timed out' : 'unreachable'})` };
   }
-  const full = new TextDecoder().decode(bytes);
-  const text = full.slice(0, TEXT_CHARS);
-  // A body that ended on its own was read whole, whatever size Discord reported.
-  const total = capped ? Math.max(a.size || 0, bytes.length) : bytes.length;
-  const cut = capped || full.length > TEXT_CHARS;
-  return {
-    status: cut ? `shown below, truncated to its first ${text.length} characters (the file is ${size(total)})` : 'shown below',
-    part: { type: 'text', text: `[contents of ${a.name}]\n${text}` },
+  return { error: 'could not be fetched' };
+}
+
+const sizeOf = (bytes) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+
+// Every file of the turn (and the recent messages) as content parts, opened by
+// a manifest that numbers each one with its name, sender and whether it was
+// read, so no file is ever dropped without the model knowing. The same file
+// reached twice (a reply to it) is one entry; two uploads that merely look
+// alike are two, and telling duplicates apart is left to the model.
+export async function attachmentParts(attachments, inputs, fetchImpl = fetch) {
+  const entries = [];
+  const byUrl = new Map();
+  for (const a of attachments) {
+    if (!a?.url) continue;
+    const known = byUrl.get(a.url);
+    if (known) {
+      if (a.from && !known.from.includes(a.from)) known.from.push(a.from);
+      continue;
+    }
+    const entry = { ...a, index: entries.length + 1, from: a.from ? [a.from] : [] };
+    byUrl.set(a.url, entry);
+    entries.push(entry);
+  }
+  if (!entries.length) return [];
+
+  let sending = 0;
+  for (const e of entries) {
+    e.error = unreadableReason(e, inputs);
+    if (e.error) continue;
+    if (sending >= MAX_ATTACHMENTS) e.omitted = `over the limit of ${MAX_ATTACHMENTS} files per turn`;
+    else sending++;
+  }
+  const toRead = entries.filter((e) => !e.error && !e.omitted);
+  const read = await Promise.all(toRead.map((e) => attachmentPart(e, fetchImpl)));
+  let inlined = 0;
+  toRead.forEach((e, i) => {
+    const r = read[i];
+    if (r.error) return void (e.error = r.error);
+    e.part = r.part;
+    e.note = r.note;
+    // Past the budget a downloaded file goes as its link, keeping the request sane.
+    if (r.bytes && (inlined += r.bytes) > MAX_INLINE_BYTES) {
+      e.part = r.linkPart ?? { type: 'image_url', image_url: { url: r.link } };
+      e.note = [r.note, 'sent as a link (the turn was too large to inline it), so it may not load'].filter(Boolean).join('; ');
+    }
+  });
+
+  const sent = entries.filter((e) => e.part);
+  const missing = entries.length - sent.length;
+  const line = (e) => {
+    const meta = [e.contentType || 'unknown type', e.size ? sizeOf(e.size) : null].filter(Boolean).join(', ');
+    const status = e.part
+      ? `sent${e.note ? ` (${e.note})` : ''}`
+      : e.omitted
+        ? `OMITTED: ${e.omitted}`
+        : `NOT READ: ${e.error}`;
+    return `#${e.index} ${e.name || '(unnamed)'} (${meta})${e.from.length ? ` from ${e.from.join(', also ')}` : ''}: ${status}`;
   };
+  const manifest = [
+    `[ATTACHMENTS — ${entries.length} file(s) came with the turn and the recent messages: ${sent.length} sent to you below, each labelled with its number${missing ? `; ${missing} NOT sent (omitted or unreadable)` : ''}. Every file is listed here:]`,
+    ...entries.map(line),
+    missing
+      ? `[${missing} of ${entries.length} file(s) are not in front of you. If the task covers them (a total, a count, a list of receipts), name each missing one by number and name and say the result is incomplete; never present it as complete or guess their contents.]`
+      : `[All ${entries.length} file(s) are in front of you. When a task covers several of them, account for each by number.]`,
+  ].join('\n');
+
+  const parts = [{ type: 'text', text: manifest }];
+  for (const e of sent) {
+    parts.push({ type: 'text', text: `[attachment #${e.index} ${e.name || '(unnamed)'}${e.from.length ? ` from ${e.from.join(', also ')}` : ''}]` });
+    parts.push(e.part);
+  }
+  return parts;
 }

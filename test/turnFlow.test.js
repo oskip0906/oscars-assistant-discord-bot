@@ -32,7 +32,14 @@ function harness({ runAgentImpl, decideImpl = async () => null, config = {} }) {
       fetches: 0,
       sendTyping: async () => {},
       send: async (p) => (sent.push({ channelId, content: p.content }), {}),
-      messages: { fetch: async () => (channel.fetches++, new Map(before.map((m) => [m.id, m]))) },
+      // A page of Discord history: newest first, empty past the oldest.
+      messages: {
+        fetch: async (opts = {}) => {
+          channel.fetches++;
+          const page = before.some((m) => m.id === opts.before) ? [] : [...before].reverse();
+          return Object.assign(new Map(page.map((m) => [m.id, m])), { last: () => page.at(-1) });
+        },
+      },
     });
     const m = {
       id: `m${n}`, content, channelId, channel, guild: { id: 'g' }, createdAt: new Date(Date.now() + n),
@@ -78,7 +85,7 @@ test("boundary: a sender's follow-ups inside the window join their turn, another
   assert.doesNotMatch(turns[2], /after the window/, 'Jev down: an unaddressed line after the window is not a turn');
 });
 
-test('attachments reach the first request: the current and replied-to ones, numbered, with sender and status, once each, never the recent messages\'', async () => {
+test('attachments reach the first request: the current and replied-to ones, numbered, with sender and status, once each', async () => {
   const real = globalThis.fetch;
   globalThis.fetch = async (url) =>
     String(url).includes('openrouter.ai/api/v1/models')
@@ -95,14 +102,15 @@ test('attachments reach the first request: the current and replied-to ones, numb
     const [content] = seen;
     assert.ok(Array.isArray(content), 'media goes in the very first request');
     assert.match(content[0].text, /\[RESPOND TO THIS/);
-    const labels = content.filter((p) => p.type === 'text' && p.text.startsWith('[attachment')).map((p) => p.text);
-    assert.deepEqual(labels, [
-      '[attachment 1: skyline.jpg · image/jpeg · from rice (@rice) · shown below]',
-      '[attachment 2: receipt.txt · text/plain · from derp (@derp) (on the message replied to) · shown below]',
-    ]);
-    assert.deepEqual(content.find((p) => p.type === 'image_url'), { type: 'image_url', image_url: { url: 'https://cdn.example/skyline.jpg' } });
+    const text = content.filter((p) => p.type === 'text').map((p) => p.text).join('\n');
+    // Each file once, numbered, with its sender and whether it was sent; the
+    // recent messages' files are listed too (#51), after the turn's own.
+    assert.match(text, /#1 skyline\.jpg \(image\/jpeg, 1 KB\) from @rice in the turn: sent/);
+    assert.match(text, /#2 receipt\.txt \(text\/plain, 1 KB\) from @derp in the message replied to: sent/);
+    assert.match(text, /#3 old\.png .* in the recent messages/);
+    assert.equal(text.match(/receipt\.txt \(/g).length, 1, 'replied to twice, listed once');
+    assert.ok(content.some((p) => p.type === 'image_url'));
     assert.ok(content.some((p) => p.text === '[contents of receipt.txt]\nTOTAL $12.40'));
-    assert.ok(!labels.some((l) => l.includes('old.png')), 'a recent message\'s picture is not re-sent');
   } finally {
     globalThis.fetch = real;
   }

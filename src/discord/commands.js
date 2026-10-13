@@ -6,6 +6,7 @@ import { buildModelEmbed, switchModel, modelChoices } from './model.js';
 import { chunkMessage } from './chunk.js';
 import { suppressLinkEmbeds } from './messageHandler.js';
 import { PRIVATE_MESSAGE } from '../privateMode.js';
+import { updatePresence } from '../presence.js';
 import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { buildSearchQuery } from '../agent/research/searchQuery.js';
@@ -22,6 +23,7 @@ import { NOTES_PREFIX, noteMessage, folderView, deleteNoteConfirm } from './note
 import { addReminder, activeReminders, reminderChoices, deleteReminder, timezoneChoices, repeatText } from '../reminders.js';
 import { remindersEmbed } from './reminders.js';
 import { indexChannel, INDEX_OWNER_ID } from './indexChannel.js';
+import { parseClearAmount, missingClearPermissions, clearChannel } from './clear.js';
 import { STORAGE_PREFIX, cleanup, dismiss, SECTIONS, mb } from '../storage.js';
 
 export { commandDefs };
@@ -40,6 +42,14 @@ async function answerApproval(interaction, content) {
     }
     await interaction.message?.edit({ content, components: [] }).catch(() => {});
   }
+}
+
+// A folder of the notes browser: its first page through `send` (update or
+// editReply), then every further page as a follow-up.
+async function showFolder(interaction, tree, folderId, send) {
+  const { rest, ...first } = folderView(tree, folderId);
+  await interaction[send](first);
+  for (const part of rest) await interaction.followUp(part);
 }
 
 export function createInteractionHandler({ client, config, player, privateMode, state = selfFixState, onMessage }) {
@@ -86,16 +96,16 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           const title = await deleteNote(config, Number(arg), interaction.user.id, interaction.user.id === config.ownerId);
           return await interaction.update({ content: title ? `🗑️ Deleted **${title}**.` : 'That note is gone, or it isn’t yours to delete.', components: [] });
         }
-        if (action === 'up') return await interaction.update(folderView(await loadTree(config), arg === 'root' ? null : Number(arg)));
+        if (action === 'up') return await showFolder(interaction, await loadTree(config), arg === 'root' ? null : Number(arg), 'update');
         if (action === 'nav') {
           const value = interaction.values?.[0] || '';
           const id = Number(value.slice(1));
-          if (value.startsWith('f')) return await interaction.update(folderView(await loadTree(config), id));
+          if (value.startsWith('f')) return await showFolder(interaction, await loadTree(config), id, 'update');
           const note = await getNote(config, id);
           if (!note) return await interaction.reply({ content: 'That note was deleted.', flags: MessageFlags.Ephemeral });
           const { folders } = await loadTree(config);
-          const { embeds, rest } = noteMessage(note, folders, await relatedNotes(config, id));
-          await interaction.reply({ embeds, allowedMentions: { parse: [] } });
+          const { embeds, rest, files } = noteMessage(note, folders, await relatedNotes(config, id));
+          await interaction.reply({ embeds, files, allowedMentions: { parse: [] } });
           for (const part of rest) await interaction.followUp({ content: part, allowedMentions: { parse: [] } });
         }
       } catch (err) {
@@ -278,7 +288,14 @@ export function createInteractionHandler({ client, config, player, privateMode, 
             flags: MessageFlags.Ephemeral,
           });
         }
-        privateMode.set(state === 'on');
+        const saved = await privateMode.set(state === 'on');
+        if (!saved.ok) {
+          return await interaction.reply({
+            content: `❌ ${saved.error} Private mode is still **${saved.on ? 'ON' : 'OFF'}**.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+        updatePresence(client, privateMode);
         return await interaction.reply({
           content:
             state === 'on'
@@ -313,6 +330,46 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           config,
         });
         return await interaction.editReply({ content: result.summary, allowedMentions: { parse: [] } });
+      }
+
+      if (name === 'clear') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Only Oscar can use this', flags: MessageFlags.Ephemeral });
+        }
+        const amount = parseClearAmount(interaction.options.getString('amount', true));
+        if (amount.error) return await interaction.reply({ content: `⚠️ ${amount.error}`, flags: MessageFlags.Ephemeral });
+        const missing = missingClearPermissions(interaction.channel);
+        if (!interaction.channel?.messages || missing === null) {
+          return await interaction.reply({ content: '🚫 I can’t clear messages here: I can only delete messages in a server channel.', flags: MessageFlags.Ephemeral });
+        }
+        if (missing.length) {
+          return await interaction.reply({
+            content: `🚫 I can’t clear messages here: I don’t have the ${missing.map((p) => `**${p}**`).join(', ')} permission${missing.length > 1 ? 's' : ''} in this channel.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+        const what = amount.all ? 'every message in this channel' : `the newest ${amount.count} message${amount.count > 1 ? 's' : ''}`;
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        let lastEdit = 0;
+        try {
+          const done = await clearChannel(interaction.channel, {
+            limit: amount.all ? Infinity : amount.count,
+            onProgress: async ({ deleted }) => {
+              if (Date.now() - lastEdit < 5000) return;
+              lastEdit = Date.now();
+              await interaction.editReply(`🧹 Clearing ${what}… ${deleted} deleted so far.`).catch(() => {});
+            },
+          });
+          return await interaction
+            .editReply(
+              `🧹 Deleted **${done.deleted}** message${done.deleted === 1 ? '' : 's'}.` +
+                (done.failed ? ` **${done.failed}** couldn’t be deleted (Discord doesn’t allow it for some system messages).` : ''),
+            )
+            .catch(() => {});
+        } catch (err) {
+          const why = err?.code === 50013 ? 'I don’t have permission to delete messages here.' : redactSecrets(err.message).slice(0, 200);
+          return await interaction.editReply(`🚫 I can’t clear messages here: ${why}`).catch(() => {});
+        }
       }
 
       // --- Tool slash commands (work in servers and DMs) ---------------
@@ -411,7 +468,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
 
       if (name === 'display_notes') {
         await interaction.deferReply();
-        return await interaction.editReply(folderView(await loadTree(config)));
+        return await showFolder(interaction, await loadTree(config), null, 'editReply');
       }
 
       if (name === 'open_note') {
@@ -419,8 +476,8 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         const note = await openNote(config, interaction.options.getString('title', true));
         if (!note) return await interaction.editReply('No note matches that. Browse them with `/display_notes`.');
         const { folders } = await loadTree(config);
-        const { embeds, rest } = noteMessage(note, folders, await relatedNotes(config, note.id));
-        await interaction.editReply({ embeds, allowedMentions: { parse: [] } });
+        const { embeds, rest, files } = noteMessage(note, folders, await relatedNotes(config, note.id));
+        await interaction.editReply({ embeds, files, allowedMentions: { parse: [] } });
         for (const part of rest) await interaction.followUp({ content: part, allowedMentions: { parse: [] } });
         return;
       }
