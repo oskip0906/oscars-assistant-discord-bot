@@ -201,8 +201,10 @@ export async function forPanda(message, before, self, config, decideImpl = decid
 }
 
 // Suppress Discord link embeds by wrapping bare URLs in <>. Image URLs stay
-// bare on purpose — for image_search results the embed IS the answer. Skips
-// URLs already wrapped, inside markdown links, or in inline code.
+// bare on purpose, so Discord shows the picture under the message: any URL
+// ending in an image extension, and the ones in `keep` (image_search results,
+// whose links often have none). Skips URLs already wrapped, inside markdown
+// links, or in inline code.
 const IMAGE_URL = /\.(png|jpe?g|gif|webp|avif)(\?\S*)?$/i;
 // "-# 🔧 web_search ×2 · send_card": the tools a turn called, as Discord's small
 // grey subtext above the reply. No tools, no line. A reaction shows for itself.
@@ -221,9 +223,9 @@ export function statsLine(stats, totalMs) {
   return `-# 📥 ${stats.inputTokens.toLocaleString('en-US')} in · 📤 ${stats.outputTokens.toLocaleString('en-US')} out · 💸 $${stats.cost.toFixed(4)} · ⏱️ ${secs(totalMs)} total · 🧠 ${secs(stats.modelMs)} model`;
 }
 
-export function suppressLinkEmbeds(text) {
+export function suppressLinkEmbeds(text, keep = new Set()) {
   return String(text ?? '').replace(/(?<![<(`])\bhttps?:\/\/\S+/g, (url) =>
-    IMAGE_URL.test(url) ? url : `<${url}>`,
+    IMAGE_URL.test(url) || keep.has(url) ? url : `<${url}>`,
   );
 }
 
@@ -386,9 +388,11 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           // Fired by a stop (stopWork): the turn ends at its next step.
           signal,
           recent,
-          // Collect any Discord embeds produced by tool calls (e.g. image_search)
-          // so they can be sent alongside the text reply.
+          // Collect any Discord embeds produced by tool calls so they can be
+          // sent alongside the text reply.
           embeds: [],
+          // Image links image_search returned: kept bare in the reply so they show as pictures.
+          imageUrls: new Set(),
         };
 
         // Media is downloaded only here, for a turn Panda answers, and goes to
@@ -414,13 +418,12 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         // Stopped as the turn ended: nothing is sent.
         if (signal.aborted) return;
 
-        // Send any embeds the tools produced (e.g. from image_search). These go
-        // before the text reply so the images appear above the fold.
+        // Send any embeds the tools produced. These go before the text reply.
         if (invocation.embeds.length) {
           try {
             await anchor.channel.send({ embeds: invocation.embeds });
           } catch (err) {
-            console.error('[panda] failed to send image embeds:', err);
+            console.error('[panda] failed to send tool embeds:', err);
           }
         }
 
@@ -434,7 +437,7 @@ export function createMessageHandler({ client, config, player, privateMode, runA
 
         const sent = [];
         if (replyText.trim()) {
-          replyText = suppressLinkEmbeds(redactSecrets(replyText));
+          replyText = suppressLinkEmbeds(redactSecrets(replyText), invocation.imageUrls);
           const tools = toolsLine(invocation.toolsUsed);
           const stats = statsLine(invocation.stats, Date.now() - turnStart);
           const parts = chunkMessage([tools, replyText, stats].filter(Boolean).join('\n'));

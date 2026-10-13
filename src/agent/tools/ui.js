@@ -31,7 +31,7 @@ export const defs = [
     function: {
       name: 'send_card',
       description:
-        'Post an embed card in this channel: a colored box with a title, text, fields and an image, with optional buttons or a dropdown under it. Use it when structure helps: a summary, a comparison, options to choose from, a set of links. A button with a url opens that link. A button without one, and the dropdown, are clickable: a click comes back to you as a message from whoever clicked, and you answer it.',
+        'Post an embed card in this channel: a colored box with a title, text, fields and an image, with optional buttons or a dropdown under it. Use it when structure helps: a summary, a comparison, options to choose from, a set of links. A button with a url opens that link. A button without one, and the dropdown, are clickable: a click comes back to you as a message from whoever clicked, and you answer it. Pictures from image_search go in your reply as plain links, not in a card, unless the user asks for a card.',
       parameters: {
         type: 'object',
         properties: {

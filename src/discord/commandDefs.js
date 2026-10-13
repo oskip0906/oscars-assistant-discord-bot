@@ -46,7 +46,8 @@ export const commandDefs = [
   new SlashCommandBuilder()
     .setName('image_search')
     .setDescription('Search for images')
-    .addStringOption((o) => o.setName('query').setDescription('What to find pictures of').setRequired(true)),
+    .addStringOption((o) => o.setName('query').setDescription('What to find pictures of').setRequired(true))
+    .addIntegerOption((o) => o.setName('count').setDescription('How many pictures (default 3, up to 10)').setMinValue(1).setMaxValue(10)),
   new SlashCommandBuilder()
     .setName('reverse_image_search')
     .setDescription('Search by image: pages with matching pictures, and what it likely shows')

@@ -205,11 +205,11 @@ export function createInteractionHandler({ client, config, player, privateMode, 
     // may contain bare URLs. Chunk + suppress link embeds like the chat path.
     // A deferred interaction token dies 15 minutes in, and a slow tool can
     // outlast it — post the answer in the channel rather than dropping it.
-    const sendToolResult = async (text) => {
+    const sendToolResult = async (text, keep) => {
       // An array means the caller already decided the message boundaries;
       // only split a part that is too long on its own.
       const parts = (Array.isArray(text) ? text : [text]).flatMap((piece) =>
-        chunkMessage(suppressLinkEmbeds(redactSecrets(piece))),
+        chunkMessage(suppressLinkEmbeds(redactSecrets(piece), keep)),
       );
       const channel = interaction.channel;
       let live = true;
@@ -423,20 +423,17 @@ export function createInteractionHandler({ client, config, player, privateMode, 
 
       if (name === 'image_search') {
         await interaction.deferReply();
+        const invocation = { ...buildInvocation(), imageUrls: new Set() };
         const result = await imageSearch(
           {
             query: await buildSearchQuery({ request: interaction.options.getString('query', true), kind: 'image', config }),
-            count: undefined,
+            count: interaction.options.getInteger('count') ?? undefined,
           },
-          buildInvocation(),
+          invocation,
         );
-        // imageSearch returns { embeds, text } — send the embeds directly
-        // like /menu does, falling back to the text representation.
-        if (result && typeof result === 'object' && result.embeds?.length) {
-          await interaction.editReply({ embeds: result.embeds });
-        } else {
-          await sendToolResult(result?.text ?? result);
-        }
+        // Plain text with the image links left bare, so Discord shows the
+        // pictures under the reply; no cards. The first line is for the model.
+        await sendToolResult(String(result).replace(/^\[IMAGES[^\n]*\n/, ''), invocation.imageUrls);
         return;
       }
 
