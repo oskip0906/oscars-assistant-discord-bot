@@ -79,6 +79,9 @@ create table if not exists note_links (
   to_id bigint not null references notes (id) on delete cascade,
   primary key (from_id, to_id)
 );
+-- A note can be a file (create_note with a file name): its body is the file's
+-- text and file_name what it is sent back as ("plan.md", "list.csv").
+alter table notes add column if not exists file_name text;
 
 -- Reminders. next_at is absolute; repeats are recomputed from local_time in the
 -- creator's timezone so they survive daylight saving changes.

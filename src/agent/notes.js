@@ -17,7 +17,9 @@ const DESCEND = 0.25;
 const MAX_TRANSCRIPT = 60_000; // characters the note writer is given
 const WINDOW = 10; // minutes a note covers by default
 const MAX_WINDOW_MESSAGES = 1000; // shortcut: a long, busy window is cut to its newest 1000 messages; page further if notes need more
-const COLUMNS = 'n.id, n.folder_id, n.title, n.description, n.body, n.author_id, n.created_at';
+const COLUMNS = 'n.id, n.folder_id, n.title, n.description, n.body, n.author_id, n.created_at, n.file_name';
+// The most text a written note or file keeps; past it the full-text index would be too big.
+export const MAX_BODY = 200_000;
 
 export async function loadTree(config) {
   const [folders, notes] = await Promise.all([
@@ -113,6 +115,26 @@ export async function saveNote(config, { messages, authorId, topic = '' }, { ask
   if (!written) return { error: 'The model could not write the note. Try again.' };
   const note = { title: str(written.title, 80), description: str(written.description, 150), body: str(written.body, 20_000) };
 
+  return fileNote(config, note, authorId, ask);
+}
+
+// A note Panda wrote itself (create_note): text it was asked to write down, or
+// a file when `fileName` is set. Filed into the tree like any other note.
+// Returns { note, path } or { error }.
+export async function createNote(config, { title, description, body, fileName = null, authorId }, { ask = askJson } = {}) {
+  if (!configured(config)) return { error: 'Notes need DATABASE_URL to be set.' };
+  if (isFull('notes')) return { error: 'Storage for notes is full; Oscar has been asked to approve a cleanup.' };
+  const note = {
+    title: str(title, 80),
+    description: str(description, 150) || str(String(body ?? '').split('\n').find((l) => l.trim()), 150),
+    body: typeof body === 'string' && body.trim() ? body.slice(0, MAX_BODY) : null,
+  };
+  if (!note.title || !note.body) return { error: 'A note needs a title and some content.' };
+  return fileNote(config, note, authorId, ask, fileName);
+}
+
+// Files `note` into the folder tree, links it to related notes and stores it.
+async function fileNote(config, note, authorId, ask, fileName = null) {
   const { folders } = await loadTree(config);
   const related = (
     await db.query(
@@ -154,8 +176,8 @@ export async function saveNote(config, { messages, authorId, topic = '' }, { ask
 
   const { rows } = await db.query(
     config,
-    'insert into notes (folder_id, title, description, body, author_id) values ($1, $2, $3, $4, $5) returning id',
-    [parent, note.title, note.description, note.body, authorId],
+    'insert into notes (folder_id, title, description, body, author_id, file_name) values ($1, $2, $3, $4, $5, $6) returning id',
+    [parent, note.title, note.description, note.body, authorId, fileName],
   );
   const id = Number(rows[0].id);
   const allowed = new Set(related.map((r) => r.id));
@@ -164,7 +186,7 @@ export async function saveNote(config, { messages, authorId, topic = '' }, { ask
     await db.query(config, 'insert into note_links (from_id, to_id) select $1, unnest($2::bigint[]) on conflict do nothing', [id, links]);
   }
   noteWrite(config, 'notes');
-  return { note: { id, ...note, author_id: authorId }, path };
+  return { note: { id, ...note, author_id: authorId, file_name: fileName }, path };
 }
 
 // Starting at the top, Jev picks which folders to go into, level by level.

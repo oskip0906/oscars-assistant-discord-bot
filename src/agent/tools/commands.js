@@ -312,7 +312,7 @@ export async function openNoteTool({ title } = {}, invocation) {
   const note = await openNote(config, String(title));
   if (!note) return `No note matches "${title}". Say so; do not make one up.`;
   const { folders } = await loadTree(config);
-  return `[NOTE — "${note.title}" in 📁 ${folderPath(folders, note.folder_id).join(' / ') || 'Unsorted'}, by user id:${note.author_id}]\n${note.description}\n\n${note.body.slice(0, MAX_NOTE_BODY)}`;
+  return `[NOTE — "${note.title}" in 📁 ${folderPath(folders, note.folder_id).join(' / ') || 'Unsorted'}, by user id:${note.author_id}${note.file_name ? `, a file: ${note.file_name} (send_note_file sends it)` : ''}]\n${note.description}\n\n${note.body.slice(0, MAX_NOTE_BODY)}`;
 }
 
 // The same confirmation /delete_note shows: the click handler checks again that
