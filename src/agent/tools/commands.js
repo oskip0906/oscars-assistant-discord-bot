@@ -173,12 +173,13 @@ export const defs = [
 ];
 
 // Every slash command and how chat reaches it: `tool` is the tool that runs the
-// same capability, `gated` explains why chat can't. The tests hold this to the
+// same capability (`also`, a second tool for when an option is given), `gated`
+// explains why chat can't. The tests hold this to the
 // full command list, so a new command must say one or the other.
 export const COMMAND_TOOLS = {
   menu: { tool: 'panda_commands' },
   usage: { tool: 'usage' },
-  model: { tool: 'current_model' },
+  model: { tool: 'current_model', also: 'model_info' },
   set_model: { tool: 'set_model' },
   play: { tool: 'play_music' },
   skip: { tool: 'play_music' },
@@ -239,7 +240,7 @@ function describeCommand(cmd) {
     ].filter(Boolean);
     lines.push(`• ${o.name} (${limits.join(', ')}): ${o.description}`);
   }
-  if (route?.tool) lines.push(`In chat: you can do this yourself with the \`${route.tool}\` tool when asked.`);
+  if (route?.tool) lines.push(`In chat: you can do this yourself with the \`${route.tool}\` tool when asked${route.also ? ` (and with the \`${route.also}\` tool when an option is given)` : ''}.`);
   else if (route?.gated) lines.push(`In chat: not available — ${route.gated}`);
   return lines.join('\n');
 }

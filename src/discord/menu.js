@@ -84,6 +84,7 @@ export function buildMenuEmbeds(client, config) {
         '`/menu` : Show this menu again',
         '`/usage` : How much money I’ve spent',
         '`/model` : Which AI model I’m running on',
+        '`/model <model>` : Show OpenRouter info for a specific model — price, context, providers',
       ].join('\n'),
     ),
   ];

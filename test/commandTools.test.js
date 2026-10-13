@@ -46,6 +46,7 @@ test('every slash command is a callable tool or explicitly gated, and every tool
     assert.ok(Boolean(route.tool) !== Boolean(route.gated), `/${command} is either a tool or gated`);
     if (route.tool) assert.ok(tools.has(route.tool), `/${command} → ${route.tool} is a registered tool`);
     else assert.ok(route.gated.length > 20, `/${command} explains why it is gated`);
+    if (route.also) assert.ok(tools.has(route.also), `/${command} → ${route.also} is a registered tool`);
   }
 });
 

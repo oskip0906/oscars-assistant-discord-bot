@@ -12,7 +12,15 @@ export const OWNER_ONLY_COMMANDS = new Set(['set_model', 'self_fix', 'private', 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
   new SlashCommandBuilder().setName('usage').setDescription('Show how much money Panda has spent'),
-  new SlashCommandBuilder().setName('model').setDescription('Show which AI model Panda is running on'),
+  new SlashCommandBuilder()
+    .setName('model')
+    .setDescription('Show which AI model Panda is running on, or OpenRouter info for a specific model')
+    .addStringOption((o) =>
+      o
+        .setName('model')
+        .setDescription('Show OpenRouter info for a specific model — name or id, start typing to search')
+        .setAutocomplete(true),
+    ),
   new SlashCommandBuilder()
     .setName('set_model')
     .setDescription('Set the OpenRouter model Panda runs on (owner only)')
