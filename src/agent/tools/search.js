@@ -1,6 +1,8 @@
-import { EmbedBuilder } from 'discord.js';
-import { randomEmbedColor } from '../../discord/colors.js';
 import { getPublic, htmlToText } from './page.js';
+
+// image_search: how many pictures by default, and at most.
+const DEFAULT_IMAGES = 3;
+const MAX_IMAGES = 10;
 
 export const defs = [
   {
@@ -40,12 +42,15 @@ export const defs = [
     function: {
       name: 'image_search',
       description:
-        'Search Google Images for pictures and return numbered results with bold titles, full-size image URLs, and source page links.',
+        'Search Google Images for pictures. Returns numbered results with titles, full-size image URLs and source pages. Show the pictures by putting their image URLs in your reply, each bare on its own line: Discord attaches them under your message. No card unless the user asks for one (then send_card).',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'What to find pictures of' },
-          count: { type: 'integer', description: 'Number of images (1-3, default 3)' },
+          count: {
+            type: 'integer',
+            description: `Most images to return (1-${MAX_IMAGES}, default ${DEFAULT_IMAGES}). Use the number the user asks for; otherwise pick what fits, fewer for one thing, more for a comparison or a range.`,
+          },
         },
         required: ['query'],
       },
@@ -354,7 +359,7 @@ export async function reverseImageSearch({ image, count }, invocation) {
 }
 
 export async function imageSearch({ query, count }, invocation) {
-  const n = clampCount(count, 3, 3);
+  const n = clampCount(count, DEFAULT_IMAGES, MAX_IMAGES);
   const key = `img:${query}`;
   let results = cached(key);
   if (!results) {
@@ -367,36 +372,12 @@ export async function imageSearch({ query, count }, invocation) {
   }
 
   const items = results.slice(0, n);
+  // The reply keeps these links bare (suppressLinkEmbeds), even without an
+  // image extension, so Discord shows them as pictures under the message.
+  if (invocation.imageUrls instanceof Set) for (const r of items) invocation.imageUrls.add(r.image);
 
-  // Build one Discord embed per result, following the menu.js pattern:
-  // randomEmbedColor() provides the left coloured strip; setImage() embeds
-  // the image natively large and clickable; the title sits on top as a
-  // description; setURL() makes the title a clickable link to the source.
-  const embeds = items.map((r) => {
-    const embed = new EmbedBuilder()
-      .setColor(randomEmbedColor())
-      .setTitle(r.title || 'Image');
-    if (r.image) embed.setImage(r.image);
-    if (r.source) {
-      embed.setURL(r.source);
-      try {
-        embed.setFooter({ text: new URL(r.source).hostname });
-      } catch {
-        embed.setFooter({ text: r.source });
-      }
-    }
-    return embed;
-  });
-
-  // Plain-text representation for the model (the agent path feeds tool
-  // results into the model, which needs readable text to work with).
-  const text = items
-    .map((r, i) => {
-      const lines = [`${i + 1}. **${r.title}**`, r.image];
-      if (r.source) lines.push(`*Source:* <${r.source}>`);
-      return lines.join('\n');
-    })
-    .join('\n\n');
-
-  return { embeds, text };
+  return [
+    `[IMAGES — ${items.length} result(s). To show one, put its image URL bare on its own line in your reply (no <> or markdown); Discord attaches it under your message. Show the ones that fit, up to ${n}.]`,
+    ...items.map((r, i) => [`${i + 1}. **${stripHtml(r.title)}**`, `   Image: ${r.image}`, r.source ? `   Source: <${r.source}>` : ''].filter(Boolean).join('\n')),
+  ].join('\n');
 }
