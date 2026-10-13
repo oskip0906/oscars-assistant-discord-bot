@@ -15,6 +15,8 @@ export const MAX_ATTACHMENTS = 30;
 const MAX_INLINE_BYTES = 40 * 1024 * 1024;
 // Longest side an oversized image is shrunk to by Discord's media proxy.
 const RESIZE_SIDES = [2048, 1280];
+// A download that hangs gives up after this, and the file is marked as not read.
+const DOWNLOAD_MS = 10_000;
 
 // Picker GIFs (Tenor, Giphy) arrive as a link with a `gifv` embed, not an
 // attachment. Its thumbnail is a still frame, so it goes in as an image.
@@ -47,7 +49,7 @@ export function mediaOf(message, where) {
 // the caller then falls back to the link or marks the file unreadable.
 async function download(url, maxBytes, fetchImpl, fallbackType = '') {
   try {
-    const res = await fetchImpl(url);
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(DOWNLOAD_MS) });
     if (!res.ok) return null;
     const bytes = Buffer.from(await res.arrayBuffer());
     if (!bytes.length || bytes.length > maxBytes) return null;
@@ -104,7 +106,7 @@ async function attachmentPart(a, fetchImpl) {
     return { part: file(a.url), note: 'sent as a link, so it may not load' };
   }
   try {
-    const res = await fetchImpl(a.url);
+    const res = await fetchImpl(a.url, { signal: AbortSignal.timeout(DOWNLOAD_MS) });
     if (res.ok) return { part: { type: 'text', text: `[contents of ${a.name}]\n${(await res.text()).slice(0, TEXT_CHARS)}` } };
   } catch (err) {
     console.error('[panda] attachment fetch failed:', a.name, String(err.message || err).slice(0, 200));

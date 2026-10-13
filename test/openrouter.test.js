@@ -81,3 +81,20 @@ test('providerFor resolves each model on its own, and legacy configs have none',
   assert.deepEqual(pinned.provider.order, ['together']);
   assert.equal('provider' in plain, false);
 });
+
+test('a stopped turn ends its model call at once and is never retried', async () => {
+  const ac = new AbortController();
+  let calls = 0;
+  const pending = withFetch(
+    (_url, { signal }) => (calls++, silent(signal)),
+    () => chatCompletion({ apiKey: 'k', model: 'm', messages: [], attemptMs: 10_000, signal: ac.signal }),
+  );
+  setTimeout(() => ac.abort(), 20);
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(calls, 1);
+  // The turn's signal reaches calls made deep inside it (tools, research) with no plumbing.
+  const { turnSignal } = await import('../src/agent/openrouter.js');
+  calls = 0;
+  await assert.rejects(turnSignal.run(ac.signal, () => withFetch(() => (calls++, Promise.resolve(answer('x'))), () => chatCompletion({ apiKey: 'k', model: 'm', messages: [] }))), { name: 'AbortError' });
+  assert.equal(calls, 0, 'already stopped: nothing is sent');
+});

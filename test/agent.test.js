@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runAgent, saysNothing, isFiller, moodEmoji, MOOD_EMOJI, MAX_MODEL_CALLS } from '../src/agent/agent.js';
+import { runAgent, saysNothing, isFiller, moodEmoji, MOOD_EMOJI, MAX_MODEL_CALLS, CORE_TOOLS } from '../src/agent/agent.js';
 
 // One turn with Jev's `answers` and the model scripted to give `replies` in order.
 async function turn(answers, replies, extra = {}) {
@@ -14,8 +14,8 @@ async function turn(answers, replies, extra = {}) {
     ...extra,
   };
   const calls = [];
-  const chat = async ({ tools, toolChoice }) => {
-    calls.push({ tools: (tools ?? []).map((t) => t.function.name), toolChoice });
+  const chat = async ({ tools, toolChoice, messages }) => {
+    calls.push({ tools: (tools ?? []).map((t) => t.function.name), toolChoice, messages });
     return replies.shift() ?? { content: 'done' };
   };
   const text = await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => answers, random: extra.random });
@@ -34,7 +34,15 @@ test('reaction only: one call that may only react, and the turn ends before it c
   const { text, calls, reactions } = await turn({ respond_with: sure('reaction') }, [reactCall('🎲', '🔥'), { content: 'Got it' }]);
   assert.equal(text, '');
   assert.deepEqual(reactions, ['🎲'], 'at most one reaction per message: the first one asked for');
-  assert.deepEqual(calls, [{ tools: ['react'], toolChoice: 'required' }]);
+  assert.deepEqual(calls.map(({ tools, toolChoice }) => ({ tools, toolChoice })), [{ tools: ['react'], toolChoice: 'auto' }], 'a reaction is never forced');
+});
+
+test('reaction only, but the model wrote words instead: a suggested emoji stands in and nothing is said, with no extra call', async () => {
+  const { text, calls, reactions } = await turn({ respond_with: sure('reaction'), mood: sure('happy') }, [{ content: 'nice one!' }], { random: () => 0 });
+  assert.equal(text, '');
+  assert.equal(calls.length, 1);
+  assert.equal(reactions.length, 1);
+  assert.ok(MOOD_EMOJI.happy.includes(reactions[0]));
 });
 
 test("reaction only with a tool: Jev's tool and the reaction go in the same single call", async () => {
@@ -43,18 +51,33 @@ test("reaction only with a tool: Jev's tool and the reaction go in the same sing
   assert.equal(text, '');
   assert.deepEqual(reactions, ['👍']);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].toolChoice, 'required');
+  assert.equal(calls[0].toolChoice, 'auto');
   assert.deepEqual([...calls[0].tools].sort(), ['get_message_sender', 'react']);
 });
 
-test('no tools picked: every tool is still offered, and an answer without a call is sent from that one call', async () => {
+test('no tools picked: the core tools and more_tools are offered, and an answer without a call is sent from that one call', async () => {
   const { text, calls } = await turn({ respond_with: sure('message') }, [{ content: '391' }]);
   assert.equal(text, '391');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].toolChoice, 'auto');
-  assert.ok(calls[0].tools.includes('web_fetch') && calls[0].tools.includes('web_search'), 'a link can always be read');
-  assert.ok(!calls[0].tools.includes('react'), 'no reaction on a text-only turn');
-  assert.ok(!calls[0].tools.includes('self_fix'), "Oscar's tools are not offered to a guest");
+  assert.deepEqual(calls[0].tools, [...CORE_TOOLS, 'more_tools'], 'a link can always be read, live facts looked up, and any other tool added');
+  assert.ok(!calls[0].messages.some((m) => String(m.content).startsWith('[TOOLS]')), 'no tool note when there is nothing to say');
+});
+
+test('more_tools adds a tool the sender may use for the next round; Oscar-only tools stay out of reach for a guest', async () => {
+  const more = (...names) => ({ content: '', tool_calls: [{ id: 'm', function: { name: 'more_tools', arguments: JSON.stringify({ names }) } }] });
+  const { text, calls, invocation } = await turn({ respond_with: sure('message') }, [more('get_user_id', 'self_fix'), step('get_user_id'), { content: 'found them' }]);
+  assert.equal(text, 'found them');
+  const offer = calls[0].messages && calls.map((c) => c.tools);
+  assert.ok(!offer[0].includes('get_user_id'));
+  assert.ok(offer[1].includes('get_user_id'), 'added for the next round');
+  assert.ok(offer.every((tools) => !tools.includes('self_fix')), 'never offered to a guest');
+  const added = calls[1].messages.find((m) => m.role === 'tool').content;
+  assert.match(added, /Added: get_user_id\./);
+  assert.deepEqual(invocation.toolsUsed, ['get_user_id'], 'more_tools is plumbing, not shown as a tool');
+  // The more_tools enum for a guest never names Oscar's tools.
+  const { calls: guest } = await turn({ respond_with: sure('message') }, [{ content: 'ok' }]);
+  assert.ok(guest[0].tools.includes('more_tools'));
 });
 
 test('Jev picks several tools: they run in one round, then the model answers with nothing left to call', async () => {
@@ -65,7 +88,8 @@ test('Jev picks several tools: they run in one round, then the model answers wit
   assert.equal(text, 'you are someone');
   assert.equal(calls.length, 2);
   assert.ok(['get_message_sender', 'get_user_id', 'web_fetch'].every((name) => calls[0].tools.includes(name)));
-  assert.equal(calls[0].toolChoice, 'required', "Jev's picks must be acted on");
+  assert.equal(calls[0].toolChoice, 'auto', "Jev's picks are advice, never forced");
+  assert.match(calls[0].messages.at(-1).content, /Jev's guess at tools that may help: get_user_id, get_message_sender\. Advice, not a must\./);
   assert.equal(calls[1].toolChoice, 'auto', 'a second round may call the tools again, or answer');
   assert.deepEqual(invocation.toolsUsed, ['get_message_sender', 'get_user_id'], 'a tool that was not offered never runs');
 });
@@ -74,9 +98,18 @@ test('both: the model reacts, then answers in text, and an echoed emoji is dropp
   const { text, calls, reactions } = await turn({ respond_with: sure('both') }, [reactCall('🔥'), { content: '17 × 23 = 391' }]);
   assert.equal(text, '17 × 23 = 391');
   assert.deepEqual(reactions, ['🔥']);
-  assert.deepEqual(calls.map((c) => c.toolChoice), ['required', 'auto'], 'once it has reacted it may use a tool or answer');
+  assert.deepEqual(calls.map((c) => c.toolChoice), ['auto', 'auto'], 'reacting is never forced either');
   assert.ok(!calls[1].tools.includes('react'), 'one reaction round only');
   assert.equal((await turn({ respond_with: sure('both') }, [reactCall('🎲'), { content: '🎲' }])).text, '');
+});
+
+test('a reaction sent together with the reply\'s words is answered in that one call', async () => {
+  const both = { content: '7pm at Ana\'s', tool_calls: reactCall('🕖').tool_calls };
+  const { text, calls, reactions } = await turn({ respond_with: sure('both') }, [both, { content: 'never asked for' }]);
+  assert.equal(text, "7pm at Ana's");
+  assert.deepEqual(reactions, ['🕖']);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].messages.at(-1).content, /in the same message as the reaction/);
 });
 
 test('"reaction only" on a turn that needs words reacts and answers', async () => {
@@ -88,8 +121,8 @@ test('"reaction only" on a turn that needs words reacts and answers', async () =
 test('a turn owed words never gets only a reaction, whatever the odds', async () => {
   const odds = { respond_with: { choice: 'reaction', probabilities: { reaction: 0.9, message: 0.1 } }, needs_words: { noul: 0.7 } };
   for (const r of [0, 0.5, 0.999]) {
-    const { calls } = await turn(odds, [reactCall('😂'), { content: 'it was the cat' }], { random: () => r });
-    assert.notDeepEqual(calls.map((c) => c.toolChoice), ['required'], 'not a turn that ends at the reaction');
+    const { text } = await turn(odds, [reactCall('😂'), { content: 'it was the cat' }], { random: () => r });
+    assert.equal(text, 'it was the cat', 'not a turn that ends at the reaction');
   }
 });
 
@@ -108,7 +141,7 @@ test('a ping or reply always gets words: text or text + reactions, never only a 
 test('a turn Panda joined only to react is a reaction with no tools and no words', async () => {
   const { text, calls, reactions } = await turn({ ...yes('get_message_sender'), respond_with: sure('message') }, [reactCall('💀'), { content: 'lol' }], { reactOnly: true });
   assert.equal(text, '');
-  assert.deepEqual(calls, [{ tools: ['react'], toolChoice: 'required' }]);
+  assert.deepEqual(calls.map(({ tools, toolChoice }) => ({ tools, toolChoice })), [{ tools: ['react'], toolChoice: 'auto' }]);
   assert.deepEqual(reactions, ['💀']);
 });
 
@@ -150,15 +183,53 @@ test('a request that needs an Oscar-only tool stops for anyone else', async () =
   assert.equal(guest.calls.length, 0);
   const owner = await turn(answers, [{ content: 'done' }], { isOwner: true });
   assert.ok(owner.calls[0].tools.includes('set_rule'));
-  assert.equal(owner.calls[0].toolChoice, 'required');
+  assert.equal(owner.calls[0].toolChoice, 'auto');
 });
 
-test('with Jev down every tool is still offered, and one call can answer', async () => {
+test('with Jev down every tool the sender may use is offered, and one call can answer', async () => {
   const { text, calls } = await turn(null, [{ content: 'rolled a 4' }]);
   assert.equal(text, 'rolled a 4');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].toolChoice, 'auto');
-  assert.ok(calls[0].tools.includes('web_fetch'));
+  assert.ok(['web_fetch', 'research', 'add_reminder', 'play_music'].every((name) => calls[0].tools.includes(name)));
+  assert.ok(!calls[0].tools.includes('self_fix') && !calls[0].tools.includes('more_tools'), "Oscar's tools stay his; nothing left to add");
+});
+
+test('the catalog a guest is offered is a fraction of the full one, which Oscar alone gets in full when Jev is down', async () => {
+  const size = (calls) => calls[0].tools.length;
+  const picked = await turn({ ...yes('research'), respond_with: sure('message') }, [{ content: 'ok' }]);
+  assert.deepEqual(picked.calls[0].tools, ['web_search', 'web_fetch', 'research', 'more_tools'], 'research stays reachable when Jev picks it');
+  const full = await turn(null, [{ content: 'ok' }], { isOwner: true });
+  assert.ok(full.calls[0].tools.includes('self_fix'));
+  assert.ok(size(picked.calls) * 5 < size(full.calls));
+});
+
+test('research keeps its multiple rounds: search, read, then answer', async () => {
+  const fetchCall = { content: '', tool_calls: [{ id: 'f', function: { name: 'web_fetch', arguments: '{"url":"https://example.com"}' } }] };
+  const { calls } = await turn({ respond_with: sure('message') }, [step('web_search'), fetchCall, { content: 'answer' }]);
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every((c) => c.toolChoice === 'auto'));
+});
+
+test('a stopped turn makes no more model calls and runs none of the tools the model asked for', async () => {
+  const ac = new AbortController();
+  let ran = 0;
+  const invocation = {
+    contextKey: 'g', config: { openrouterApiKey: 'k', botName: 'Panda', model: 'm', ownerId: '1' }, signal: ac.signal,
+    message: { channel: {}, author: { id: '2', username: 'x' }, react: async () => { ran++; } },
+  };
+  const chat = async () => {
+    ac.abort();
+    return reactCall('🔥');
+  };
+  await assert.rejects(runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => ({ respond_with: sure('both') }) }), { name: 'AbortError' });
+  assert.equal(ran, 0, 'the stale reaction never lands');
+  assert.equal(invocation.stats.modelCalls, 0);
+  // Stopped before the turn even reached the model.
+  ac.abort();
+  let called = false;
+  await assert.rejects(runAgent({ ...invocation, signal: ac.signal }, 'q', 'q', { chat: async () => ((called = true), { content: 'x' }), decideImpl: async () => null }), { name: 'AbortError' });
+  assert.equal(called, false);
 });
 
 test('Jev gets one yes/no per tool (react excepted) and the recent messages', async () => {
@@ -180,7 +251,7 @@ test('a reference nothing shown explains sends the model to search history, thou
   const text = await runAgent(invocation, 'q', 'are you excited for the event', { chat, decideImpl: async () => ({ unexplained: { noul: 0.95 }, use_fetch_history: { noul: 0.1 }, respond_with: sure('message') }) });
   assert.equal(text, 'the hackathon? yes!');
   assert.ok(seen[0].tools.includes('fetch_history'));
-  assert.equal(seen[0].toolChoice, 'required');
+  assert.equal(seen[0].toolChoice, 'auto', 'advice, not forced');
   assert.match(seen[0].note, /fetch_history with a `query`/);
   assert.deepEqual(invocation.toolsUsed, ['fetch_history']);
 });

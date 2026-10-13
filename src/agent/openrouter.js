@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -17,6 +19,11 @@ export function providerFor(config, model) {
   return typeof provider === 'string' ? provider.trim() : '';
 }
 
+// The running turn's stop signal (messageHandler sets it, a "@Panda stop"
+// fires it). Every model call made inside the turn, tools included (research,
+// set_rule), picks it up without threading it through each call site.
+export const turnSignal = new AsyncLocalStorage();
+
 // One chat-completions call. Returns the assistant message object
 // ({ content, tool_calls? }), throws only on real API errors (bad key, unknown
 // model, ...) since those never succeed on a retry.
@@ -25,19 +32,20 @@ export function providerFor(config, model) {
 // retried with no limit: turns run one at a time per server, so a call left
 // hanging froze the bot for everyone there. A silent attempt is dropped after
 // `attemptMs` and sent again, and each retry waits `attemptMs` longer, so a model
-// that is merely slow still gets through.
+// that is merely slow still gets through. A stopped turn is never retried.
 //
 // `onUsage` gets the call's token counts and cost ({ prompt_tokens,
 // completion_tokens, cost }) whenever OpenRouter reports them.
-export async function chatCompletion({ apiKey, model, provider, messages, tools, toolChoice = 'auto', attemptMs = 60_000, backoffMs = 1500, onUsage }) {
+export async function chatCompletion({ apiKey, model, provider, messages, tools, toolChoice = 'auto', attemptMs = 60_000, backoffMs = 1500, onUsage, signal = turnSignal.getStore() }) {
   for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
     let res;
     let text;
     try {
       res = await fetch(OPENROUTER_URL, {
         method: 'POST',
         // Covers reading the body too, so a reply that stalls halfway is caught.
-        signal: AbortSignal.timeout(attemptMs * (attempt + 1)),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(attemptMs * (attempt + 1))]) : AbortSignal.timeout(attemptMs * (attempt + 1)),
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
@@ -55,6 +63,7 @@ export async function chatCompletion({ apiKey, model, provider, messages, tools,
       if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`);
       text = await res.text();
     } catch (err) {
+      if (signal?.aborted) throw signal.reason;
       const why = err.name === 'TimeoutError' ? `no answer in ${(attemptMs * (attempt + 1)) / 1000}s` : err.message;
       console.warn(`[openrouter] ${model} attempt ${attempt + 1} failed (${why}) — retrying`);
       await sleep(Math.min(backoffMs * (attempt + 1), 30_000));

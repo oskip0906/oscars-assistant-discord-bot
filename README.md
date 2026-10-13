@@ -6,7 +6,7 @@
 
 ## Commands
 
-The same groups as `/menu`. Everything also works by just asking in chat, except `/index_channel` and `/clear`; the Power Tools only for Oscar.
+The same groups as `/menu`. Everything also works by just asking in chat, except `/index_channel` and `/clear`; the Power Tools only for Oscar. Saying "@Panda stop" aborts your request that is still running or waiting (Oscar's, everyone's in that channel).
 
 **🎵 Music**
 | Command | What it does |

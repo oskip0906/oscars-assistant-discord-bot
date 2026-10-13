@@ -62,26 +62,51 @@ export async function signOff(invocation) {
   return '';
 }
 
+// Offered on every turn with words, whatever Jev picked: reading a link and
+// looking up something live must never be out of reach.
+export const CORE_TOOLS = ['web_search', 'web_fetch'];
+// The fallback for a tool Jev did not pick: the model names it, it is added for
+// the next round. Handled here, never by executeTool.
+export const MORE_TOOLS = 'more_tools';
+const moreToolsDef = (names) => ({
+  type: 'function',
+  function: {
+    name: MORE_TOOLS,
+    description: 'Add tools that are not listed yet, by name, when the turn needs one of them. They are listed from the next step on.',
+    parameters: { type: 'object', properties: { names: { type: 'array', items: { type: 'string', enum: names } } }, required: ['names'] },
+  },
+});
+
 // One turn, at most MAX_MODEL_CALLS model calls after one Jev call:
 // 1. Jev (triage) decides in what form to answer, the mood, and which tools it
 //    expects: a yes/no per tool.
-// 2. A turn with words is offered every tool, Jev's picks named first (and
-//    required when there are any); a reaction-only turn just Jev's picks and
-//    react. Called tools all run at once. The model may go another round when
-//    the results call for it (search, then read a page), and stops as soon as
-//    it calls none; words without a tool call are the answer.
+// 2. A turn with words is offered CORE_TOOLS plus Jev's picks, and more_tools
+//    for anything else it may use; a reaction-only turn Jev's picks and react.
+//    Jev's picks are advice: the tool choice is always auto, so a turn whose
+//    messages and attachments already answer it is one call with no tools.
+//    Called tools all run at once. The model may go another round when the
+//    results call for it (search, then read a page), and stops as soon as it
+//    calls none; words without a tool call are the answer.
 // 3. Otherwise the last call writes the reply from the results, with no tools left.
-// Jev down means no picks, but every tool is still offered.
+// Jev down means no advice to trim by, so every tool is offered.
 //
 // What the turn refers to comes from the recent messages the handler puts above
 // it (`invocation.recent`), not from searching history.
 //
 // `turnText` is the batch as plain text for Jev; `userContent` may also carry
-// media attachments, which only the model sees.
+// media attachments, which only the model sees. `invocation.signal` (a stop)
+// ends the turn at the next step: no more model calls, tools or reply.
 export async function runAgent(invocation, userContent, turnText = userContent, { chat = chatCompletion, decideImpl = decide, random = Math.random } = {}) {
-  const { config, contextKey } = invocation;
+  const { config, contextKey, signal } = invocation;
   const who = invocation.message?.author?.username ?? '?';
   const turnStart = Date.now();
+  // Tokens, cost and time of this turn's model calls, shown under the reply.
+  const stats = (invocation.stats ??= { inputTokens: 0, outputTokens: 0, cost: 0, modelMs: 0, modelCalls: 0, toolsOffered: 0 });
+  const onUsage = (usage) => {
+    stats.inputTokens += Number(usage.prompt_tokens) || 0;
+    stats.outputTokens += Number(usage.completion_tokens) || 0;
+    stats.cost += Number(usage.cost) || 0;
+  };
   log(contextKey, `turn start from @${who} (model ${config.model}): ${clip(turnText, 150)}`);
 
   try {
@@ -90,30 +115,27 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     { role: 'system', content: system },
     { role: 'user', content: userContent },
   ];
+  const prepMs = Date.now() - turnStart;
   const plan = await triage(allTools, turnText, invocation, decideImpl, random);
-  log(contextKey, `triage: signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'} mood=${plan.mood ?? '?'} lookup=${plan.needsContext}`);
+  signal?.throwIfAborted();
+  log(contextKey, `triage (prep ${prepMs}ms, jev ${Date.now() - turnStart - prepMs}ms): signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'} mood=${plan.mood ?? '?'} lookup=${plan.needsContext}${plan.jevDown ? ' (jev down)' : ''}`);
   // A goodbye gets a wave and nothing else, so the conversation can end.
   if (plan.signOff) return signOff(invocation);
   const locked = plan.tools.find((name) => OWNER_ONLY_TOOLS.has(name));
   if (locked && !invocation.isOwner) return `Only Oscar can use \`${locked}\`.`;
 
-  let step = 0;
-  // Tokens, cost and time of this turn's model calls, shown under the reply.
-  const stats = (invocation.stats ??= { inputTokens: 0, outputTokens: 0, cost: 0, modelMs: 0 });
-  const onUsage = (usage) => {
-    stats.inputTokens += Number(usage.prompt_tokens) || 0;
-    stats.outputTokens += Number(usage.completion_tokens) || 0;
-    stats.cost += Number(usage.cost) || 0;
-  };
   const ask = async (msgs, tools, toolChoice) => {
     const callStart = Date.now();
+    const before = stats.inputTokens;
     let msg;
     try {
-      msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model), messages: msgs, tools, toolChoice, onUsage });
+      msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model), messages: msgs, tools, toolChoice, onUsage, signal });
     } finally {
       stats.modelMs += Date.now() - callStart;
     }
-    log(contextKey, `model #${++step} ${Date.now() - callStart}ms → ${
+    signal?.throwIfAborted();
+    stats.modelCalls = (stats.modelCalls || 0) + 1;
+    log(contextKey, `model #${stats.modelCalls} ${Date.now() - callStart}ms, ${tools?.length ?? 0} tools offered, ${stats.inputTokens - before} tokens in → ${
       msg.tool_calls?.length ? `tools: ${msg.tool_calls.map((c) => c.function.name).join(', ')}` : `text (${(msg.content || '').length} chars)`
     }`);
     return msg;
@@ -123,42 +145,41 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   if (plan.mood) messages.push({ role: 'user', content: `[TONE] Jev reads the turn as ${plan.mood}: ${MOOD_NOTE[plan.mood]}` });
 
   // A reaction is a tool call too, so the forms that react offer `react`. A
-  // reaction-only turn gets just Jev's picks; any turn with words gets every
-  // tool (Oscar's only for Oscar), Jev's picks named first, so a pick Jev
-  // missed (web_fetch on a docs link) never leaves Panda saying it can't.
+  // reaction-only turn gets just Jev's picks; a turn with words CORE_TOOLS and
+  // Jev's picks (Oscar's only for Oscar), and more_tools for the rest.
   const reacts = plan.form === 'reaction' || plan.form === 'both';
   const wordy = plan.form !== 'reaction';
-  const picked = new Set(reacts ? [...plan.tools, 'react'] : plan.tools);
+  const picked = new Set(plan.tools);
+  const eligible = allTools.filter(({ function: { name } }) => name !== 'react' && (invocation.isOwner || !OWNER_ONLY_TOOLS.has(name)));
   const offered = allTools.filter(({ function: { name } }) =>
-    name === 'react' ? reacts : picked.has(name) || (wordy && (invocation.isOwner || !OWNER_ONLY_TOOLS.has(name))),
+    name === 'react' ? reacts : picked.has(name) || (wordy && eligible.some((t) => t.function.name === name) && (plan.jevDown || CORE_TOOLS.includes(name))),
   );
-  // Required when something must happen (a reaction, Jev's picks); otherwise the model may just answer.
-  const mustCall = reacts || plan.tools.length > 0;
-  const reactNote = reacts
-    ? ` React with exactly one emoji that fits the mood, and vary it: for example one of ${moodEmoji(plan.mood, random).join(' ')}, or any better fit (not always the same one). Only your first reaction is added.`
-    : '';
-  const lookupNote = plan.needsContext
-    ? ' `message` refers to something the recent messages do not explain: call fetch_history with a `query` list of its key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) to find what was said about it, rather than guessing.'
-    : '';
+  const unoffered = () => eligible.filter((t) => !offered.includes(t)).map((t) => t.function.name);
+  const suggested = moodEmoji(plan.mood, random);
+  const notes = [
+    picked.size ? `Jev's guess at tools that may help: ${[...picked].join(', ')}. Advice, not a must.` : '',
+    reacts ? `React with exactly one emoji that fits the mood, and vary it: for example one of ${suggested.join(' ')}, or any better fit (not always the same one). Only your first reaction is added.${wordy ? ' Write your reply as text in the same message as the reaction.' : ' No words.'}` : '',
+    plan.needsContext
+      ? '`message` refers to something the recent messages do not explain: call fetch_history with a `query` list of its key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) to find what was said about it, rather than guessing.'
+      : '',
+  ].filter(Boolean);
   // Rounds of tool calls, leaving the last model call for the answer. A later
   // round that answers in words instead of calling more is the answer.
   let answer = null;
+  let listed = [];
   for (let round = 1; offered.length && round < MAX_MODEL_CALLS; round++) {
     // react is offered until it has been used, so a later round can't pile on more.
-    const tools = invocation.reacted ? offered.filter((t) => t.function.name !== 'react') : offered;
-    if (!tools.length) break;
-    const pickNote = {
-      role: 'user',
-      content:
-        round === 1
-          ? wordy
-            ? `[TOOLS] ${picked.size ? `Picked for this turn: ${[...picked].join(', ')}. ` : ''}Every tool listed is yours to use: call the ones the turn needs (a link to read → web_fetch, something to look up → web_search), all in this one reply, with the arguments it needs${mustCall ? '' : ', or call none and answer if no tool would help'}. Never say you can't access, browse or fetch something a listed tool can do.${reactNote}${lookupNote}`
-            : `[TOOLS] Picked for this turn: ${[...picked].join(', ')}. Call the ones that help, all in this one reply, with the arguments the turn needs.${reactNote}${lookupNote}`
-          : `[TOOLS] Round ${round} of at most ${MAX_MODEL_CALLS - 1}. Call more of these tools only if the results so far are not enough to answer (e.g. read a page a search found); otherwise call nothing and write your reply now.`,
-    };
-    const msg = await ask([...messages, pickNote], tools, round === 1 && mustCall ? 'required' : 'auto');
+    const more = wordy ? unoffered() : [];
+    listed = [...(invocation.reacted ? offered.filter((t) => t.function.name !== 'react') : offered), ...(more.length ? [moreToolsDef(more)] : [])];
+    if (!listed.length) break;
+    stats.toolsOffered = Math.max(stats.toolsOffered || 0, listed.length);
+    const note =
+      round === 1
+        ? notes.length && { role: 'user', content: `[TOOLS] ${notes.join(' ')}` }
+        : { role: 'user', content: `[TOOLS] Round ${round} of at most ${MAX_MODEL_CALLS - 1}. Call more tools only if the results so far are not enough to answer (e.g. read a page a search found); otherwise call nothing and write your reply now.` };
+    const msg = await ask(note ? [...messages, note] : messages, listed, 'auto');
     // Only offered tools run, whatever else the model tries to call.
-    const allowed = new Set(tools.map((t) => t.function.name));
+    const allowed = new Set(listed.map((t) => t.function.name));
     const calls = (msg.tool_calls ?? []).filter((c) => allowed.has(c.function?.name));
     // No tool calls: words here are the answer, so no extra call is spent.
     if (!calls.length) {
@@ -166,23 +187,36 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
       break;
     }
     messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: calls });
-    (invocation.toolsUsed ??= []).push(...calls.map((c) => c.function.name));
+    (invocation.toolsUsed ??= []).push(...calls.map((c) => c.function.name).filter((name) => name !== MORE_TOOLS));
     // Everything runs at once, except reactions, which keep their order: only the first one lands (reactOnce).
     let reactions = Promise.resolve();
-    const run = (call) => runTool(call, invocation, contextKey);
+    const run = (call) => (call.function.name === MORE_TOOLS ? addTools(call, eligible, offered) : runTool(call, invocation, contextKey));
+    const toolsStart = Date.now();
     messages.push(...(await Promise.all(calls.map((call) => (call.function.name === 'react' ? (reactions = reactions.then(() => run(call))) : run(call))))));
+    signal?.throwIfAborted();
+    log(contextKey, `round ${round} tools ${Date.now() - toolsStart}ms`);
     // A reaction-only turn ends at its reaction, so the model can't add "Got it".
-    if (plan.form === 'reaction' && invocation.reacted) {
-      log(contextKey, `turn done (reaction only) in ${Date.now() - turnStart}ms after ${step} model call(s)`);
-      return '';
+    if (plan.form === 'reaction' && invocation.reacted) break;
+    // A reaction sent with the reply's words is the whole answer: no extra call.
+    if (wordy && msg.content?.trim() && calls.every((c) => c.function.name === 'react')) {
+      answer = msg;
+      break;
     }
+  }
+
+  // A reaction-only turn says nothing. The reaction is the model's to choose; if
+  // it wrote words instead, the first suggested emoji stands in, with no extra call.
+  if (plan.form === 'reaction') {
+    if (!invocation.reacted && (await reactOnce(invocation.message, suggested[0]))) invocation.reacted = true;
+    log(contextKey, `turn done (reaction only) in ${Date.now() - turnStart}ms after ${stats.modelCalls} model call(s)`);
+    return '';
   }
 
   // Tools stay listed (some providers reject tool results without them) but can't be called.
   const ran = messages.some((m) => m.role === 'tool');
-  const msg = answer ?? (await ask(messages, ran ? offered : [], 'none'));
+  const msg = answer ?? (await ask(messages, ran ? listed : [], 'none'));
   const text = msg.content?.trim() || '';
-  log(contextKey, `turn done in ${Date.now() - turnStart}ms after ${step} model call(s)`);
+  log(contextKey, `turn done in ${Date.now() - turnStart}ms after ${stats.modelCalls} model call(s), ${stats.inputTokens} in / ${stats.outputTokens} out tokens`);
   // A rule says to stay silent: nothing is sent, not even the sign-off wave.
   if (isNoReply(text)) {
     invocation.silent = true;
@@ -196,9 +230,24 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   if (isFiller(text)) return signOff(invocation);
   return text;
   } catch (err) {
-    log(contextKey, `turn failed after ${Date.now() - turnStart}ms: ${err.message || err}`);
+    log(contextKey, `turn ${signal?.aborted ? 'stopped' : 'failed'} after ${Date.now() - turnStart}ms: ${err.message || err}`);
     throw err;
   }
+}
+
+// more_tools: the named tools this sender may use join the offer from the next round.
+function addTools(call, eligible, offered) {
+  let names = [];
+  try {
+    names = [].concat(JSON.parse(call.function.arguments || '{}').names ?? []);
+  } catch {}
+  const added = eligible.filter((t) => names.includes(t.function.name) && !offered.includes(t));
+  offered.push(...added);
+  return {
+    role: 'tool',
+    tool_call_id: call.id,
+    content: added.length ? `Added: ${added.map((t) => t.function.name).join(', ')}. Call them now if the turn needs them.` : 'Nothing added: those are already listed, are not tools, or are not available to this sender.',
+  };
 }
 
 async function runTool(call, invocation, contextKey) {
@@ -213,9 +262,11 @@ async function runTool(call, invocation, contextKey) {
     args = undefined;
   }
   try {
-    // Unreadable arguments never run the tool: the model is told to fix them.
-    result =
-      args === undefined
+    // A stopped turn starts nothing new; unreadable arguments never run the
+    // tool: the model is told to fix them.
+    result = invocation.signal?.aborted
+      ? 'Not run: the turn was stopped.'
+      : args === undefined
         ? `Invalid arguments for ${name}: not valid JSON. Nothing ran; call it again with a JSON object of arguments.`
         : await executeTool(name, args, invocation);
   } catch (err) {
@@ -237,7 +288,7 @@ async function runTool(call, invocation, contextKey) {
 //    only a reaction. A turn Panda
 //    joined unaddressed just to react (invocation.reactOnly) is a reaction, no tools.
 // 4. what mood is it in? The most likely one, since a misread mood is a bug.
-// Jev down, or unsure of an answer, means no tools and a text reply.
+// Jev down, or unsure of an answer, means no picks and a text reply.
 async function triage(tools, message, invocation, decideImpl, random = Math.random) {
   const { config } = invocation;
   const author = invocation.message?.author;
@@ -293,7 +344,8 @@ async function triage(tools, message, invocation, decideImpl, random = Math.rand
   }
   const answers = await decideImpl(config, state, questions);
   const mood = answers?.mood?.choice in MOOD_EMOJI ? answers.mood.choice : null;
-  if (invocation.reactOnly) return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: [], form: 'reaction', mood, needsContext: false };
+  const jevDown = !answers;
+  if (invocation.reactOnly) return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: [], form: 'reaction', mood, needsContext: false, jevDown };
 
   const picked = asked.map((t) => t.function.name).filter((name) => answers?.[`use_${name}`]?.noul >= TOOL_THRESHOLD);
   // Tuned against jev-1.13: references nothing shown explains score 0.90–0.97,
@@ -309,5 +361,5 @@ async function triage(tools, message, invocation, decideImpl, random = Math.rand
     ? sampleChoice({ choice: 'message', probabilities: { message: odds.message, both: (odds.both ?? 0) + (odds.reaction ?? 0) } }, { random })
     : sampleChoice(answers?.respond_with, { random });
   if (!['reaction', 'message', 'both'].includes(form)) form = null;
-  return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: picked, form, mood, needsContext };
+  return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: picked, form, mood, needsContext, jevDown };
 }
