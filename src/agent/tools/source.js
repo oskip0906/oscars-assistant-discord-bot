@@ -5,7 +5,7 @@ import { selfFixState } from '../../selfFixState.js';
 import { startDevRunLog } from '../../devRunLog.js';
 import { ApprovalCard } from '../../discord/approvalCard.js';
 import { runDevelopmentSandbox } from './developmentSandbox.js';
-import { chatCompletion, providerFor } from '../openrouter.js';
+import { chatCompletion, providerFor, turnSignal } from '../openrouter.js';
 
 export const approvalCard = new ApprovalCard(config.dataDir);
 
@@ -146,7 +146,9 @@ Return ONLY the JSON object, no other text.`,
 export function selfFix(args, invocation, deps = {}) {
   const state = deps.state || selfFixState;
   if (state.isActive()) return '🛠️ A self-fix is already running. Wait for it to land (Oscar gets a DM) before asking for another.';
-  runSelfFix(args, invocation, deps).catch((err) => console.error('[self_fix] background run failed:', err));
+  // Outside the turn's stop signal: a "@Panda stop" never half-kills a fix. Its
+  // approval card (Approve / Cancel) stays the only way to start or drop it.
+  turnSignal.exit(() => runSelfFix(args, invocation, deps)).catch((err) => console.error('[self_fix] background run failed:', err));
   return '🛠️ Writing the prompt for Claude Code now; an approval card will appear here in a moment. The fix runs in the background, so I keep answering meanwhile, and Oscar gets the result by DM.';
 }
 

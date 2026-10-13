@@ -57,6 +57,10 @@ export const config = {
   // every call site falls back to its pre-Jev behaviour.
   jevEnabled: bool(process.env.JEV_ENABLED, true),
   botName: process.env.BOT_NAME || 'Panda',
+  // How long a sender's first message waits for their follow-ups before they are
+  // all answered as one turn (BATCH_WINDOW_MS, 250–10000 ms). Shorter answers
+  // sooner; longer keeps a slow multi-message typer in one turn.
+  batchWindowMs: Math.min(10_000, Math.max(250, Number(process.env.BATCH_WINDOW_MS) || 1500)),
   allowBots: bool(process.env.ALLOW_BOTS, true),
   // DM functionality is disabled and has no env switch: the bot ignores direct
   // messages. See messageHandler's `isDM && !config.dmEnabled` guard.

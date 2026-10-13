@@ -48,7 +48,9 @@ export async function askJson({ config, system, user, isValid, model }) {
         messages,
       });
       content = message?.content ?? '';
-    } catch {
+    } catch (err) {
+      // A stopped turn stops the whole pipeline, not just this stage.
+      if (err?.name === 'AbortError') throw err;
       return null;
     }
 

@@ -71,7 +71,7 @@ export async function readChannelRange(channel, before, { skip = 0, count = 30, 
   const out = [];
   let toSkip = skip;
   while (out.length < count) {
-    const page = await channel.messages.fetch({ limit: 100, before });
+    const page = await channel.messages.fetch({ limit: Math.min(100, count - out.length + toSkip), before });
     if (!page.size) break;
     for (const m of page.values()) {
       if (m.createdTimestamp < since) return out.reverse();
