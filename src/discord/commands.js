@@ -104,8 +104,8 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           const note = await getNote(config, id);
           if (!note) return await interaction.reply({ content: 'That note was deleted.', flags: MessageFlags.Ephemeral });
           const { folders } = await loadTree(config);
-          const { embeds, rest } = noteMessage(note, folders, await relatedNotes(config, id));
-          await interaction.reply({ embeds, allowedMentions: { parse: [] } });
+          const { embeds, rest, files } = noteMessage(note, folders, await relatedNotes(config, id));
+          await interaction.reply({ embeds, files, allowedMentions: { parse: [] } });
           for (const part of rest) await interaction.followUp({ content: part, allowedMentions: { parse: [] } });
         }
       } catch (err) {
@@ -476,8 +476,8 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         const note = await openNote(config, interaction.options.getString('title', true));
         if (!note) return await interaction.editReply('No note matches that. Browse them with `/display_notes`.');
         const { folders } = await loadTree(config);
-        const { embeds, rest } = noteMessage(note, folders, await relatedNotes(config, note.id));
-        await interaction.editReply({ embeds, allowedMentions: { parse: [] } });
+        const { embeds, rest, files } = noteMessage(note, folders, await relatedNotes(config, note.id));
+        await interaction.editReply({ embeds, files, allowedMentions: { parse: [] } });
         for (const part of rest) await interaction.followUp({ content: part, allowedMentions: { parse: [] } });
         return;
       }

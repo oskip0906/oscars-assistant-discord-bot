@@ -49,6 +49,8 @@ const executors = {
   how_i_work: aboutTools.howIWork,
   search_notes: notesTools.searchNotes,
   save_note: notesTools.saveNoteFromChat,
+  create_note: notesTools.createNoteFromChat,
+  send_note_file: notesTools.sendNoteFile,
   panda_commands: commandTools.pandaCommands,
   current_model: commandTools.currentModel,
   usage: commandTools.usage,

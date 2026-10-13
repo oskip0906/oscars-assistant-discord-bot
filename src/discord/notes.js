@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } from 'discord.js';
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } from 'discord.js';
 import { randomEmbedColor } from './colors.js';
 import { chunkMessage } from './chunk.js';
 import { childrenOf, folderPath } from '../agent/notes.js';
@@ -13,15 +13,38 @@ const MENUS = 4;
 const unix = (date) => Math.floor(new Date(date).getTime() / 1000);
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
+// A safe attachment name: no folders, only plain characters, and an extension
+// (.md when it has none). Falls back to the note's title.
+export function fileNameFor(name, title = 'note') {
+  const clean = (text) =>
+    String(text ?? '')
+      .split(/[\\/]/)
+      .pop()
+      .replace(/\s+/g, '_')
+      .replace(/[^\w.-]/g, '')
+      .replace(/^[.-]+/, '')
+      .slice(0, 100);
+  const picked = clean(name) || clean(title) || 'note';
+  return /\.[a-z0-9]{1,10}$/i.test(picked) ? picked : `${picked}.md`;
+}
+
+// The note's text as a file to attach: its own file name, or `name`, or one made from its title.
+export function noteFile(note, name = null) {
+  return new AttachmentBuilder(Buffer.from(note.body, 'utf8'), { name: fileNameFor(name || note.file_name, note.title) });
+}
+
 // The note as an embed, plus any body that didn't fit as follow-up messages.
+// A file note shows only the start of its text: the file is sent with it (noteFile).
 export function noteMessage(note, folders, related = []) {
   const path = folderPath(folders, note.folder_id).join(' / ') || 'Unsorted';
   const head = `*${note.description}*\n📁 ${path} · by <@${note.author_id}> · <t:${unix(note.created_at)}:D>\n\n`;
-  const [first, ...rest] = note.body.length > BODY_IN_EMBED ? chunkMessage(note.body, BODY_IN_EMBED) : [note.body];
-  const embed = new EmbedBuilder().setColor(randomEmbedColor()).setTitle(clip(`📄 ${note.title}`, 256)).setDescription(head + first);
+  const body = note.file_name ? clip(note.body, BODY_IN_EMBED) : note.body;
+  const [first, ...rest] = body.length > BODY_IN_EMBED ? chunkMessage(body, BODY_IN_EMBED) : [body];
+  const embed = new EmbedBuilder().setColor(randomEmbedColor()).setTitle(clip(`${note.file_name ? '📎' : '📄'} ${note.title}`, 256)).setDescription(head + first);
   if (related.length) embed.addFields({ name: '🔗 Related', value: clip(related.map((r) => `• ${r.title}`).join('\n'), 1024) });
-  if (rest.length) embed.setFooter({ text: `Continued in ${rest.length} more message(s)` });
-  return { embeds: [embed], rest };
+  if (note.file_name) embed.setFooter({ text: `Full text in the attached file ${fileNameFor(note.file_name, note.title)}` });
+  else if (rest.length) embed.setFooter({ text: `Continued in ${rest.length} more message(s)` });
+  return { embeds: [embed], rest, files: note.file_name ? [noteFile(note)] : [] };
 }
 
 // One folder (null = the top) as a browsable embed: the whole subtree, split

@@ -30,7 +30,7 @@ const RECENT_COUNT = 5;
 const RECENT_CHARS = 500;
 // Panda talks unpinged only when Jev is this sure the message is addressed to
 // it or responds to something it said; below that it never talks.
-const TALK = 0.7;
+const TALK = 0.8;
 // identity.md is cut to this for Jev, which reads it to tell what is meant for Panda.
 const IDENTITY_CHARS = 2000;
 // Unaddressed messages are reacted to only when Jev leans yes, then sampled.
@@ -80,6 +80,10 @@ export async function signsOff(text, clientUserId, config, decideImpl = decide) 
 // Panda (or its Discord name), "panda bot", "Oscar's bot" or "the bot". A message
 // put to Oscar himself (his @mention, a reply to him, "Oscar, can you…") is his
 // to answer, so Panda stays out of it rather than answering in his place.
+// Being named is not being addressed: only a name in calling position (the start
+// of the message, or tagged on the end: "…, panda?") counts as calling Panda.
+// Named anywhere else ("I think panda is broken", "ask panda later") it is
+// 'named' and Jev decides; with Jev down, Panda stays out of it.
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const OWNER = 'oscar';
 const OWNER_POSSESSIVE = `${OWNER}(?:'|’)?s`;
@@ -87,6 +91,9 @@ const OWNER_POSSESSIVE = `${OWNER}(?:'|’)?s`;
 const OPENER = "(?:(?:hey|hi|hello|yo|oi|ok|okay|so|um|uh|pls|please|sup|wait|ayo|ay)[\\s,!.]+)*";
 // Greetings that make the next name the one being called ("hey oscar how's it going").
 const GREETING = "(?:(?:hey|hi|hello|yo|oi|sup|ayo|ay|dear|thanks|thx|ty)[\\s,!.]+)+";
+// Words after a name at the start that make the message about Panda, not to it ("panda is so slow").
+const ABOUT =
+  "is|isn't|was|wasn't|are|were|has|hasn't|had|have|keeps|kept|seems|seemed|just|always|never|still|did|didn't|does|doesn't|can't|cannot|won't|wouldn't|couldn't|got|gets|went|said|says|told|thinks|thought|knows|kinda|really|sucks|broke|crashed";
 
 // Every phrase that names Panda when `isOwner` (or not) says it.
 export function pandaAliases(config, user, isOwner = false) {
@@ -99,7 +106,8 @@ export function pandaAliases(config, user, isOwner = false) {
 }
 
 // 'panda' when the message calls Panda, 'owner' when it is put to Oscar instead,
-// null when this check can't tell (then Jev decides, as before).
+// 'named' when it names Panda without calling it, null when it doesn't name it
+// (for both, Jev decides).
 export function addressee(message, config, user, repliedTo = null) {
   const isOwner = Boolean(config.ownerId) && message.author?.id === config.ownerId;
   const text = stripBotMention(message.content, user?.id ?? '').toLowerCase();
@@ -109,6 +117,10 @@ export function addressee(message, config, user, repliedTo = null) {
   const callsPanda = new RegExp(`^\\W*(?:${GREETING}@?${alias}(?![\\w'’])|${OPENER}@?${alias}\\s*[,:!])`, 'i');
   // "Panda, ask Oscar…" is for Panda however it goes on.
   if (callsPanda.test(text)) return 'panda';
+  // Its name opening the message, unless the message goes on to talk about it
+  // ("panda bot is down again"); or tagged on the end ("what time is it, panda?").
+  const opens = new RegExp(`^\\W*${OPENER}@?${alias}(?![\\w'’])(?!\\s*(?:${ABOUT})(?![\\w'’]))`, 'i');
+  const tagged = new RegExp(`(?:,\\s*|^\\W*)@?${alias}[\\s?!.]*$|(?<![\\w'’])${alias}\\s*\\?[\\s?!.]*$`, 'i');
   if (!isOwner && config.ownerId) {
     const pingsOwner =
       message.mentions?.users?.has?.(config.ownerId) || new RegExp(`<@!?${config.ownerId}>`).test(message.content ?? '');
@@ -120,7 +132,8 @@ export function addressee(message, config, user, repliedTo = null) {
     ).test(text);
     if (pingsOwner || repliesToOwner || namesOwner) return 'owner';
   }
-  return aliases.test(text) ? 'panda' : null;
+  if (opens.test(text) || tagged.test(text)) return 'panda';
+  return aliases.test(text) ? 'named' : null;
 }
 
 // One line of channel history as Panda reads it; its own lines are marked (you).
@@ -128,14 +141,14 @@ const historyLine = (m, self) => `${m.author.id === self ? '(you) ' : ''}${forma
 
 // Is a message that is not a ping, a reply to Panda or a DM still one to join,
 // and how? Jev reads it with the RECENT_COUNT messages before it:
-// - 'talk' only when Jev is at least 70% sure it responds to one of Panda's
+// - 'talk' only when Jev is at least 80% sure it responds to one of Panda's
 //   own recent lines (only trusted when Panda really spoke there) or is
 //   addressed to Panda (judged against identity.md and the recent lines).
 // - 'react' when it is not for Panda but worth an emoji (funny, wild, dumb,
 //   big news), sampled too, so Panda doesn't react to everything.
 // - false otherwise. Bots are judged exactly like people. Jev off or down
 //   means false: then only pings, replies and DMs are answered.
-export async function forPanda(message, before, self, config, decideImpl = decide, random = Math.random) {
+export async function forPanda(message, before, self, config, decideImpl = decide, random = Math.random, named = false) {
   const recent = before.slice(-RECENT_COUNT);
   const state = {
     message: formatEnvelope(message),
@@ -144,6 +157,7 @@ export async function forPanda(message, before, self, config, decideImpl = decid
     assistant_identity: (await readPrompt(config, 'identity.md')).slice(0, IDENTITY_CHARS) || '(unknown)',
     owner_name: 'Oscar',
     sender_is_owner: message.author?.id && message.author.id === config.ownerId ? 'yes' : 'no',
+    names_assistant: named ? 'yes, but not at the start or end where someone would call it' : 'no',
   };
   const answers = await decideImpl(config, state, {
     follows_up: {
@@ -154,7 +168,7 @@ export async function forPanda(message, before, self, config, decideImpl = decid
     addressed: {
       type: 'noul',
       instructions:
-        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else (a name or @mention not in `assistant_names`: another bot or nickname such as \"slopbot\" is NOT the assistant), if it is about the assistant rather than to it, if people are talking among themselves, or if it only might be for it. \"my bot\" or \"my assistant\" means the assistant only when `sender_is_owner` is yes; from anyone else it is their own bot. No when it is put to `owner_name` himself (a question or request for him): the assistant never answers in his place.",
+        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else (a name or @mention not in `assistant_names`: another bot or nickname such as \"slopbot\" is NOT the assistant), if it is about the assistant rather than to it, if people are talking among themselves, or if it only might be for it. Naming the assistant is not addressing it (see `names_assistant`): \"panda is so slow today\", \"ask panda later\", \"I told the bot to stop\" or \"lol panda got it wrong\" talk about it, not to it; yes only when the message itself asks or tells it something. \"my bot\" or \"my assistant\" means the assistant only when `sender_is_owner` is yes; from anyone else it is their own bot. No when it is put to `owner_name` himself (a question or request for him): the assistant never answers in his place.",
     },
     worth_reacting: {
       type: 'noul',
@@ -447,15 +461,16 @@ export function createMessageHandler({ client, config, player, privateMode, runA
       }
       const direct = isDM || mentioned || repliedToBot;
       let joined = 'talk';
-      // Called by name ("panda bot", "Oscar's bot", Oscar's "my bot") it talks;
-      // a message put to Oscar is his, so Panda neither answers nor reacts.
+      // Called by name ("panda bot, …", "Oscar's bot, …", Oscar's "my bot …") it
+      // talks; only named (talked about) it is Jev's call like any other message.
+      // A message put to Oscar is his, so Panda neither answers nor reacts.
       const to = direct ? null : addressee(message, config, client.user, ref);
       if (to === 'owner') return;
       if (!direct && to !== 'panda') {
         // A full queue would drop it anyway, so Jev is not asked.
         if ((channels.get(channelId)?.queue.length ?? 0) >= MAX_QUEUE) return;
         const before = await message.channel.messages.fetch({ limit: RECENT_COUNT, before: message.id }).catch(() => []);
-        joined = await forPanda(message, [...before.values()].reverse(), client.user.id, config, decideImpl);
+        joined = await forPanda(message, [...before.values()].reverse(), client.user.id, config, decideImpl, Math.random, to === 'named');
         if (!joined) return;
         // A follow-up of theirs may have opened a batch while Jev was deciding.
         if (foldIn()) return;
