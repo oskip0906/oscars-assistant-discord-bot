@@ -66,7 +66,7 @@ Every model call uses one OpenRouter key (`src/agent/openrouter.js`), retried on
 | **Claude Code** | The code change in `self_fix` |
 | **Jev** (`typesafe/jev-1.13`) | Fast yes/no and pick-one decisions |
 
-`/set_model <model> [provider]` (Oscar) validates the id against OpenRouter's catalog and saves it in `bot_settings`, live at once and kept across restarts. The optional provider (e.g. `deepinfra`) pins that model to one OpenRouter provider (`provider: { order: [slug], allow_fallbacks: false }`); it is checked against the model's endpoints and refused if OpenRouter doesn't route the model there. Providers are saved per model id as JSON in the `model_providers` row; a blank provider, or no row at all, sends no provider field, so OpenRouter routes as it always has. `/model` shows the model and provider; `/usage` shows spend.
+`/set_model <model> [provider]` (Oscar) validates the id against OpenRouter's catalog and saves it in `bot_settings`, live at once and kept across restarts. The optional provider (e.g. `deepinfra`) pins that model to one OpenRouter provider (`provider: { order: [slug], allow_fallbacks: false }`); it is checked against the model's endpoints and refused if OpenRouter doesn't route the model there. Providers are saved per model id as JSON in the `model_providers` row; a blank provider, or no row at all, sends no provider field, so OpenRouter routes as it always has. `/model` shows the model and provider, and `/model <model>` posts OpenRouter's info on any model as a card (`src/agent/tools/modelInfo.js`, through `send_card`); `/usage` shows spend.
 
 ## Jev: the decision layer
 
@@ -108,6 +108,7 @@ Bars follow which mistake costs more: the gate talks only when Jev is fairly sur
 | `add_reminder` / `show_reminders` / `delete_reminder` | Reminders for the sender, as the slash commands; a name matching several reminders deletes nothing and asks which |
 | `research` | The `/research` pipeline and report |
 | `panda_commands` | List the slash commands or explain one, read live from `src/discord/commandDefs.js` |
+| `model_info` | Any OpenRouter model's id, name, description, input / output price (per token and per 1M), context, max output, architecture, supported parameters and providers (only what differs per provider), as `/model <model>`. Reads OpenRouter's public `/models`, `/models/{id}` and `/models/{id}/endpoints` with no API key; an id, a bare model name or a display name matches exactly, otherwise the best fuzzy match is used only when clearly ahead, else it suggests the closest. Never switches models |
 | `current_model` / `usage` | The conversation model and provider running now (read from the runtime config, as `/model`) plus Jev's model / spend, as `/usage` |
 | `how_i_work` | Read this file and the source files on GitHub that answer a topic (Jev picks up to 3; long files cut to the lines around the topic) |
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |

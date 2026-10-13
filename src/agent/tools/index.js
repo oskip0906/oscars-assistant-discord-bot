@@ -9,6 +9,7 @@ import * as historyTools from './history.js';
 import * as aboutTools from './about.js';
 import * as notesTools from './notes.js';
 import * as commandTools from './commands.js';
+import * as modelInfoTools from './modelInfo.js';
 import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.js';
 
 // Owner-only tools. Gated by the AUTHENTICATED Discord author id
@@ -27,11 +28,11 @@ export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'add_rule', 're
 export const LOOKUP_TOOLS = new Set([
   'web_search', 'web_fetch', 'image_search', 'reverse_image_search', 'video_search', 'news_search', 'wiki_search', 'research',
   'fetch_history', 'index_chat', 'search_notes', 'list_notes', 'open_note', 'show_reminders',
-  'how_i_work', 'panda_commands', 'current_model', 'usage', 'server_info', 'get_user_id', 'get_message_sender',
+  'how_i_work', 'panda_commands', 'current_model', 'model_info', 'usage', 'server_info', 'get_user_id', 'get_message_sender',
 ]);
 export const isLookup = (name) => LOOKUP_TOOLS.has(name) || isGithubMcpTool(name);
 
-const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools, commandTools];
+const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools, commandTools, modelInfoTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -66,6 +67,7 @@ const executors = {
   send_note_file: notesTools.sendNoteFile,
   panda_commands: commandTools.pandaCommands,
   current_model: commandTools.currentModel,
+  model_info: modelInfoTools.modelInfo,
   usage: commandTools.usage,
   set_model: commandTools.setModel,
   private_mode: commandTools.privateModeTool,

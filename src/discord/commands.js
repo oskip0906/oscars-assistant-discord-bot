@@ -18,6 +18,7 @@ import { renderReport } from '../agent/research/render.js';
 import { redactSecrets } from '../config.js';
 import { setRule } from '../agent/tools/rules.js';
 import { UI_PREFIX, clickAsMessage, createPoll, sendCard } from '../agent/tools/ui.js';
+import { lookupModel, modelCard, modelInfoChoices } from '../agent/tools/modelInfo.js';
 import { saveNote, windowMessages, loadTree, openNote, getNote, relatedNotes, noteChoices, deleteNote, folderPath } from '../agent/notes.js';
 import { NOTES_PREFIX, noteMessage, folderView, deleteNoteConfirm } from './notes.js';
 import { addReminder, activeReminders, reminderChoices, deleteReminder, timezoneChoices, repeatText } from '../reminders.js';
@@ -161,6 +162,8 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         let choices = [];
         if (interaction.commandName === 'set_model') {
           choices = owner ? await modelChoices(config, focused.value) : [];
+        } else if (interaction.commandName === 'model') {
+          choices = await modelInfoChoices(focused.value);
         } else if (interaction.commandName === 'open_note') {
           choices = (await noteChoices(config, focused.value)).map((n) => ({ name: short(n.title), value: short(n.title) }));
         } else if (interaction.commandName === 'delete_note') {
@@ -316,7 +319,16 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       }
 
       if (name === 'model') {
-        return await interaction.reply({ embeds: [buildModelEmbed(client, config)] });
+        const wanted = interaction.options.getString('model');
+        if (!wanted) return await interaction.reply({ embeds: [buildModelEmbed(client, config)] });
+        // A lookup only: posts OpenRouter's info as a card, never switches models.
+        await interaction.deferReply();
+        const found = await lookupModel(wanted);
+        if (!found.ok) return await sendToolResult(found.message);
+        // The card is the reply itself, so it works in DMs and uncached channels too.
+        const posted = await sendCard(modelCard(found.info), { ...buildInvocation(), message: { channel: { send: (p) => interaction.editReply(p) } } });
+        if (!posted.startsWith('Card posted')) await sendToolResult(posted);
+        return;
       }
 
       if (name === 'set_model') {

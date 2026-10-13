@@ -61,6 +61,7 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 | `/menu` | Show the menu |
 | `/usage` | How much money Panda has spent |
 | `/model` | Which model Panda is running on |
+| `/model <model>` | OpenRouter info for any model (name or id, fuzzy-matched): price per 1M tokens, context, max output, architecture, providers |
 
 ## Tools
 
@@ -70,7 +71,7 @@ Beyond the slash commands, Panda calls these on its own while chatting (details 
 - **Web:** search the web and images, search by image (pages with matching pictures), read any public page.
 - **Memory:** read further back in a channel, search what it remembered, index the messages around an old one, and save, list, open and find notes, create notes and files (.txt, .md and other text files) that are stored with the notes and sent as attachments or cards, and send any saved note back as a file (deleting one posts the same confirmation as `/delete_note`).
 - **Reminders and research:** add, show and delete reminders, and run the full `/research` pipeline.
-- **Slash commands:** explain any command from its registered definition, say which model it runs on (the live setting), and report spend.
+- **Slash commands:** explain any command from its registered definition, say which model it runs on (the live setting), look up any OpenRouter model's price, context and providers (`model_info`), and report spend.
 - **Music:** play, skip, pause, resume, stop and show the queue.
 - **Self-knowledge:** read ARCHITECTURE.md and its own source on GitHub to explain how it works.
 - **Oscar only:** read GitHub (files, commits, issues, PRs, code search, Actions runs), make GitHub writes such as issues and comments, change its own code through an approved `self_fix` PR, remember standing rules in `RULES.md` with `add_rule` / `remove_rule` (followed in every reply), create threads and post in them with `create_thread` / `send_to_thread`, change its personality with `set_rule`, switch models with `set_model`, and toggle private mode.
