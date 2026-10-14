@@ -16,6 +16,8 @@ export const MAX_MODEL_CALLS = 5;
 // A turn Jev thinks is owed words this much (a question to Panda, a reply to
 // something it said) is never reaction-only.
 const NEEDS_WORDS = 0.5;
+// Tuned against jev-1.13: casual chat and simple requests score 0.03–0.12, hard ones (a proof, a deadlock, a puzzle, a tradeoff) 0.48–0.84.
+const THINK_THRESHOLD = 0.4;
 
 // Emoji to vary reactions by the mood Jev reads. A few are offered at random each
 // turn so Panda doesn't put 😂 on everything; the model may still pick its own.
@@ -141,7 +143,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   const prepMs = Date.now() - turnStart;
   const plan = await triage(allTools, turnText, invocation, decideImpl, random);
   signal?.throwIfAborted();
-  log(contextKey, `triage (prep ${prepMs}ms, jev ${Date.now() - turnStart - prepMs}ms): signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'} mood=${plan.mood ?? '?'} lookup=${plan.needsContext}${plan.jevDown ? ' (jev down)' : ''}`);
+  log(contextKey, `triage (prep ${prepMs}ms, jev ${Date.now() - turnStart - prepMs}ms): signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'} mood=${plan.mood ?? '?'} lookup=${plan.needsContext} think=${plan.think}${plan.jevDown ? ' (jev down)' : ''}`);
   // A goodbye gets a wave and nothing else, so the conversation can end.
   if (plan.signOff) return signOff(invocation);
   const locked = plan.tools.find((name) => OWNER_ONLY_TOOLS.has(name));
@@ -152,7 +154,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     const before = stats.inputTokens;
     let msg;
     try {
-      msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model), messages: msgs, tools, toolChoice, onUsage, signal });
+      msg = await chat({ apiKey: config.openrouterApiKey, model: config.model, provider: providerFor(config, config.model), messages: msgs, tools, toolChoice, reasoning: plan.think ? { effort: 'low' } : undefined, onUsage, signal });
     } finally {
       stats.modelMs += Date.now() - callStart;
     }
@@ -343,6 +345,8 @@ async function runTool(call, invocation, contextKey) {
 //    only a reaction. A turn Panda
 //    joined unaddressed just to react (invocation.reactOnly) is a reaction, no tools.
 // 4. what mood is it in? The most likely one, since a misread mood is a bug.
+// 5. does a reply in words need careful thinking (math, logic, code, a tradeoff)?
+//    Then the model reasons at low effort; otherwise it doesn't reason at all.
 // Jev down, or unsure of an answer, means no picks and a text reply.
 async function triage(tools, message, invocation, decideImpl, random = Math.random) {
   const { config } = invocation;
@@ -387,6 +391,7 @@ async function triage(tools, message, invocation, decideImpl, random = Math.rand
         neutral: 'Matter-of-fact: a plain question, request or statement.',
       },
     },
+    think: { type: 'noul', instructions: 'Does answering `message` correctly need careful step-by-step thinking — multi-step math or logic, a tricky puzzle, debugging or designing code, or weighing a complex tradeoff — rather than a quick reply from what the assistant already knows?' },
   };
   // react is not asked about: the response form decides it.
   const asked = tools.filter((t) => t.function.name !== 'react');
@@ -400,7 +405,7 @@ async function triage(tools, message, invocation, decideImpl, random = Math.rand
   const answers = await decideImpl(config, state, questions);
   const mood = answers?.mood?.choice in MOOD_EMOJI ? answers.mood.choice : null;
   const jevDown = !answers;
-  if (invocation.reactOnly) return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: [], form: 'reaction', mood, needsContext: false, jevDown };
+  if (invocation.reactOnly) return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: [], form: 'reaction', mood, needsContext: false, think: false, jevDown };
 
   const picked = asked.map((t) => t.function.name).filter((name) => answers?.[`use_${name}`]?.noul >= TOOL_THRESHOLD);
   // Tuned against jev-1.13: references nothing shown explains score 0.90–0.97,
@@ -416,5 +421,7 @@ async function triage(tools, message, invocation, decideImpl, random = Math.rand
     ? sampleChoice({ choice: 'message', probabilities: { message: odds.message, both: (odds.both ?? 0) + (odds.reaction ?? 0) } }, { random })
     : sampleChoice(answers?.respond_with, { random });
   if (!['reaction', 'message', 'both'].includes(form)) form = null;
-  return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: picked, form, mood, needsContext, jevDown };
+  // Only a reply in words is worth reasoning over.
+  const think = form !== 'reaction' && answers?.think?.noul >= THINK_THRESHOLD;
+  return { signOff: answers?.bye?.noul >= PICK_THRESHOLD, tools: picked, form, mood, needsContext, think, jevDown };
 }

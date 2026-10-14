@@ -14,8 +14,8 @@ async function turn(answers, replies, extra = {}) {
     ...extra,
   };
   const calls = [];
-  const chat = async ({ tools, toolChoice, messages }) => {
-    calls.push({ tools: (tools ?? []).map((t) => t.function.name), toolChoice, messages });
+  const chat = async ({ tools, toolChoice, messages, reasoning }) => {
+    calls.push({ tools: (tools ?? []).map((t) => t.function.name), toolChoice, messages, reasoning });
     return replies.shift() ?? { content: 'done' };
   };
   const text = await runAgent(invocation, 'q', 'q', { chat, decideImpl: async () => answers, random: extra.random });
@@ -261,6 +261,22 @@ test('Jev gets one yes/no per tool (react excepted) and the recent messages', as
   assert.equal(seen.questions.use_play_music.type, 'noul');
   assert.ok(seen.questions.use_self_fix, 'owner-only tools are asked about too, so a guest gets told no');
   assert.ok(!seen.questions.use_react);
+  assert.equal(seen.questions.think.type, 'noul');
+  assert.match(seen.questions.think.instructions, /careful step-by-step thinking/);
+});
+
+test("Jev's think score turns on low reasoning for every call of a hard turn, and nothing else does", async () => {
+  const think = (noul, extra = {}) => ({ respond_with: sure('message'), think: { noul }, ...extra });
+  const hard = await turn(think(0.6, yes('create_poll')), [step('create_poll'), { content: 'x' }]);
+  assert.deepEqual(hard.calls.map((c) => c.reasoning), [{ effort: 'low' }, { effort: 'low' }]);
+  assert.deepEqual((await turn(think(0.4), [{ content: 'x' }])).calls[0].reasoning, { effort: 'low' }, 'the bar is 0.4');
+  // No override: chatCompletion's default, reasoning off.
+  assert.equal((await turn(think(0.1), [{ content: 'x' }])).calls[0].reasoning, undefined);
+  assert.equal((await turn(think(0.39), [{ content: 'x' }])).calls[0].reasoning, undefined);
+  assert.equal((await turn(null, [{ content: 'x' }])).calls[0].reasoning, undefined, 'Jev down');
+  // A reaction has nothing to think over, however hard the question.
+  assert.equal((await turn({ ...think(0.9), respond_with: sure('reaction') }, [reactCall('🔥')])).calls[0].reasoning, undefined);
+  assert.equal((await turn(think(0.9), [reactCall('💀')], { reactOnly: true })).calls[0].reasoning, undefined);
 });
 
 test('a reference nothing shown explains points the model at fetch_history, which it opens only if it needs to', async () => {

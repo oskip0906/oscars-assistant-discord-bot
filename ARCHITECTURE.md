@@ -58,7 +58,12 @@ Everything is stored in one PMS Postgres database (`DATABASE_URL`). `src/db.js` 
 
 ## Models: OpenRouter and Jev
 
-Every model call uses one OpenRouter key (`src/agent/openrouter.js`), retried on network errors, 429s, 5xx and 60 s of silence. Only real API errors fail a turn.
+Every model call uses one OpenRouter key (`src/agent/openrouter.js`) and is built to be quick:
+
+- **Reasoning is off by default**, since hidden reasoning tokens cost seconds on every call. Jev's think question (below) turns on low reasoning for a hard turn. A model that requires reasoning refuses "off" with a 400; the call is then resent at once with low effort, and the model is remembered.
+- **Fallback.** If the model's providers are rate-limited or down, OpenRouter answers from `deepseek/deepseek-v4.1-flash`, which many providers serve. Not with a pinned provider, whose pin would bind the fallback too.
+- **Tries.** Network errors, 429s, 5xx and 60 s of silence are retried, at most 3 tries of 60 s each. Tries 2 and 3 go straight to the fallback model, so a model that timed out or kept answering 429 gets no more chances. A turn with images or files never uses the fallback, which may not read them.
+- Other API errors fail a turn at once, and so does a third failed try.
 
 | Role | Used for |
 |------|----------|
@@ -78,7 +83,8 @@ Jev decides; the conversation model writes. The model never chooses whether to a
 |----------|-----------|-----|-----------------|
 | Gate (`forPanda`) | Server message that isn't a ping or reply | follow-up to Panda or addressed ≥ 0.8 → talk (a message that only names Panda included); else react sampled (never < 0.5); bots the same | Silence |
 | Bot sign-off | Every bot message | ≥ 0.8 → 👋, stop | Farewell regex |
-| Triage | Every turn | sign-off ≥ 0.8; tool ≥ 0.5 (offered, not forced); unexplained ≥ 0.8; form sampled (owed words ≥ 0.5 → text or both); mood = most likely | No picks, every tool offered, text reply |
+| Triage | Every turn | sign-off ≥ 0.8; tool ≥ 0.5 (offered, not forced); unexplained ≥ 0.8; think ≥ 0.4 (low reasoning); form sampled (owed words ≥ 0.5 → text or both); mood = most likely | No picks, every tool offered, text reply, no reasoning |
+| Think | Every turn answered in words | ≥ 0.4 → low reasoning | No reasoning |
 | Memory scan (`pickRelevant`) | Long `/save_note` windows | line ≥ 0.5 | Keep nothing |
 | Source files (`how_i_work`) | A question about Panda with a topic | file ≥ 0.5, best 3 | Files whose path has a topic word |
 | Notes walk | `search_notes`, `/open_note` | folder ≥ 0.25 (max 6 levels, 8 folders) | Search every note |
