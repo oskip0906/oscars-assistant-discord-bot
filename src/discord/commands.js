@@ -26,6 +26,7 @@ import { remindersEmbed } from './reminders.js';
 import { indexChannel, INDEX_OWNER_ID } from './indexChannel.js';
 import { parseClearAmount, missingClearPermissions, clearChannel } from './clear.js';
 import { STORAGE_PREFIX, cleanup, dismiss, SECTIONS, mb } from '../storage.js';
+import { voiceCommand } from '../voice/session.js';
 
 export { commandDefs };
 
@@ -603,6 +604,14 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         const result = await sendCard(args, buildInvocation());
         await sendToolResult(result);
         return;
+      }
+
+      if (name === 'voice') {
+        if (!interaction.guild) {
+          return await interaction.reply({ content: 'Voice only works in a server.', flags: MessageFlags.Ephemeral });
+        }
+        await interaction.deferReply();
+        return await interaction.editReply(await voiceCommand(interaction.options.getString('action', true), interaction.member));
       }
 
       // Music commands below

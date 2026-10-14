@@ -168,6 +168,8 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
 
   // Jev's read of the mood shapes the reply's tone and which reactions are offered.
   if (plan.mood) messages.push({ role: 'user', content: `[TONE] Jev reads the turn as ${plan.mood}: ${MOOD_NOTE[plan.mood]}` });
+  // The start of a voice reply is read aloud, so it has to work as speech.
+  if (invocation.message?.fromVoice) messages.push({ role: 'user', content: '[VOICE] This came from voice chat, and the start of your reply is read aloud: open with a short spoken answer of 1–3 sentences (at most 60 words, no markdown, links, lists, code or emoji), then put any details, links or lists after it.' });
 
   // A reaction is a tool call too, so the forms that react offer `react`. A
   // reaction-only turn gets just Jev's picks; a turn with words Jev's action

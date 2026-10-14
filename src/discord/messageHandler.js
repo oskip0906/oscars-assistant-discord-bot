@@ -11,6 +11,7 @@ import { myNames } from '../agent/systemPrompt.js';
 import { readPrompt } from '../agent/prompts.js';
 import { reactOnce } from './reactions.js';
 import { turnSignal } from '../agent/openrouter.js';
+import { isVoiceWebhook } from '../voice/session.js';
 
 // Fixed-window input debounce with a per-channel queue.
 //
@@ -458,6 +459,9 @@ export function createMessageHandler({ client, config, player, privateMode, runA
           }
         }
 
+        // A voice message's reply is also read aloud (not waited for: playback can take a while).
+        if (replyText.trim() && !signal.aborted) anchor.speak?.(replyText);
+
         // Saved after the reply is out, so the database can never delay or break it.
         // Everything Panda saw is kept, in this channel's memory: the messages
         // before the turn, the turn and the replies. DMs never are.
@@ -508,6 +512,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
   return async (message) => {
     try {
       if (message.author.id === client.user.id) return;
+      // The gateway echo of a voice transcript: the voice session already handed that text over, so it must not be answered twice.
+      if (message.webhookId && isVoiceWebhook(message.webhookId)) return;
 
       // Private mode: anything not from Oscar is dropped right here. No reply,
       // no reaction, no batch, no Jev, nothing saved.

@@ -1,7 +1,11 @@
+import { isVoiceActive } from '../voice/session.js';
+
 // Shared music helpers used by both slash commands and the play_music AI tool.
 
 // Returns { ok:true, track, queued, position } or { ok:false, error }.
 export async function playQuery(player, voiceChannel, textChannel, query, requestedBy) {
+  // Music and voice mode can't share a server's voice connection.
+  if (isVoiceActive(voiceChannel.guild.id)) return { ok: false, error: "🎙️ I'm in voice mode here. Use /voice leave first." };
   try {
     const { track, queue } = await player.play(voiceChannel, query, {
       requestedBy,

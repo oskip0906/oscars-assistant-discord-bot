@@ -5,6 +5,7 @@ import * as rulesTools from './rules.js';
 import * as uiTools from './ui.js';
 import * as sourceTools from './source.js';
 import * as musicTools from './music.js';
+import * as voiceTools from './voice.js';
 import * as historyTools from './history.js';
 import * as aboutTools from './about.js';
 import * as notesTools from './notes.js';
@@ -32,7 +33,7 @@ export const LOOKUP_TOOLS = new Set([
 ]);
 export const isLookup = (name) => LOOKUP_TOOLS.has(name) || isGithubMcpTool(name);
 
-const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools, commandTools, modelInfoTools];
+const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, voiceTools, historyTools, aboutTools, notesTools, commandTools, modelInfoTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -58,6 +59,7 @@ const executors = {
   remove_rule: rulesTools.removeRule,
   self_fix: sourceTools.selfFix,
   play_music: musicTools.playMusic,
+  voice: voiceTools.voiceTool,
   fetch_history: historyTools.fetchHistory,
   index_chat: historyTools.indexChat,
   how_i_work: aboutTools.howIWork,

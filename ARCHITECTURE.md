@@ -118,6 +118,7 @@ Bars follow which mistake costs more: the gate talks only when Jev is fairly sur
 | `current_model` / `usage` | The conversation model and provider running now (read from the runtime config, as `/model`) plus Jev's model / spend, as `/usage` |
 | `how_i_work` | Read this file and the source files on GitHub that answer a topic (Jev picks up to 3; long files cut to the lines around the topic) |
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |
+| `voice` | join / leave / status of voice mode, as `/voice`: join brings Panda into the sender's current voice channel (see Voice) |
 | GitHub MCP tools | Every GitHub read (**Oscar only**) |
 | `github` | GitHub REST writes only (**Oscar only**) |
 | `self_fix` / `set_rule` | Change Panda's code / rewrite `soul.md` (**Oscar only**) |
@@ -128,7 +129,7 @@ Bars follow which mistake costs more: the gate talks only when Jev is fairly sur
 
 Every slash command reaches chat through the tool in `COMMAND_TOOLS` (`src/agent/tools/commands.js`), which calls the same functions the command does, or is gated there with the reason (`/index_channel` and `/clear`: Oscar runs them himself). The command definitions live once in `src/discord/commandDefs.js`, with `OWNER_ONLY_COMMANDS`; an owner-only command maps to an owner-only tool. Before a tool runs, `executeTool` checks the owner gate, then the arguments against the tool's own schema (required, type, enum); bad arguments or unreadable JSON run nothing and tell the model what to fix. An empty result is reported as empty, so the model can't fill it in.
 
-Slash commands: music (`/play /skip /pause /resume /stop /queue`), skills (`/research /web_search /web_fetch /image_search /reverse_image_search /video_search /news_search /wiki_search /create_poll /create_card`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private /index_channel /clear`). `/clear <number|all>` (`src/discord/clear.js`) checks Panda has View Channel, Read Message History and Manage Messages in the channel and says it can't if not; messages under 14 days old are bulk deleted 100 at a time, older ones one by one.
+Slash commands: music (`/play /skip /pause /resume /stop /queue`), voice (`/voice`), skills (`/research /web_search /web_fetch /image_search /reverse_image_search /video_search /news_search /wiki_search /create_poll /create_card`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private /index_channel /clear`). `/clear <number|all>` (`src/discord/clear.js`) checks Panda has View Channel, Read Message History and Manage Messages in the channel and says it can't if not; messages under 14 days old are bulk deleted 100 at a time, older ones one by one.
 
 ## Deep research
 
@@ -141,6 +142,17 @@ Slash commands: music (`/play /skip /pause /resume /stop /queue`), skills (`/res
 | `deep` | 5 | 32 | 2 | 10 min |
 
 Sources are masked links so Discord shows previews; chat replies still wrap links in `<>`.
+
+## Voice
+
+`/voice join` (or the `voice` tool: "panda come to vc") puts Panda in the sender's voice channel and `/voice leave` takes it out; it needs `PMS_AI_KEY` and View Channel, Connect, Speak and Send Messages there (`src/voice/`).
+- Each utterance (ended by 1 s of silence, at most 30 s) is decoded, transcribed by PMS's `squall`, and posted in the voice channel's own chat as the speaker, through a "Panda voice" webhook (as Panda quoting them if there is no Manage Webhooks).
+- The text then goes through the same message pipeline as typed text: the same "is this for Panda?" gate, batching, Jev, tools, owner checks and private mode. The author is the real speaker, known from Discord's voice connection.
+- The reply is posted in that chat as usual, and its first 1–3 sentences (up to 600 characters, no markdown, links or code) are read aloud with PMS's `thunder`, one sentence being made while the last one plays.
+- Each person is captured one utterance at a time, and nobody is transcribed while Panda talks (it would only hear its own echo).
+- In private mode a guest is not transcribed at all, so nothing they say is sent anywhere.
+- Music and voice can't share a server's voice connection: joining stops the music, and `/play` is refused until `/voice leave`.
+- Panda leaves by itself after 5 minutes without an utterance or a spoken reply.
 
 ## The development sandbox (`self_fix`)
 
@@ -188,5 +200,6 @@ src/db.js, schema.sql     Postgres connection and tables
 src/storage.js            section budgets and cleanup
 src/reminders.js          reminder times and scheduler
 src/music/                discord-player + yt-dlp streaming
+src/voice/                voice mode: listen (squall), answer aloud (thunder), audio helpers
 .github/                  Docker build + deploy, the development sandbox
 ```
