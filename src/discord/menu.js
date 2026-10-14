@@ -30,6 +30,7 @@ export function buildMenuEmbeds(client, config) {
         '`/pause` · `/resume` : Pause / resume playback',
         '`/stop` : Stop and clear the queue',
         '`/queue` : See what’s playing next',
+        '`/voice <join|leave|status>` : Talk with me in your voice channel — I answer in its chat and out loud',
         '_…or just tell me “play …” in chat and I’ll handle it._',
       ].join('\n'),
     ),

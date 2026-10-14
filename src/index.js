@@ -15,6 +15,7 @@ import { loadModel } from './discord/model.js';
 import { startReminders } from './reminders.js';
 import { watchStorage } from './storage.js';
 import { joinThread, joinActiveThreads } from './discord/threads.js';
+import { initVoice } from './voice/session.js';
 
 validateConfig();
 // A database that is down at boot leaves chat working; its features fail on use.
@@ -84,6 +85,7 @@ async function boot(intents) {
   });
   client.on(Events.ThreadCreate, (thread) => joinThread(thread));
   const onMessage = createMessageHandler({ client, config, player, privateMode });
+  initVoice({ client, config, privateMode, onMessage, player });
   client.on(Events.MessageCreate, onMessage);
   client.on(Events.InteractionCreate, createInteractionHandler({ client, config, player, privateMode, onMessage }));
   client.on(Events.Error, (err) => console.error('[panda] client error:', err));

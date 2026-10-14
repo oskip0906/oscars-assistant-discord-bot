@@ -73,6 +73,8 @@ export const config = {
   // The PMS Postgres (db-1): persona prompts, hidden chat context, notes and
   // reminders (src/schema.sql). Unset = none of those work, but chat still does.
   databaseUrl: process.env.DATABASE_URL || '',
+  // PMS's AI API (pms_sk_…), for voice mode's speech-to-text and text-to-speech. Unset = /voice says it isn't set up.
+  pmsAiKey: process.env.PMS_AI_KEY || '',
   // Oscar's standing rules (add_rule / remove_rule), read into every system
   // prompt. Defaults to RULES.md in the repo; RULES_FILE moves it (e.g. into
   // data/ so a container keeps it across redeploys).
@@ -92,7 +94,7 @@ const dbPassword = () => {
 
 export function redactSecrets(text) {
   let out = String(text ?? '');
-  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.databaseUrl, dbPassword(), process.env.YT_COOKIES_B64]) {
+  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.databaseUrl, dbPassword(), config.pmsAiKey, process.env.YT_COOKIES_B64]) {
     if (secret && secret.length >= 8) out = out.split(secret).join('[redacted]');
   }
   return out;

@@ -187,6 +187,7 @@ export const COMMAND_TOOLS = {
   resume: { tool: 'play_music' },
   stop: { tool: 'play_music' },
   queue: { tool: 'play_music' },
+  voice: { tool: 'voice' },
   web_search: { tool: 'web_search' },
   web_fetch: { tool: 'web_fetch' },
   image_search: { tool: 'image_search' },
