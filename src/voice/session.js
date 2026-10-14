@@ -265,7 +265,7 @@ export async function joinVoice(member) {
   console.log(`[voice] joined ${channel.name} in ${guild.name}`);
   await channel
     .send({
-      content: `🎙️ I'm in **${channel.name}**. Talk and I'll answer here and out loud. I leave after 5 minutes of quiet, or use \`/voice leave\`.`,
+      content: `🎙️ I'm in **${channel.name}**. Everything said here is transcribed into this chat, and I answer here and out loud. I leave after 5 minutes of quiet, or use \`/voice leave\`.`,
       allowedMentions: { parse: [] },
     })
     .catch(() => {});
