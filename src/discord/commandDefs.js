@@ -170,6 +170,19 @@ export const commandDefs = [
     .addStringOption((o) => o.setName('buttons').setDescription('Button labels separated by | (e.g. "Yes | No"), up to 5'))
     .addStringOption((o) => o.setName('menu').setDescription('Dropdown choices separated by | (e.g. "Red | Green | Blue"), 2 to 25')),
   new SlashCommandBuilder()
+    .setName('sandbox')
+    .setDescription('Run code in a sandbox (Python, JavaScript or bash)')
+    .addStringOption((o) =>
+      o
+        .setName('language')
+        .setDescription('What the code is written in (default python)')
+        .addChoices(
+          { name: 'python', value: 'python' },
+          { name: 'javascript', value: 'javascript' },
+          { name: 'bash', value: 'bash' },
+        ),
+    ),
+  new SlashCommandBuilder()
     .setName('clear')
     .setDescription('Delete recent messages in this channel, or all of them (owner only)')
     .addStringOption((o) => o.setName('amount').setDescription('How many of the newest messages to delete, or "all" for the whole channel').setRequired(true)),

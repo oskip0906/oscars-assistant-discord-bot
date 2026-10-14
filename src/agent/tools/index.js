@@ -9,6 +9,7 @@ import * as historyTools from './history.js';
 import * as aboutTools from './about.js';
 import * as notesTools from './notes.js';
 import * as commandTools from './commands.js';
+import * as sandboxTools from './sandbox.js';
 import * as modelInfoTools from './modelInfo.js';
 import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.js';
 
@@ -32,7 +33,7 @@ export const LOOKUP_TOOLS = new Set([
 ]);
 export const isLookup = (name) => LOOKUP_TOOLS.has(name) || isGithubMcpTool(name);
 
-const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools, commandTools, modelInfoTools];
+const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, historyTools, aboutTools, notesTools, commandTools, modelInfoTools, sandboxTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -78,6 +79,7 @@ const executors = {
   add_reminder: commandTools.addReminderTool,
   show_reminders: commandTools.showReminders,
   delete_reminder: commandTools.deleteReminderTool,
+  sandbox: sandboxTools.sandboxTool,
 };
 
 const schemas = new Map(allDefs.map((d) => [d.function.name, d.function.parameters]));

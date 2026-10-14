@@ -77,6 +77,11 @@ export const config = {
   // prompt. Defaults to RULES.md in the repo; RULES_FILE moves it (e.g. into
   // data/ so a container keeps it across redeploys).
   rulesFile: process.env.RULES_FILE || path.join(projectRoot, 'RULES.md'),
+  // The scripting sandbox (/sandbox and the sandbox tool) runs on PMS Cloud with
+  // a PMS project token (pms_…). No token = it says it isn't set up.
+  pmsSandboxToken: process.env.PMS_SANDBOX_TOKEN || '',
+  // The template its sandboxes start from; scripts/build-sandbox-template.mjs builds it.
+  sandboxTemplate: process.env.PMS_SANDBOX_TEMPLATE || 'panda-sandbox',
 };
 
 // The bot's secrets only ever go into auth headers; none is put in front of the
@@ -92,7 +97,7 @@ const dbPassword = () => {
 
 export function redactSecrets(text) {
   let out = String(text ?? '');
-  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.databaseUrl, dbPassword(), process.env.YT_COOKIES_B64]) {
+  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.databaseUrl, dbPassword(), process.env.YT_COOKIES_B64, config.pmsSandboxToken]) {
     if (secret && secret.length >= 8) out = out.split(secret).join('[redacted]');
   }
   return out;
