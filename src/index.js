@@ -8,6 +8,7 @@ import { commandDefs, createInteractionHandler } from './discord/commands.js';
 import { approvalCard } from './agent/tools/source.js';
 import { devRunStore } from './agent/tools/developmentSandbox.js';
 import { githubReadJson } from './agent/tools/githubMcp.js';
+import { killPandaSandboxes } from './agent/tools/sandbox.js';
 import { resolveInterruptedRun } from './devRunStore.js';
 import { dmOwner } from './discord/notify.js';
 import { ensureSchema } from './db.js';
@@ -68,6 +69,10 @@ async function boot(intents) {
     joinActiveThreads(readyClient)
       .then((n) => n && console.log(`[panda] Joined ${n} active thread(s)`))
       .catch((err) => console.error('[panda] could not join the active threads:', err.message));
+    // The /sandbox sandboxes of the last run would hold their slots until they time out.
+    killPandaSandboxes(config)
+      .then((n) => n && console.log(`[panda] Stopped ${n} sandbox(es) left from before the restart`))
+      .catch((err) => console.error('[panda] could not stop the old sandboxes:', err.message));
     await approvalCard.retireStale(readyClient).catch(() => {});
     startReminders(readyClient, config);
     watchStorage(readyClient, config);

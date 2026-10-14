@@ -31,6 +31,7 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 | `/wiki_search <query>` | Look something up on Wikipedia |
 | `/create_poll <question> <answers> [hours] [multiple]` | Post a native Discord poll; answers separated by `\|` |
 | `/create_card <title> [description] [color] [url] [image] [thumbnail] [footer] [fields] [buttons] [menu]` | Post an embed card with optional buttons and a dropdown |
+| `/sandbox [python\|javascript\|bash]` | Run code in a Linux sandbox (one per channel, Python with numpy, pandas and matplotlib, Node.js, git, curl, jq, internet): a form opens for the code, and the output is posted. Ask in chat to also post files it made, like a chart |
 
 **📝 Notes**
 | Command | What it does |

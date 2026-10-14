@@ -207,6 +207,7 @@ export const COMMAND_TOOLS = {
   set_rule: { tool: 'set_rule' },
   create_poll: { tool: 'create_poll' },
   create_card: { tool: 'send_card' },
+  sandbox: { tool: 'sandbox' },
   clear: {
     gated:
       'It deletes messages for good and only Oscar may run it, so it is never run from chat: Oscar runs /clear himself, with a number or "all".',

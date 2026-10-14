@@ -119,6 +119,7 @@ Bars follow which mistake costs more: the gate talks only when Jev is fairly sur
 | `how_i_work` | Read this file and the source files on GitHub that answer a topic (Jev picks up to 3; long files cut to the lines around the topic) |
 | `play_music` | play / skip / pause / resume / stop / queue / now playing |
 | `voice` | join / leave / status of voice mode, as `/voice`: join brings Panda into the sender's current voice channel (see Voice) |
+| `sandbox` | Run Python, JavaScript or bash in the channel's own PMS Cloud sandbox and read the exit code, stdout and stderr; `send_files` posts files the code made. Anyone may use it. The same as `/sandbox`; see [The scripting sandbox](#the-scripting-sandbox-sandbox) |
 | GitHub MCP tools | Every GitHub read (**Oscar only**) |
 | `github` | GitHub REST writes only (**Oscar only**) |
 | `self_fix` / `set_rule` | Change Panda's code / rewrite `soul.md` (**Oscar only**) |
@@ -129,7 +130,7 @@ Bars follow which mistake costs more: the gate talks only when Jev is fairly sur
 
 Every slash command reaches chat through the tool in `COMMAND_TOOLS` (`src/agent/tools/commands.js`), which calls the same functions the command does, or is gated there with the reason (`/index_channel` and `/clear`: Oscar runs them himself). The command definitions live once in `src/discord/commandDefs.js`, with `OWNER_ONLY_COMMANDS`; an owner-only command maps to an owner-only tool. Before a tool runs, `executeTool` checks the owner gate, then the arguments against the tool's own schema (required, type, enum); bad arguments or unreadable JSON run nothing and tell the model what to fix. An empty result is reported as empty, so the model can't fill it in.
 
-Slash commands: music (`/play /skip /pause /resume /stop /queue`), voice (`/voice`), skills (`/research /web_search /web_fetch /image_search /reverse_image_search /video_search /news_search /wiki_search /create_poll /create_card`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private /index_channel /clear`). `/clear <number|all>` (`src/discord/clear.js`) checks Panda has View Channel, Read Message History and Manage Messages in the channel and says it can't if not; messages under 14 days old are bulk deleted 100 at a time, older ones one by one.
+Slash commands: music (`/play /skip /pause /resume /stop /queue`), voice (`/voice`), skills (`/research /web_search /web_fetch /image_search /reverse_image_search /video_search /news_search /wiki_search /create_poll /create_card /sandbox`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private /index_channel /clear`). `/clear <number|all>` (`src/discord/clear.js`) checks Panda has View Channel, Read Message History and Manage Messages in the channel and says it can't if not; messages under 14 days old are bulk deleted 100 at a time, older ones one by one.
 
 ## Deep research
 
@@ -165,6 +166,16 @@ The only way Panda changes code, and only its own repo.
 
 The bot watches via the GitHub MCP server and waits for the merge. The merge to main triggers the deploy (under `run.sh`, exit code 42 pulls and restarts). The run is in the background, so Panda keeps answering meanwhile; only a second self-fix is refused until it lands (or 50 min pass). While it runs Panda shows Idle with a "Currently fixing myself" status. Otherwise its custom status shows private mode: "🔒 Private mode: ON" (Do Not Disturb) or "🔓 Private mode: OFF" (Online) (`src/presence.js`). The status is set at login, once the saved private mode is loaded, and again on every toggle. A failed presence update is logged and never breaks the command.
 
+## The scripting sandbox (`/sandbox`)
+
+Not the development sandbox above: `self_fix` changes Panda's own code through an approved PR, while this runs scripts that anyone in the server writes (or asks Panda to write) on PMS Cloud, and never touches Panda's code, environment or secrets.
+
+- **Where:** `src/agent/tools/sandbox.js` (the `sandbox` tool, `runSandbox` shared with `/sandbox`, and `killPandaSandboxes`). PMS sandboxes are E2B-compatible, so it uses the `e2b` SDK with explicit PMS options. Each is 0.5 vCPU and 512 MiB with internet access; the account allows 4 running at once.
+- **Template:** `scripts/build-sandbox-template.mjs` builds `panda-sandbox` once, by hand (`PMS_SANDBOX_TOKEN=pms_... node scripts/build-sandbox-template.mjs`): Python 3 (numpy, pandas, matplotlib, requests), Node.js, git, curl, jq. A sandbox starts from it in about 3 seconds; commands run as `user` in `/home/user`.
+- **One per channel,** kept in memory and given 10 more minutes on every run (so its files last 10 minutes after the last run); an ended one is replaced. A fifth channel is told all 4 are in use. At boot `killPandaSandboxes` stops the ones left from before the restart (metadata `app: panda`).
+- **A run** (`language`, `code`, optional `files` to write first and `send_files` to post in the channel) is validated, then gets 60 seconds, and is stopped at 1 MB of output. The model gets `[SANDBOX — …]` with the last 5,000 characters of stdout and of stderr. The sandbox is given no environment, so the code sees no secret.
+- **Use:** anyone. `/sandbox [language]` opens a form for the code and replies with the output; in chat the model calls the tool. It needs `PMS_SANDBOX_TOKEN`, else Panda says it isn't set up (`PMS_SANDBOX_TEMPLATE` renames the template).
+
 ## Safety
 
 - Owner checks use the Discord user id, never names or claims; so does a stop (a guest stops only their own turns).
@@ -196,6 +207,7 @@ src/agent/                agent.js (triage, tools, answer), jev.js, prompts.js, 
 src/agent/tools/          every tool the model can call
 src/agent/research/       the /research pipeline
 scripts/eval-turns.js     live turn evaluation (latency, calls, tokens, tool use)
+scripts/build-sandbox-template.mjs  builds the PMS sandbox template for /sandbox (run once by hand)
 src/db.js, schema.sql     Postgres connection and tables
 src/storage.js            section budgets and cleanup
 src/reminders.js          reminder times and scheduler

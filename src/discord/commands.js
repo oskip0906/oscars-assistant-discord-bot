@@ -1,4 +1,4 @@
-import { MessageFlags } from 'discord.js';
+import { ActionRowBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { commandDefs } from './commandDefs.js';
 import { buildMenuEmbeds } from './menu.js';
 import { buildUsageEmbed } from './usage.js';
@@ -17,6 +17,7 @@ import { runResearch } from '../agent/research/pipeline.js';
 import { renderReport } from '../agent/research/render.js';
 import { redactSecrets } from '../config.js';
 import { setRule } from '../agent/tools/rules.js';
+import { runSandbox } from '../agent/tools/sandbox.js';
 import { UI_PREFIX, clickAsMessage, createPoll, sendCard } from '../agent/tools/ui.js';
 import { lookupModel, modelCard, modelInfoChoices } from '../agent/tools/modelInfo.js';
 import { saveNote, windowMessages, loadTree, openNote, getNote, relatedNotes, noteChoices, deleteNote, folderPath } from '../agent/notes.js';
@@ -52,6 +53,16 @@ async function showFolder(interaction, tree, folderId, send) {
   const { rest, ...first } = folderView(tree, folderId);
   await interaction[send](first);
   for (const part of rest) await interaction.followUp(part);
+}
+
+// The /sandbox answer: what happened, then the output in a code block, with the
+// oldest output cut so that all of it fits one 2000-character message.
+function sandboxReply({ head, body, text }) {
+  if (!head) return text;
+  const output = body.replace(/```/g, "'''");
+  const room = 2000 - head.length - 50;
+  const shown = output.length > room ? `…(${output.length - room} earlier chars cut)\n${output.slice(-room)}` : output;
+  return `**${head}**\n\`\`\`\n${shown}\n\`\`\``;
 }
 
 export function createInteractionHandler({ client, config, player, privateMode, state = selfFixState, onMessage }) {
@@ -182,6 +193,28 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         console.error('[panda] autocomplete failed:', err.message);
         return await interaction.respond([]).catch(() => {});
       }
+    }
+
+    // The code typed into the /sandbox form.
+    if (interaction.isModalSubmit?.() && interaction.customId?.startsWith('sandbox:')) {
+      if (privateMode?.isOn() && interaction.user.id !== config.ownerId) {
+        return await interaction.reply({ content: PRIVATE_MESSAGE, flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
+      try {
+        await interaction.deferReply();
+        const result = await runSandbox({
+          channelId: interaction.channelId,
+          channel: interaction.channel,
+          language: interaction.customId.slice('sandbox:'.length),
+          code: interaction.fields.getTextInputValue('code'),
+          config,
+        });
+        await interaction.editReply({ content: redactSecrets(sandboxReply(result)), allowedMentions: { parse: [] } });
+      } catch (err) {
+        console.error('[sandbox] run failed:', err.message);
+        await interaction.editReply(`⚠️ ${redactSecrets(err.message).slice(0, 200)}`).catch(() => {});
+      }
+      return;
     }
 
     if (!interaction.isChatInputCommand()) return;
@@ -612,6 +645,20 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         }
         await interaction.deferReply();
         return await interaction.editReply(await voiceCommand(interaction.options.getString('action', true), interaction.member));
+      }
+
+      // A slash option can't hold line breaks, so the code is typed into a form.
+      if (name === 'sandbox') {
+        return await interaction.showModal(
+          new ModalBuilder()
+            .setCustomId(`sandbox:${interaction.options.getString('language') ?? 'python'}`)
+            .setTitle('Run code')
+            .addComponents(
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('code').setLabel('Code').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(4000),
+              ),
+            ),
+        );
       }
 
       // Music commands below
