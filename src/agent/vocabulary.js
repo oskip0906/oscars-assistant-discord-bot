@@ -5,7 +5,6 @@
 // Kept friendly: no slurs or insults. No entry may start with a command or
 // mention character (/ ! @ # < :) or be a sign-off, since Panda saying "ttyl"
 // would end a conversation with another bot (FAREWELL_RE in messageHandler.js).
-// test/vocabulary.test.js holds the list to those rules.
 export const SLANG = {
   lol: 'laughing',
   lmao: 'laughing hard',

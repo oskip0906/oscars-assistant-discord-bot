@@ -126,7 +126,7 @@ Bars follow which mistake costs more: the gate talks only when Jev is fairly sur
 
 "Oscar only" is checked in code against the sender's Discord user id.
 
-Every slash command reaches chat through the tool in `COMMAND_TOOLS` (`src/agent/tools/commands.js`), which calls the same functions the command does, or is gated there with the reason (`/index_channel` and `/clear`: Oscar runs them himself). The command definitions live once in `src/discord/commandDefs.js`, with `OWNER_ONLY_COMMANDS`; tests hold the map to the full command list and the owner-only commands to `OWNER_ONLY_TOOLS`. Before a tool runs, `executeTool` checks the owner gate, then the arguments against the tool's own schema (required, type, enum); bad arguments or unreadable JSON run nothing and tell the model what to fix. An empty result is reported as empty, so the model can't fill it in.
+Every slash command reaches chat through the tool in `COMMAND_TOOLS` (`src/agent/tools/commands.js`), which calls the same functions the command does, or is gated there with the reason (`/index_channel` and `/clear`: Oscar runs them himself). The command definitions live once in `src/discord/commandDefs.js`, with `OWNER_ONLY_COMMANDS`; an owner-only command maps to an owner-only tool. Before a tool runs, `executeTool` checks the owner gate, then the arguments against the tool's own schema (required, type, enum); bad arguments or unreadable JSON run nothing and tell the model what to fix. An empty result is reported as empty, so the model can't fill it in.
 
 Slash commands: music (`/play /skip /pause /resume /stop /queue`), skills (`/research /web_search /web_fetch /image_search /reverse_image_search /video_search /news_search /wiki_search /create_poll /create_card`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private /index_channel /clear`). `/clear <number|all>` (`src/discord/clear.js`) checks Panda has View Channel, Read Message History and Manage Messages in the channel and says it can't if not; messages under 14 days old are bulk deleted 100 at a time, older ones one by one.
 
@@ -171,7 +171,7 @@ The bot watches via the GitHub MCP server and waits for the merge. The merge to 
 
 **Evaluating.** `node scripts/eval-turns.js [--runs 5] [--cases photo,screenshot,skyline,receipt,live-fact,chat]` runs real turns (model and Jev, no Discord) and prints per-case median / p95 latency, model calls, prompt tokens, tools offered and pass rate. Copy it into a checkout of another version to compare the two on the same model.
 
-`npm start` runs `run.sh`: a private SearXNG (installed by `scripts/ensure-searxng.sh` with `uv`, loopback only, never blocks boot), then the bot under a supervisor (exit 42 → pull and restart, crash → restart after 3 s, exit 0 → stop). `npm run start:once` skips the supervisor; `npm test` runs the tests.
+`npm start` runs `run.sh`: a private SearXNG (installed by `scripts/ensure-searxng.sh` with `uv`, loopback only, never blocks boot), then the bot under a supervisor (exit 42 → pull and restart, crash → restart after 3 s, exit 0 → stop). `npm run start:once` skips the supervisor.
 
 Every push to `main` builds and publishes the `panda-bot` and `panda-searxng` Docker images (`.github/workflows/docker.yml`). Production runs on PMS Cloud containers (project `oscars-discord-bot`) with `SEARXNG_URL=http://panda-searxng:8080`; they have no disk, so YouTube cookies go in as `YT_COOKIES_B64` and `/app/data` resets on restart (private mode is in the database, so it is kept). The CI deploy step currently fails behind Cloudflare, so deploy by hand: `pms container edit <name> --image <image>:<sha>`. To self-host, use `docker-compose.deploy.yml` with a volume on `/app/data`. Always set `DATABASE_URL`.
 
@@ -188,5 +188,5 @@ src/db.js, schema.sql     Postgres connection and tables
 src/storage.js            section budgets and cleanup
 src/reminders.js          reminder times and scheduler
 src/music/                discord-player + yt-dlp streaming
-.github/                  Docker build + deploy, CI tests, the development sandbox
+.github/                  Docker build + deploy, the development sandbox
 ```

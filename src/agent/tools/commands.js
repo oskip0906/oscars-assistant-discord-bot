@@ -174,8 +174,7 @@ export const defs = [
 
 // Every slash command and how chat reaches it: `tool` is the tool that runs the
 // same capability (`also`, a second tool for when an option is given), `gated`
-// explains why chat can't. The tests hold this to the
-// full command list, so a new command must say one or the other.
+// explains why chat can't. Every command must say one or the other.
 export const COMMAND_TOOLS = {
   menu: { tool: 'panda_commands' },
   usage: { tool: 'usage' },

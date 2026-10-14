@@ -62,7 +62,7 @@ jobs:
             --max-turns 60
             --dangerously-skip-permissions
             --permission-prompts none
-            --append-system-prompt "You are running unattended in CI and nobody can reply. Never ask questions or wait for confirmation: choose the most reasonable reading of the task, finish it, and end with a short summary of what you changed and any assumptions you made. Do not install dependencies or run the tests: the change is merged as soon as you finish, so make it carefully. Do not commit, push, or open a pull request; the workflow does that. Do not edit .github/, .env files, data/, or node_modules/."
+            --append-system-prompt "You are running unattended in CI and nobody can reply. Never ask questions or wait for confirmation: choose the most reasonable reading of the task, finish it, and end with a short summary of what you changed and any assumptions you made. Do not install dependencies: there are no tests, and the change is merged as soon as you finish, so make it carefully. Do not commit, push, or open a pull request; the workflow does that. Do not edit .github/, .env files, data/, or node_modules/."
 
       # The action hides Claude's output; its last message says why a run failed
       # or changed nothing (a bad token, a task it could not act on).
