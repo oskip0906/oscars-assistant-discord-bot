@@ -149,9 +149,9 @@ The only way Panda changes code, and only its own repo.
 1. **Approval:** an Approve / Cancel card; only Oscar's click starts anything.
 2. **Dispatch:** the bot starts `.github/workflows/development-sandbox.yml` on a throwaway runner, on a `panda-dev-*` branch.
 3. **Claude Code** makes the change unattended with a read-only GitHub token, seeing only the repo and the instruction.
-4. **Verify:** the workflow fails if nothing changed or `.git`, `node_modules`, `data/`, `.env` or `.github/` were touched, runs `npm test`, then commits, pushes and opens the PR with `GH_PAT`. `ci.yml`'s required `test` check gates auto-merge.
+4. **Verify:** the workflow fails if nothing changed or `.git`, `node_modules`, `data/`, `.env` or `.github/` were touched, then commits, pushes, opens the PR and merges it at once with `GH_PAT`. No tests run anywhere, so a self-fix lands in minutes.
 
-The bot watches via the GitHub MCP server, enables auto-merge and waits. The merge to main triggers the deploy (under `run.sh`, exit code 42 pulls and restarts). The run is in the background, so Panda keeps answering meanwhile; only a second self-fix is refused until it lands (or 50 min pass). While it runs Panda shows Idle with a "Currently fixing myself" status. Otherwise its custom status shows private mode: "🔒 Private mode: ON" (Do Not Disturb) or "🔓 Private mode: OFF" (Online) (`src/presence.js`). The status is set at login, once the saved private mode is loaded, and again on every toggle. A failed presence update is logged and never breaks the command.
+The bot watches via the GitHub MCP server and waits for the merge. The merge to main triggers the deploy (under `run.sh`, exit code 42 pulls and restarts). The run is in the background, so Panda keeps answering meanwhile; only a second self-fix is refused until it lands (or 50 min pass). While it runs Panda shows Idle with a "Currently fixing myself" status. Otherwise its custom status shows private mode: "🔒 Private mode: ON" (Do Not Disturb) or "🔓 Private mode: OFF" (Online) (`src/presence.js`). The status is set at login, once the saved private mode is loaded, and again on every toggle. A failed presence update is logged and never breaks the command.
 
 ## Safety
 

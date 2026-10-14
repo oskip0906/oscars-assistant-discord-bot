@@ -9,7 +9,7 @@ export const devRunStore = new DevRunStore(botConfig.dataDir);
 // through the GitHub MCP server (githubReadJson).
 const API = 'https://api.github.com';
 const POLL_MS = 5_000;
-// Claude's run, then CI on the PR, then the auto-merge.
+// Claude's run, then the merge.
 const DEFAULT_TIMEOUT_MS = 45 * 60 * 1000;
 
 function cleanRepo(value) {
@@ -93,7 +93,7 @@ async function failedRun(read, sandboxRepo, workflow, requestId) {
 
 // "The run failed" is not something Oscar can act on from Discord. The step
 // name is: a bad Claude token dies in "Claude Code", a task Claude gave up on
-// in "Check changes", broken tests in "Run checks".
+// in "Check changes", a merge that GitHub refused in "Push and open pull request".
 async function failedStep(read, sandboxRepo, runId) {
   if (!runId) return null;
   const result = await tryRead(read, 'actions_list', { ...ownerRepo(sandboxRepo), method: 'list_workflow_jobs', resource_id: String(runId) });

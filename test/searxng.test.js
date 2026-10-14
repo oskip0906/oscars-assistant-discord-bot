@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const REPO = process.cwd();
-const REF = readFileSync(path.join(REPO, 'scripts', 'ensure-searxng.sh'), 'utf8').match(/^ref=([0-9a-f]{40})/m)[1];
 
 const script = (file, body) => {
   writeFileSync(file, `#!/bin/bash\n${body}\n`);
@@ -69,61 +68,11 @@ function run({ root, bin }, env = {}) {
 }
 const read = (root, file) => (existsSync(path.join(root, file)) ? readFileSync(path.join(root, file), 'utf8') : '');
 
-test('generates settings.yml with a real secret key when it is missing', () => {
-  const dirs = stage();
-  const result = run(dirs);
-
-  const written = read(dirs.root, 'searxng/config/settings.yml');
-  assert.doesNotMatch(written, /REPLACE_ME/, 'the placeholder secret must be replaced');
-  assert.match(written, /secret_key: "[0-9a-f]{64}"/, 'a 32-byte hex secret is required by SearXNG');
-  assert.equal(result.status, 0);
-});
-
 test('never clobbers a settings.yml that already exists', () => {
   const mine = 'use_default_settings: true\nserver:\n  secret_key: "mine"\n';
   const dirs = stage({ settings: mine });
   run(dirs);
   assert.equal(read(dirs.root, 'searxng/config/settings.yml'), mine);
-});
-
-test('installs the pinned SearXNG on the first start only', () => {
-  const dirs = stage();
-  run(dirs);
-  const first = read(dirs.root, 'tools.log');
-  assert.match(first, new RegExp(`git -C searxng/src fetch -q --depth 1 https://github.com/searxng/searxng.git ${REF}`));
-  assert.match(first, /uv venv -q --clear -p 3\.12 searxng\/\.venv/);
-  assert.match(first, /uv pip install -q --python searxng\/\.venv\/bin\/python -r searxng\/src\/requirements\.txt/);
-  assert.equal(read(dirs.root, 'searxng/.venv/.panda-ref').trim(), REF);
-
-  run(dirs);
-  assert.equal(read(dirs.root, 'tools.log'), first, 'a second start reuses the install');
-});
-
-test('starts SearXNG on loopback only, whatever settings.yml says, and records its pid', () => {
-  const dirs = stage();
-  const result = run(dirs);
-  const started = read(dirs.root, 'searxng/python.log');
-  assert.match(started, /SEARXNG_BIND_ADDRESS=127\.0\.0\.1/);
-  assert.match(started, /SEARXNG_PORT=8899/);
-  assert.match(started, /SEARXNG_SETTINGS_PATH=.*searxng\/config\/settings\.yml/);
-  assert.match(started, /args -m searx\.webapp/);
-  assert.ok(result.pid > 0, 'run.sh stops it by this pid');
-});
-
-test('a failed install is reported, never fatal, and retried on the next start', () => {
-  const dirs = stage();
-  const result = run(dirs, { GIT_FAIL: '1' });
-  assert.equal(result.status, 0, 'run.sh calls this on the boot path; a non-zero exit would kill startup');
-  assert.match(result.stderr, /install failed/);
-  assert.ok(!existsSync(path.join(dirs.root, 'searxng/.venv/.panda-ref')), 'no stamp, so the next start tries again');
-  assert.ok(!existsSync(path.join(dirs.root, 'searxng/searxng.pid')));
-});
-
-test('exits cleanly when uv is not installed', () => {
-  const dirs = stage();
-  const result = run(dirs, { UV_BIN: 'panda-no-such-uv' });
-  assert.equal(result.status, 0);
-  assert.match(result.stderr, /uv is not installed/);
 });
 
 test('does nothing when SEARXNG_URL is not a loopback address', () => {

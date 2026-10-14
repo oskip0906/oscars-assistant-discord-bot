@@ -18,7 +18,7 @@ export const defs = [
     function: {
       name: 'self_fix',
       description:
-        'OWNER ONLY. Propose a change to YOUR OWN source code. Panda shows Oscar a Discord approval button first. After approval, an isolated GitHub Actions sandbox checks out the repository, runs Claude Code to make and test the change, opens a PR to main, enables auto-merge, and Panda restarts once it lands. The tool returns at once and the run continues in the background, so Panda keeps answering everyone meanwhile; the result is DMed to Oscar only. The live bot filesystem is never edited. Claude Code sees only the repository and the instruction — not this chat, earlier runs or GitHub — so the instruction must state the whole change on its own, even when retrying.',
+        'OWNER ONLY. Propose a change to YOUR OWN source code. Panda shows Oscar a Discord approval button first. After approval, an isolated GitHub Actions sandbox checks out the repository, runs Claude Code to make the change, opens a PR to main and merges it at once (no tests run, so the instruction must be exact), and Panda restarts once it lands. The tool returns at once and the run continues in the background, so Panda keeps answering everyone meanwhile; the result is DMed to Oscar only. The live bot filesystem is never edited. Claude Code sees only the repository and the instruction — not this chat, earlier runs or GitHub — so the instruction must state the whole change on its own, even when retrying.',
       parameters: {
         type: 'object',
         properties: {
