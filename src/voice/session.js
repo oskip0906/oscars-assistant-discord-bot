@@ -417,6 +417,27 @@ export function voiceStatus(guildId) {
     .join(' ');
 }
 
+// Put in the system prompt of every turn in a server where Panda is in a call,
+// so it always knows it is in one, with whom, and how it hears them.
+export function voiceContext(guildId) {
+  const session = sessions.get(guildId);
+  if (!session || session.closed) return '';
+  const me = app.client.user?.id;
+  const people = [...session.channel.members.values()]
+    .filter((m) => m.id !== me)
+    .map((m) => `${m.displayName} (@${m.user.username}${m.user.bot ? ', a bot' : ''})`);
+  const summoner = session.guild.members.cache.get(session.summonerId)?.displayName;
+  const hearing = session.serverDeaf
+    ? 'server-deafened by a moderator, so you hear nothing until they undeafen you'
+    : session.deafened
+      ? 'deafened, so you hear nothing (the voice tool undeafens you)'
+      : 'listening: what is said there is transcribed by speech-to-text (names and words can be misheard: match a misheard name to the people below) and posted in its chat, and your replies to what was said are read aloud';
+  return [
+    `- 🎙️ You are in the voice channel 🔊${session.channel.name} right now, ${hearing}.`,
+    `- In the call with you: ${people.join(', ') || 'nobody else'}.${summoner ? ` ${summoner} brought you in; you leave when they leave.` : ''} The voice tool leaves, deafens or undeafens you.`,
+  ].join('\n');
+}
+
 // /voice and the voice tool: `action` is join, leave, deafen, undeafen or status.
 export async function voiceCommand(action, member) {
   const guildId = member?.guild?.id;
