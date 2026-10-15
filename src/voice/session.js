@@ -29,6 +29,13 @@ const MIN_BYTES = 0.6 * BYTES_PER_SECOND; // shorter is a cough or a click, not 
 const MAX_BYTES = 30 * BYTES_PER_SECOND;
 const NEEDED = ['ViewChannel', 'Connect', 'Speak', 'SendMessages'];
 const WEBHOOK_NAME = 'Panda voice';
+// Transcripts post as "Slopbot (speaker)" rather than as the speaker alone
+// (DerpZ's workaround); Discord caps webhook usernames at 80 characters.
+const SENDER_NAME = 'Slopbot';
+export function transcriptUsername(name) {
+  const max = 80 - `${SENDER_NAME} ()`.length;
+  return `${SENDER_NAME} (${name.length > max ? `${name.slice(0, max - 1)}…` : name})`;
+}
 
 // guildId -> session
 const sessions = new Map();
@@ -61,12 +68,12 @@ export async function voiceWebhook(channel) {
   return hook;
 }
 
-// What was said, in the voice channel's chat under the speaker's name and
-// picture. Without a usable webhook (no Manage Webhooks, say) Panda quotes them.
+// What was said, in the voice channel's chat as "Slopbot (speaker)" with the
+// speaker's picture. Without a usable webhook (no Manage Webhooks, say) Panda quotes them.
 async function postTranscript(session, member, text) {
   try {
     const hook = await voiceWebhook(session.channel);
-    return await hook.send({ content: text, username: member.displayName, avatarURL: member.displayAvatarURL(), allowedMentions: { parse: [] } });
+    return await hook.send({ content: text, username: transcriptUsername(member.displayName), avatarURL: member.displayAvatarURL(), allowedMentions: { parse: [] } });
   } catch (err) {
     webhooks.delete(session.channel.id); // maybe deleted: look it up again next time
     console.error('[voice] webhook unavailable, posting as Panda:', String(err.message || err).slice(0, 150));
