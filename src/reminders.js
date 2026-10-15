@@ -107,6 +107,16 @@ export async function getTimezone(config, userId) {
   return rows[0]?.timezone ?? null;
 }
 
+// When `repeat` + `when` in timezone `tz` next goes off: { rule, next } or { error }.
+function schedule(repeat, when, tz, now) {
+  const parsed = parseWhen(repeat, when);
+  if (parsed.error) return parsed;
+  const rule = { repeat: parsed.repeat, local_time: parsed.local_time, timezone: tz };
+  const next = parsed.date ? zonedToUtc(parsed.date.y, parsed.date.m, parsed.date.d, parsed.date.h, parsed.date.mi, tz) : nextAt(rule, now);
+  if (!next || next <= now) return { error: 'That time has already passed.' };
+  return { rule, next };
+}
+
 // Returns the new reminder row, or { error }.
 export async function addReminder(config, { userId, channelId = null, name, repeat, when, timezone }, now = Date.now()) {
   if (!configured(config)) return { error: 'Reminders need DATABASE_URL to be set.' };
@@ -121,11 +131,9 @@ export async function addReminder(config, { userId, channelId = null, name, repe
     tz = await getTimezone(config, userId);
     if (!tz) return { error: 'I don’t know your timezone yet. Run the command again with the `timezone` option (start typing your city) — I’ll remember it after that.' };
   }
-  const parsed = parseWhen(repeat, when);
-  if (parsed.error) return parsed;
-  const rule = { repeat: parsed.repeat, local_time: parsed.local_time, timezone: tz };
-  const next = parsed.date ? zonedToUtc(parsed.date.y, parsed.date.m, parsed.date.d, parsed.date.h, parsed.date.mi, tz) : nextAt(rule, now);
-  if (!next || next <= now) return { error: 'That time has already passed.' };
+  const planned = schedule(repeat, when, tz, now);
+  if (planned.error) return planned;
+  const { rule, next } = planned;
 
   if (timezone) {
     await db.query(config, 'insert into user_settings (user_id, timezone) values ($1, $2) on conflict (user_id) do update set timezone = excluded.timezone', [userId, tz]);
@@ -153,6 +161,42 @@ export async function reminderChoices(config, typed, userId, isOwner) {
     [userId, Boolean(isOwner), String(typed || '')],
   );
   return rows;
+}
+
+// Changes one of `userId`'s active reminders (any of them for Oscar): its
+// name, and/or when it goes off. A new `repeat` needs `when` too; a
+// repeating reminder moved to another timezone keeps its local time, a
+// one-time one needs `when`. Returns the updated row, or { error }.
+export async function editReminder(config, { id, userId, isOwner, name = null, repeat = null, when = null, timezone = null }, now = Date.now()) {
+  if (!configured(config)) return { error: 'Reminders need DATABASE_URL to be set.' };
+  const { rows: [r] } = await db.query(config, 'select * from reminders where id = $1 and active and (user_id = $2 or $3)', [id, userId, Boolean(isOwner)]);
+  if (!r) return { error: 'That reminder is gone, or it is not theirs to change.' };
+  const label = name == null ? r.name : String(name).trim().slice(0, 200);
+  if (!label) return { error: 'Give the reminder a name.' };
+  const tz = timezone ? validTimezone(timezone) : r.timezone;
+  if (!tz) return { error: `\`${timezone}\` is not a timezone I know.` };
+  const kind = r.repeat.split(':')[0];
+  let rule = { repeat: r.repeat, local_time: r.local_time, timezone: tz };
+  let next = new Date(r.next_at).getTime();
+  if (when) {
+    const s = schedule(repeat || kind, when, tz, now);
+    if (s.error) return s;
+    ({ rule, next } = s);
+  } else if (repeat && repeat !== kind) {
+    return { error: `Making it ${repeat} needs the new time too (\`when\`).` };
+  } else if (tz !== r.timezone) {
+    if (kind === 'once') return { error: 'Moving a one-time reminder to another timezone needs its time again (`when`).' };
+    next = nextAt(rule, now);
+  }
+  // shortcut: next_at is written back from the row read above, so an edit landing while the tick is sending this very reminder could send it twice; lock the row if that ever shows.
+  const { rows } = await db.query(
+    config,
+    'update reminders set name = $2, repeat = $3, local_time = $4, timezone = $5, next_at = $6, last_error = null where id = $1 and (user_id = $7 or $8) returning *',
+    [id, label, rule.repeat, rule.local_time, tz, new Date(next), userId, Boolean(isOwner)],
+  );
+  if (!rows.length) return { error: 'That reminder is gone, or it is not theirs to change.' };
+  noteWrite(config, 'reminders');
+  return rows[0];
 }
 
 export async function deleteReminder(config, id, userId, isOwner) {

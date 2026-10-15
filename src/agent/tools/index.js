@@ -82,6 +82,7 @@ const executors = {
   add_reminder: commandTools.addReminderTool,
   show_reminders: commandTools.showReminders,
   delete_reminder: commandTools.deleteReminderTool,
+  edit_reminder: commandTools.editReminderTool,
   sandbox: sandboxTools.sandboxTool,
 };
 

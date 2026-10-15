@@ -9,7 +9,7 @@ import { JEV_MODEL } from '../jev.js';
 import { runResearch } from '../research/pipeline.js';
 import { renderReport } from '../research/render.js';
 import { loadTree, openNote, folderPath, noteChoices, shownBody, MAX_NOTE_BODY } from '../notes.js';
-import { addReminder, activeReminders, reminderChoices, deleteReminder, repeatText } from '../../reminders.js';
+import { addReminder, editReminder, activeReminders, reminderChoices, deleteReminder, repeatText } from '../../reminders.js';
 import { configured } from '../../db.js';
 
 // The slash commands as tools: what each command does, run in chat through the
@@ -132,7 +132,7 @@ export const defs = [
     function: {
       name: 'add_reminder',
       description:
-        'Set a reminder for the sender, the same as /add_reminder: Panda pings them in this channel (a DM when set in DMs) once, or every day, week or month. `when` depends on `repeat` — once: "2026-10-20 18:30", daily: "18:30", weekly: "mon 18:30", monthly: "15 18:30" (24-hour time, in their timezone). Work out the exact date for "tomorrow" or "next Friday" from the current date.',
+        'Set a reminder for the sender, the same as /add_reminder: Panda pings them in this channel (a DM when set in DMs) once, or every day, week or month. `when` depends on `repeat` — once: "2026-10-20 18:30", daily: "18:30", weekly: "mon 18:30", monthly: "15 18:30" (24-hour time, in their timezone). Work out the exact date for "tomorrow" or "next Friday" from the current date. To change a reminder that already exists, use edit_reminder.',
       parameters: {
         type: 'object',
         properties: {
@@ -160,10 +160,29 @@ export const defs = [
     type: 'function',
     function: {
       name: 'delete_reminder',
-      description: 'Delete one of the sender’s reminders (Oscar may delete any), the same as /delete_reminder. Give its name; if several match, the tool lists them and deletes nothing.',
+      description: 'Delete one of the sender’s reminders (Oscar may delete any), the same as /delete_reminder. Give its name; if several match, the tool lists them and deletes nothing. To change one instead, use edit_reminder.',
       parameters: {
         type: 'object',
         properties: { reminder: { type: 'string', description: 'The reminder’s name, or words from it.' } },
+        required: ['reminder'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'edit_reminder',
+      description:
+        'Change one of the sender’s reminders (Oscar may change any) instead of deleting and re-adding it: rename it, or move when it goes off. `when` uses add_reminder’s format for its `repeat` — once: "2026-10-20 18:30", daily: "18:30", weekly: "mon 18:30", monthly: "15 18:30" (24-hour, their timezone); work out exact dates from the current date. A new `repeat` needs `when` too. If several reminders match, it lists them and changes nothing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reminder: { type: 'string', description: 'The reminder’s current name, or words from it.' },
+          name: { type: 'string', description: 'A new name, up to 200 characters.' },
+          repeat: { type: 'string', enum: ['once', 'daily', 'weekly', 'monthly'], description: 'Only to change how often it repeats; then `when` is needed too.' },
+          when: { type: 'string', description: 'The new time, in the format for the reminder’s `repeat` (see above).' },
+          timezone: { type: 'string', description: 'IANA timezone such as "America/Toronto", only to move the reminder to another one.' },
+        },
         required: ['reminder'],
       },
     },
@@ -383,4 +402,29 @@ export async function deleteReminderTool({ reminder } = {}, invocation) {
   }
   const removed = await deleteReminder(config, Number(pick.id), userId, isOwner);
   return removed ? `Deleted the reminder "${removed}".` : 'That reminder is already gone, or it is not theirs to delete. Nothing was deleted.';
+}
+
+// Finds the reminder as delete_reminder does; editReminder itself checks that the
+// sender is its creator (or Oscar), so a guest can't change anyone else's.
+export async function editReminderTool({ reminder, name, repeat, when, timezone } = {}, invocation) {
+  const { config, message, isOwner } = invocation;
+  if (!configured(config)) return 'Reminders are not set up (no database).';
+  const userId = message?.author?.id;
+  if (!userId) return 'Reminders can only be changed from chat.';
+  // A missing or null argument counts as not given.
+  const given = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const changes = { name: given(name), repeat: given(repeat), when: given(when), timezone: given(timezone) };
+  if (!Object.values(changes).some(Boolean)) return 'Nothing was changed: say what to change — a new `name`, a new `when` (with `repeat` if how often it repeats changes), or a `timezone`.';
+  const wanted = String(reminder).trim();
+  const mine = (await reminderChoices(config, wanted, userId, isOwner)).filter((r) => r.active);
+  const exact = mine.filter((r) => r.name.toLowerCase() === wanted.toLowerCase());
+  const pick = exact.length === 1 ? exact[0] : mine.length === 1 ? mine[0] : null;
+  if (!pick) {
+    return mine.length
+      ? `Several of their reminders match "${wanted}": ${mine.slice(0, 10).map((r) => `"${r.name}"`).join(', ')}. Ask which one; nothing was changed.`
+      : `They have no active reminder matching "${wanted}" (only its creator or Oscar can change one). Nothing was changed.`;
+  }
+  const changed = await editReminder(config, { id: Number(pick.id), userId, isOwner, ...changes });
+  if (changed.error) return `Not changed: ${changed.error}`;
+  return `Reminder changed: "${changed.name}", ${repeatText(changed)}. Next one ${new Date(changed.next_at).toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
 }
