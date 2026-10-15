@@ -12,7 +12,7 @@ import {
   joinVoiceChannel,
 } from '@discordjs/voice';
 import OpusScript from 'opusscript';
-import { sentences, spokenPart, toMono, wav, wavStreamToDiscordPcm } from './audio.js';
+import { prebuffer, spokenPart, toMono, wav, wavStreamToDiscordPcm } from './audio.js';
 import { synthesizeStream, transcribe } from './speech.js';
 
 // Voice mode. Panda sits in a voice channel and listens to everyone in it,
@@ -28,8 +28,12 @@ const QUIET_MS = 1000; // this much silence ends an utterance
 const BYTES_PER_SECOND = 48000 * 2 * 2; // 48 kHz, stereo, 16-bit
 const MIN_BYTES = 0.6 * BYTES_PER_SECOND; // shorter is a cough or a click, not speech
 const MAX_BYTES = 30 * BYTES_PER_SECOND;
+// Playback starts with this much audio in hand (48 kHz stereo 16-bit), so it doesn't stutter.
+const PREBUFFER_BYTES = 0.3 * BYTES_PER_SECOND;
+// Panda waits up to this long for someone to finish before it starts talking.
+const FLOOR_WAIT_MS = 2000;
 // Played speech arrives as it is made; a hold-up this long (in 20 ms frames)
-// is waited out in silence instead of ending the sentence.
+// is waited out in silence instead of ending the reply.
 const MAX_STALL_FRAMES = 250;
 const NEEDED = ['ViewChannel', 'Connect', 'Speak', 'SendMessages'];
 const WEBHOOK_NAME = 'Panda voice';
@@ -184,39 +188,65 @@ async function handleSpeech(session, userId, known, pcm) {
 
 // --- speaking ---------------------------------------------------------------
 
-// Plays one sentence's audio as it arrives and resolves when the player is idle again.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Someone other than Panda has sent audio in the last 100 ms (Discord's speaking map).
+const floorTaken = (session) => [...session.connection.receiver.speaking.users.keys()].some((id) => id !== app.client.user?.id && !blocked(id));
+
+// Plays one reply's audio as it arrives and resolves when the player is idle again.
 async function play(session, pcm) {
   const finished = once(session.player, AudioPlayerStatus.Idle);
   session.player.play(createAudioResource(Readable.from(pcm), { inputType: StreamType.Raw }));
   await finished;
 }
 
-// The start of a reply, sentence by sentence: each sentence plays while thunder
-// is still sending it, and the next one is asked for as soon as it starts.
-async function say(session, text) {
-  const parts = sentences(spokenPart(text));
-  if (!parts.length || session.closed) return;
-  const make = (part) => {
-    const audio = synthesizeStream(app.config, part);
-    audio.catch(() => {}); // a failure surfaces where it is awaited, never as an unhandled rejection
-    return audio;
-  };
-  let audio = make(parts[0]);
-  for (let i = 0; i < parts.length; i++) {
-    const current = await audio;
-    if (session.closed) return;
-    if (i + 1 < parts.length) audio = make(parts[i + 1]);
-    await play(session, wavStreamToDiscordPcm(current));
+// One reply, in one thunder request streamed into one audio resource: no gap
+// and no change of voice between its sentences. Like a person, Panda first
+// waits (a little) for whoever is talking to finish. `gen` is the speech
+// generation the reply was queued in; hush() moves it on, dropping the reply.
+async function say(session, text, gen) {
+  const spoken = spokenPart(text);
+  if (!spoken) return;
+  const abort = new AbortController();
+  session.speaking = abort;
+  try {
+    for (const until = Date.now() + FLOOR_WAIT_MS; !abort.signal.aborted && floorTaken(session) && Date.now() < until; ) await sleep(100);
+    if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
+    const audio = await synthesizeStream(app.config, spoken, { signal: abort.signal });
+    if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
+    await play(session, prebuffer(wavStreamToDiscordPcm(audio), PREBUFFER_BYTES));
+  } catch (err) {
+    if (!abort.signal.aborted) throw err; // a reply cut off on purpose is not a failure
+  } finally {
+    if (session.speaking === abort) session.speaking = null;
   }
 }
 
-// Replies are spoken one after another, in the order they arrive.
+// Replies are spoken one after another, in the order they arrive; hush() drops
+// every one queued before it.
 function queueSpeech(session, text) {
+  const gen = session.speechGen;
   session.queue = session.queue
-    .then(() => say(session, text))
+    .then(() => (gen === session.speechGen && !session.closed ? say(session, text, gen) : null))
     .catch((err) => console.error('[voice] could not speak the reply:', String(err.message || err).slice(0, 200)))
     .then(() => touch(session));
   return session.queue;
+}
+
+// Talked over (or told to stop): Panda stops mid-word, and neither the rest of
+// that reply nor any reply waiting behind it is said.
+function hush(session) {
+  session.speechGen++;
+  session.speaking?.abort();
+  session.player.stop(true);
+}
+
+// "@Panda stop" also stops what Panda is saying in that server's call. True when it was saying something.
+export function stopSpeaking(guildId) {
+  const session = sessions.get(guildId);
+  if (!session?.speaking) return false;
+  hush(session);
+  return true;
 }
 
 // --- the session ------------------------------------------------------------
@@ -233,7 +263,7 @@ function close(session, farewell = '') {
   session.closed = true;
   clearTimeout(session.idle);
   if (sessions.get(session.guild.id) === session) sessions.delete(session.guild.id);
-  session.player.stop(true); // lets a sentence that is still playing finish waiting
+  hush(session); // stops the reply being said and its download; replies waiting behind it see the session closed
   // Utterances still being captured end now; their 'close' sees the session closed and drops them.
   for (const stream of session.capturing.values()) stream.destroy();
   if (session.connection.state.status !== VoiceConnectionStatus.Destroyed) session.connection.destroy();
@@ -263,8 +293,12 @@ export async function joinVoice(member) {
 
   const connection = joinVoiceChannel({ channelId: channel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false, selfMute: false });
   const player = createAudioPlayer({ behaviors: { maxMissedFrames: MAX_STALL_FRAMES } });
-  // capturing: userId -> the utterance stream being recorded; heard: the transcripts' posting order.
-  const session = { guild, channel, connection, player, capturing: new Map(), idle: null, closed: false, queue: Promise.resolve(), heard: Promise.resolve(), speak: (reply) => queueSpeech(session, reply) };
+  // capturing: userId -> the utterance stream being recorded; heard: the transcripts' posting order;
+  // speaking: the AbortController of the reply being said; speechGen: moved on by hush(), dropping replies queued before it.
+  const session = {
+    guild, channel, connection, player, capturing: new Map(), idle: null, closed: false, queue: Promise.resolve(), heard: Promise.resolve(),
+    speaking: null, speechGen: 0, speak: (reply) => queueSpeech(session, reply),
+  };
   sessions.set(guild.id, session); // from now on music is refused here too
   // Without listeners an 'error' event would crash the bot.
   connection.on('error', (err) => console.error('[voice] connection error:', String(err.message || err).slice(0, 150)));
