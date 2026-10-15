@@ -1,5 +1,5 @@
 import { runAgent, isFiller, signOff } from '../agent/agent.js';
-import { formatEnvelope } from './envelope.js';
+import { formatEnvelope, transcriptOf } from './envelope.js';
 import { chunkMessage } from './chunk.js';
 import { decide, sampleYes } from '../agent/jev.js';
 import { saveContext } from '../agent/historyStore.js';
@@ -11,7 +11,7 @@ import { myNames } from '../agent/systemPrompt.js';
 import { readPrompt } from '../agent/prompts.js';
 import { reactOnce } from './reactions.js';
 import { turnSignal } from '../agent/openrouter.js';
-import { isVoiceWebhook } from '../voice/session.js';
+import { isVoiceWebhook, stopSpeaking } from '../voice/session.js';
 
 // Fixed-window input debounce with a per-channel queue.
 //
@@ -154,8 +154,12 @@ export function isStop(message, config, user, direct = false) {
 // One line of channel history as Panda reads it; its own lines are marked (you).
 // The small grey `-# ` lines on Panda's own replies (the tools it used, the
 // token stats) are left out: noise, and they read as "always use tools".
-const historyLine = (m, self) =>
-  (m.author.id === self ? `(you) ${formatEnvelope(m).replace(/(?<=^|\n|: )-# [^\n]*(\n|$)/g, '').trimEnd()}` : formatEnvelope(m)).slice(0, RECENT_CHARS);
+// A voice transcript is the speaker's words, not Panda's and not a bot's.
+const historyLine = (m, self) => {
+  const said = transcriptOf(m, self);
+  if (said) return `🎙️ ${said.name} (said in voice): ${said.text}`.slice(0, RECENT_CHARS);
+  return (m.author.id === self ? `(you) ${formatEnvelope(m).replace(/(?<=^|\n|: )-# [^\n]*(\n|$)/g, '').trimEnd()}` : formatEnvelope(m)).slice(0, RECENT_CHARS);
+};
 
 // Is a message that is not a ping, a reply to Panda or a DM still one to join,
 // and how? Jev reads it with the RECENT_COUNT messages before it:
@@ -233,7 +237,7 @@ export function suppressLinkEmbeds(text, keep = new Set()) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // One turn at a time per server (or DM), across its channels: turns there share
-// server-wide state such as the music queue.
+// server-wide state such as the music queue. A voice call's turns have a queue of their own.
 const contextQueues = new Map();
 function enqueueContext(key, task) {
   const prev = contextQueues.get(key) || Promise.resolve();
@@ -309,7 +313,10 @@ export function createMessageHandler({ client, config, player, privateMode, runA
   async function processBatch(batch) {
     const messages = batch.messages;
     const anchor = messages[messages.length - 1]; // reply/react to the most recent
-    const contextKey = anchor.guild ? anchor.guild.id : `dm:${anchor.author.id}`;
+    // What is said in a call runs on its own queue, so typed messages elsewhere in the server never
+    // wait behind a voice conversation (voice and music never share a server, so nothing server-wide
+    // is raced). The channel queue still keeps a call's chat in order.
+    const contextKey = anchor.guild ? (anchor.fromVoice ? `${anchor.guild.id}:voice` : anchor.guild.id) : `dm:${anchor.author.id}`;
     const { signal } = batch.abort;
     // A stop rejects this, so the turn lets go of the queue at once.
     const stopped = new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
@@ -533,8 +540,12 @@ export function createMessageHandler({ client, config, player, privateMode, runA
       // fetched only when that doesn't settle it.
       let repliedToBot = !isDM && message.mentions?.repliedUser?.id === client.user.id;
 
-      // A stop goes first, so it never folds into a batch as an ordinary message.
-      if (isStop(message, config, client.user, isDM || mentioned || repliedToBot) && (await stopWork(message))) return;
+      // A stop goes first, so it never folds into a batch as an ordinary message;
+      // it also cuts off whatever Panda is saying in this server's call.
+      if (isStop(message, config, client.user, isDM || mentioned || repliedToBot)) {
+        const hushed = message.guildId ? stopSpeaking(message.guildId) : false;
+        if ((await stopWork(message)) || hushed) return;
+      }
 
       // A sender with a still-collecting batch in this channel gets everything
       // they say folded into it (no check needed, timer NOT reset).

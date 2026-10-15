@@ -45,13 +45,13 @@ export const commandDefs = [
   new SlashCommandBuilder().setName('queue').setDescription('Show the current queue'),
   new SlashCommandBuilder()
     .setName('voice')
-    .setDescription('Talk with Panda in your voice channel: join, leave or status')
+    .setDescription('Talk with Panda in your voice channel: join, leave, deafen, undeafen or status')
     .addStringOption((o) =>
       o
         .setName('action')
-        .setDescription('Join your voice channel, leave it, or see where Panda is')
+        .setDescription('Join your voice channel, leave it, stop or start listening, or see where Panda is')
         .setRequired(true)
-        .addChoices({ name: 'join', value: 'join' }, { name: 'leave', value: 'leave' }, { name: 'status', value: 'status' }),
+        .addChoices({ name: 'join', value: 'join' }, { name: 'leave', value: 'leave' }, { name: 'deafen', value: 'deafen' }, { name: 'undeafen', value: 'undeafen' }, { name: 'status', value: 'status' }),
     ),
   new SlashCommandBuilder()
     .setName('web_search')

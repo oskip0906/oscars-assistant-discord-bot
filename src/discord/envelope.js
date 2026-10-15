@@ -28,3 +28,14 @@ export function formatEnvelope(message, refMsg = null) {
 
   return `${header.join(' ')}: ${[content, ...attachments].filter(Boolean).join(' ')}`.trim();
 }
+
+// A voice transcript Panda posted, as { name, text }; null for any other
+// message. Through the webhook it is "Slopbot (Name)"; without Manage Webhooks
+// Panda posts it itself as "**Name** (from voice): text".
+export function transcriptOf(message, selfId) {
+  const content = String(message.content || '');
+  const hooked = message.webhookId && /^Slopbot \((.+)\)$/.exec(message.author?.username || '');
+  if (hooked) return { name: hooked[1], text: content };
+  const quoted = message.author?.id === selfId && /^\*\*(.+?)\*\* \(from voice\): ([\s\S]*)$/.exec(content);
+  return quoted ? { name: quoted[1], text: quoted[2] } : null;
+}

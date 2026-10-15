@@ -4,6 +4,7 @@ import { providerFor } from './openrouter.js';
 import { readRules } from './rulesFile.js';
 import { loadTree, folderPath } from './notes.js';
 import { configured } from '../db.js';
+import { voiceContext } from '../voice/session.js';
 
 // Said in place of a reply when a rule (or Oscar) means Panda stays silent:
 // runAgent drops it and sends nothing, not even a reaction.
@@ -72,6 +73,7 @@ export async function buildSystemPrompt(invocation) {
     : '';
   // Left out without a database: there is nothing saved to list.
   const savedNotes = configured(config) ? `\n- Saved notes (folder › title):${notes ? `\n${notes}` : ' none yet'}` : '';
+  const voiceNote = guild ? voiceContext(guild.id) : '';
 
   return `You are ${config.botName}, a Discord bot. identity.md (fixed) and soul.md (your personality, which Oscar changes with set_rule) below say who you are and how to behave.
 
@@ -79,7 +81,7 @@ export async function buildSystemPrompt(invocation) {
 - Now: ${new Date().toUTCString()}
 - Server: ${guild ? guild.name : 'Direct message'} · Channel: ${channelName}
 - Talking to: ${senderName} (@${sender.username}, id:${sender.id})${invocation.isOwner ? ' — this is Oscar, your owner' : ''}
-- Owner: Oscar, id:${config.ownerId}. Everyone else is a guest.${privateNote}
+- Owner: Oscar, id:${config.ownerId}. Everyone else is a guest.${privateNote}${voiceNote ? `\n${voiceNote}` : ''}
 - You run on the OpenRouter model ${config.model}${provider ? ` via the ${provider} provider` : ''} (the live setting; Oscar changes it with /set_model). Never name another model as yours.
 - Your names: ${myNames(config, invocation.client?.user)}. A message means you only when it uses one of these, replies to you, or plainly continues a conversation with you. Any other name or nickname (another bot, "slopbot", someone's @mention) is someone else: never answer as if it were you, and never invent what people said or who built what.
 - "my bot" or "my assistant" means you only when Oscar says it; from anyone else it is their own bot.

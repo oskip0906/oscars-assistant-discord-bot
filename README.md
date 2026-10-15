@@ -16,7 +16,7 @@ The same groups as `/menu`. Everything also works by just asking in chat, except
 | `/pause` · `/resume` | Pause / resume playback |
 | `/stop` | Stop and clear the queue |
 | `/queue` | See what's playing next |
-| `/voice <join\|leave\|status>` | Talk with Panda in your voice channel: it transcribes what you say, answers in the channel's chat and reads the start of the answer aloud. Needs `PMS_AI_KEY`; music and voice don't share a server |
+| `/voice <join\|leave\|deafen\|undeafen\|status>` | Talk with Panda in your voice channel: it transcribes what you say, answers in the channel's chat and reads the start of the answer aloud in one steady voice. It keeps listening while it talks, so talking over it (or "@Panda stop") cuts it off; it leaves when the person who brought it in leaves; `deafen` stops it listening. Needs `PMS_AI_KEY`; music and voice don't share a server |
 
 **🧠 AI Skills**
 | Command | What it does |

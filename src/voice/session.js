@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { Readable } from 'node:stream';
-import { ChannelType, PermissionFlagsBits } from 'discord.js';
+import { ChannelType, Events, PermissionFlagsBits } from 'discord.js';
 import {
   AudioPlayerStatus,
   EndBehaviorType,
@@ -12,7 +12,7 @@ import {
   joinVoiceChannel,
 } from '@discordjs/voice';
 import OpusScript from 'opusscript';
-import { sentences, spokenPart, toMono, wav, wavStreamToDiscordPcm } from './audio.js';
+import { prebuffer, spokenPart, toMono, wav, wavStreamToDiscordPcm } from './audio.js';
 import { synthesizeStream, transcribe } from './speech.js';
 
 // Voice mode. Panda sits in a voice channel and listens to everyone in it,
@@ -24,12 +24,18 @@ import { synthesizeStream, transcribe } from './speech.js';
 // voice adapter, so they never run in the same server at once.
 
 const IDLE_MS = 5 * 60_000;
-const QUIET_MS = 1000; // this much silence ends an utterance
+const QUIET_MS = 800; // this much silence ends an utterance
 const BYTES_PER_SECOND = 48000 * 2 * 2; // 48 kHz, stereo, 16-bit
-const MIN_BYTES = 0.6 * BYTES_PER_SECOND; // shorter is a cough or a click, not speech
+const MIN_BYTES = 0.3 * BYTES_PER_SECOND; // shorter is a click or a breath; "yes", "no" and "stop" are longer
 const MAX_BYTES = 30 * BYTES_PER_SECOND;
+// Talking over Panda for this long stops it mid-word.
+const BARGE_IN_BYTES = 0.4 * BYTES_PER_SECOND;
+// Playback starts with this much audio in hand (48 kHz stereo 16-bit), so it doesn't stutter.
+const PREBUFFER_BYTES = 0.3 * BYTES_PER_SECOND;
+// Panda waits up to this long for someone to finish before it starts talking.
+const FLOOR_WAIT_MS = 2000;
 // Played speech arrives as it is made; a hold-up this long (in 20 ms frames)
-// is waited out in silence instead of ending the sentence.
+// is waited out in silence instead of ending the reply.
 const MAX_STALL_FRAMES = 250;
 const NEEDED = ['ViewChannel', 'Connect', 'Speak', 'SendMessages'];
 const WEBHOOK_NAME = 'Panda voice';
@@ -52,6 +58,7 @@ let app = {};
 
 export function initVoice(deps) {
   app = deps;
+  deps.client?.on(Events.VoiceStateUpdate, onVoiceState);
 }
 
 export const isVoiceActive = (guildId) => sessions.has(guildId);
@@ -75,14 +82,18 @@ export async function voiceWebhook(channel) {
 // What was said, in the voice channel's chat as "Slopbot (speaker)" with the
 // speaker's picture. Without a usable webhook (no Manage Webhooks, say) Panda quotes them.
 async function postTranscript(session, member, text) {
-  try {
-    const hook = await voiceWebhook(session.channel);
-    return await hook.send({ content: text, username: transcriptUsername(member.displayName), avatarURL: member.displayAvatarURL(), allowedMentions: { parse: [] } });
-  } catch (err) {
-    webhooks.delete(session.channel.id); // maybe deleted: look it up again next time
-    console.error('[voice] webhook unavailable, posting as Panda:', String(err.message || err).slice(0, 150));
-    return session.channel.send({ content: `**${member.displayName}** (from voice): ${text}`, allowedMentions: { parse: [] } });
+  if (!session.noWebhook) {
+    try {
+      const hook = await voiceWebhook(session.channel);
+      return await hook.send({ content: text, username: transcriptUsername(member.displayName), avatarURL: member.displayAvatarURL(), allowedMentions: { parse: [] } });
+    } catch (err) {
+      webhooks.delete(session.channel.id); // maybe deleted: look it up again next time
+      // Without Manage Webhooks every try fails the same way, so stop asking for the rest of this call.
+      if (err?.code === 50013) session.noWebhook = true;
+      console.error('[voice] webhook unavailable, posting as Panda:', String(err.message || err).slice(0, 150));
+    }
   }
+  return session.channel.send({ content: `**${member.displayName}** (from voice): ${text}`, allowedMentions: { parse: [] } });
 }
 
 // The transcript as the message handler sees it: shaped like a typed message
@@ -125,8 +136,7 @@ export function voiceMessage(posted, member, text, session) {
 // Everyone in the channel is heard, other bots too; only Panda itself isn't.
 function listen(session, userId) {
   if (session.closed || session.capturing.has(userId) || userId === app.client.user?.id) return;
-  // Panda's own voice comes back through other people's speakers; don't answer it.
-  if (session.player.state.status !== AudioPlayerStatus.Idle) return;
+  if (session.deafened || session.serverDeaf) return;
   if (blocked(userId)) return;
   const known = session.guild.members.cache.get(userId);
 
@@ -134,6 +144,7 @@ function listen(session, userId) {
   const decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
   const chunks = [];
   let bytes = 0;
+  let overlap = 0;
   const stream = session.connection.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: QUIET_MS } });
   session.capturing.set(userId, stream);
   stream.on('data', (packet) => {
@@ -141,6 +152,15 @@ function listen(session, userId) {
       const pcm = decoder.decode(packet);
       chunks.push(pcm);
       bytes += pcm.length;
+      // Talking over Panda for BARGE_IN_BYTES stops it; the next reply gets the same grace.
+      // While Panda only waits for a pause (player idle) nothing is being talked over yet.
+      if (session.player.state.status !== AudioPlayerStatus.Idle) {
+        overlap += pcm.length;
+        if (overlap >= BARGE_IN_BYTES) {
+          overlap = 0;
+          hush(session);
+        }
+      }
     } catch {
       // a damaged packet is a gap in the audio
     }
@@ -151,12 +171,21 @@ function listen(session, userId) {
   stream.once('close', () => {
     decoder.delete();
     if (session.capturing.get(userId) === stream) session.capturing.delete(userId);
+    if (stream.dropped || session.closed) return;
     // Cut off at the cap mid-sentence: carry on listening, so the rest isn't lost.
     if (bytes >= MAX_BYTES && session.connection.receiver.speaking.users.has(userId)) listen(session, userId);
     handleSpeech(session, userId, known, Buffer.concat(chunks)).catch((err) =>
       console.error('[voice] could not handle what was said:', String(err.message || err).slice(0, 200)),
     );
   });
+}
+
+// Utterances being recorded are ended and thrown away (leaving, or deafened).
+function dropCaptures(session) {
+  for (const stream of session.capturing.values()) {
+    stream.dropped = true;
+    stream.destroy();
+  }
 }
 
 // Utterances are transcribed side by side but posted in the order they ended,
@@ -184,39 +213,65 @@ async function handleSpeech(session, userId, known, pcm) {
 
 // --- speaking ---------------------------------------------------------------
 
-// Plays one sentence's audio as it arrives and resolves when the player is idle again.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Someone other than Panda has sent audio in the last 100 ms (Discord's speaking map).
+const floorTaken = (session) => [...session.connection.receiver.speaking.users.keys()].some((id) => id !== app.client.user?.id && !blocked(id));
+
+// Plays one reply's audio as it arrives and resolves when the player is idle again.
 async function play(session, pcm) {
   const finished = once(session.player, AudioPlayerStatus.Idle);
   session.player.play(createAudioResource(Readable.from(pcm), { inputType: StreamType.Raw }));
   await finished;
 }
 
-// The start of a reply, sentence by sentence: each sentence plays while thunder
-// is still sending it, and the next one is asked for as soon as it starts.
-async function say(session, text) {
-  const parts = sentences(spokenPart(text));
-  if (!parts.length || session.closed) return;
-  const make = (part) => {
-    const audio = synthesizeStream(app.config, part);
-    audio.catch(() => {}); // a failure surfaces where it is awaited, never as an unhandled rejection
-    return audio;
-  };
-  let audio = make(parts[0]);
-  for (let i = 0; i < parts.length; i++) {
-    const current = await audio;
-    if (session.closed) return;
-    if (i + 1 < parts.length) audio = make(parts[i + 1]);
-    await play(session, wavStreamToDiscordPcm(current));
+// One reply, in one thunder request streamed into one audio resource: no gap
+// and no change of voice between its sentences. Like a person, Panda first
+// waits (a little) for whoever is talking to finish. `gen` is the speech
+// generation the reply was queued in; hush() moves it on, dropping the reply.
+async function say(session, text, gen) {
+  const spoken = spokenPart(text);
+  if (!spoken) return;
+  const abort = new AbortController();
+  session.speaking = abort;
+  try {
+    for (const until = Date.now() + FLOOR_WAIT_MS; !abort.signal.aborted && floorTaken(session) && Date.now() < until; ) await sleep(100);
+    if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
+    const audio = await synthesizeStream(app.config, spoken, { signal: abort.signal });
+    if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
+    await play(session, prebuffer(wavStreamToDiscordPcm(audio), PREBUFFER_BYTES));
+  } catch (err) {
+    if (!abort.signal.aborted) throw err; // a reply cut off on purpose is not a failure
+  } finally {
+    if (session.speaking === abort) session.speaking = null;
   }
 }
 
-// Replies are spoken one after another, in the order they arrive.
+// Replies are spoken one after another, in the order they arrive; hush() drops
+// every one queued before it.
 function queueSpeech(session, text) {
+  const gen = session.speechGen;
   session.queue = session.queue
-    .then(() => say(session, text))
+    .then(() => (gen === session.speechGen && !session.closed ? say(session, text, gen) : null))
     .catch((err) => console.error('[voice] could not speak the reply:', String(err.message || err).slice(0, 200)))
     .then(() => touch(session));
   return session.queue;
+}
+
+// Talked over (or told to stop): Panda stops mid-word, and neither the rest of
+// that reply nor any reply waiting behind it is said.
+function hush(session) {
+  session.speechGen++;
+  session.speaking?.abort();
+  session.player.stop(true);
+}
+
+// "@Panda stop" also stops what Panda is saying in that server's call. True when it was saying something.
+export function stopSpeaking(guildId) {
+  const session = sessions.get(guildId);
+  if (!session?.speaking) return false;
+  hush(session);
+  return true;
 }
 
 // --- the session ------------------------------------------------------------
@@ -224,6 +279,8 @@ function queueSpeech(session, text) {
 function touch(session) {
   if (session.closed) return;
   clearTimeout(session.idle);
+  // Deafened on purpose it hears no one, so quiet means nothing; it stays until undeafened, told to leave, or its summoner leaves.
+  if (session.deafened || session.serverDeaf) return;
   session.idle = setTimeout(() => close(session, '👋 Left voice after 5 minutes of quiet.'), IDLE_MS);
 }
 
@@ -233,12 +290,29 @@ function close(session, farewell = '') {
   session.closed = true;
   clearTimeout(session.idle);
   if (sessions.get(session.guild.id) === session) sessions.delete(session.guild.id);
-  session.player.stop(true); // lets a sentence that is still playing finish waiting
-  // Utterances still being captured end now; their 'close' sees the session closed and drops them.
-  for (const stream of session.capturing.values()) stream.destroy();
+  hush(session); // stops the reply being said and its download; replies waiting behind it see the session closed
+  dropCaptures(session);
   if (session.connection.state.status !== VoiceConnectionStatus.Destroyed) session.connection.destroy();
   console.log(`[voice] left ${session.channel.name} in ${session.guild.name}`);
   if (farewell) session.channel.send(farewell).catch(() => {});
+}
+
+// Panda follows whoever brought it in: when they leave the call (or move to
+// another channel) it leaves too. A moderator's server deafen stops it
+// listening until it is lifted.
+function onVoiceState(oldState, newState) {
+  const session = sessions.get(newState.guild.id);
+  if (!session || session.closed) return;
+  if (newState.id === app.client.user?.id) {
+    session.serverDeaf = Boolean(newState.serverDeaf);
+    if (session.serverDeaf) dropCaptures(session);
+    touch(session);
+    return;
+  }
+  if (newState.id === session.summonerId && oldState.channelId === session.channel.id && newState.channelId !== session.channel.id) {
+    const name = oldState.member?.displayName ?? 'The person who brought me in';
+    close(session, `👋 ${name} left the call, so I left too.`);
+  }
 }
 
 const readable = (permission) => permission.replace(/(?<=[a-z])(?=[A-Z])/g, ' ');
@@ -263,8 +337,15 @@ export async function joinVoice(member) {
 
   const connection = joinVoiceChannel({ channelId: channel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false, selfMute: false });
   const player = createAudioPlayer({ behaviors: { maxMissedFrames: MAX_STALL_FRAMES } });
-  // capturing: userId -> the utterance stream being recorded; heard: the transcripts' posting order.
-  const session = { guild, channel, connection, player, capturing: new Map(), idle: null, closed: false, queue: Promise.resolve(), heard: Promise.resolve(), speak: (reply) => queueSpeech(session, reply) };
+  // capturing: userId -> the utterance stream being recorded; heard: the transcripts' posting order;
+  // summonerId: who brought Panda in; deafened / serverDeaf: Panda chose to stop listening / a moderator made it;
+  // speaking: the AbortController of the reply being said; speechGen: moved on by hush(), dropping replies queued before it;
+  // noWebhook: the webhook was refused for lack of permission, so transcripts are posted by Panda itself.
+  const session = {
+    guild, channel, connection, player, capturing: new Map(), idle: null, closed: false, queue: Promise.resolve(), heard: Promise.resolve(),
+    summonerId: member.id, deafened: false, serverDeaf: Boolean(guild.members.me?.voice?.serverDeaf),
+    speaking: null, speechGen: 0, noWebhook: false, speak: (reply) => queueSpeech(session, reply),
+  };
   sessions.set(guild.id, session); // from now on music is refused here too
   // Without listeners an 'error' event would crash the bot.
   connection.on('error', (err) => console.error('[voice] connection error:', String(err.message || err).slice(0, 150)));
@@ -292,7 +373,7 @@ export async function joinVoice(member) {
   console.log(`[voice] joined ${channel.name} in ${guild.name}`);
   await channel
     .send({
-      content: `🎙️ I'm in **${channel.name}**. Everything said here is transcribed into this chat, and I answer here and out loud. I leave after 5 minutes of quiet, or use \`/voice leave\`.`,
+      content: `🎙️ I'm in **${channel.name}**. Everything said here is transcribed into this chat, and I answer here and out loud. I leave after 5 minutes of quiet, when ${member.displayName} (who brought me in) leaves, or with \`/voice leave\`. \`/voice deafen\` stops me listening.`,
       allowedMentions: { parse: [] },
     })
     .catch(() => {});
@@ -306,16 +387,64 @@ export function leaveVoice(guildId) {
   return `👋 Left **${session.channel.name}**.`;
 }
 
-export function voiceStatus(guildId) {
+// Deafened, Panda hears nothing (Discord shows it deafened and stops sending
+// it audio, and nothing is transcribed); it still answers typed messages.
+export function setDeaf(guildId, deaf) {
   const session = sessions.get(guildId);
-  return session ? `🎙️ In **${session.channel.name}**, listening. I leave after 5 minutes of quiet.` : "I'm not in a voice channel here.";
+  if (!session) return "I'm not in a voice channel here.";
+  if (!deaf && session.serverDeaf) return "A moderator server-deafened me, so only they can undeafen me (right-click me → Server Deafen).";
+  if (session.deafened === deaf) return deaf ? "I'm already deafened." : "I'm already listening.";
+  session.deafened = deaf;
+  session.connection.rejoin({ selfDeaf: deaf });
+  if (deaf) dropCaptures(session);
+  touch(session);
+  return deaf
+    ? `🙉 Deafened in **${session.channel.name}**: I'm not listening to the call. I still answer typed messages. \`/voice undeafen\` to listen again.`
+    : `👂 Listening again in **${session.channel.name}**.`;
 }
 
-// /voice and the voice tool: `action` is join, leave or status.
+export function voiceStatus(guildId) {
+  const session = sessions.get(guildId);
+  if (!session) return "I'm not in a voice channel here.";
+  const deaf = session.serverDeaf ? 'server-deafened by a moderator' : session.deafened ? 'deafened' : '';
+  const summoner = session.guild.members.cache.get(session.summonerId)?.displayName;
+  return [
+    `🎙️ In **${session.channel.name}**, ${deaf ? `${deaf}: I'm not listening` : 'listening'}.`,
+    summoner ? `${summoner} brought me in; I leave when they do.` : '',
+    deaf ? '' : 'I also leave after 5 minutes of quiet.',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+// Put in the system prompt of every turn in a server where Panda is in a call,
+// so it always knows it is in one, with whom, and how it hears them.
+export function voiceContext(guildId) {
+  const session = sessions.get(guildId);
+  if (!session || session.closed) return '';
+  const me = app.client.user?.id;
+  const people = [...session.channel.members.values()]
+    .filter((m) => m.id !== me)
+    .map((m) => `${m.displayName} (@${m.user.username}${m.user.bot ? ', a bot' : ''})`);
+  const summoner = session.guild.members.cache.get(session.summonerId)?.displayName;
+  const hearing = session.serverDeaf
+    ? 'server-deafened by a moderator, so you hear nothing until they undeafen you'
+    : session.deafened
+      ? 'deafened, so you hear nothing (the voice tool undeafens you)'
+      : 'listening: what is said there is transcribed by speech-to-text (names and words can be misheard: match a misheard name to the people below) and posted in its chat, and your replies to what was said are read aloud';
+  return [
+    `- 🎙️ You are in the voice channel 🔊${session.channel.name} right now, ${hearing}.`,
+    `- In the call with you: ${people.join(', ') || 'nobody else'}.${summoner ? ` ${summoner} brought you in; you leave when they leave.` : ''} The voice tool leaves, deafens or undeafens you.`,
+  ].join('\n');
+}
+
+// /voice and the voice tool: `action` is join, leave, deafen, undeafen or status.
 export async function voiceCommand(action, member) {
   const guildId = member?.guild?.id;
   if (!guildId) return 'Voice only works in a server.';
   if (action === 'join') return joinVoice(member);
   if (action === 'leave') return leaveVoice(guildId);
+  if (action === 'deafen') return setDeaf(guildId, true);
+  if (action === 'undeafen') return setDeaf(guildId, false);
   return voiceStatus(guildId);
 }

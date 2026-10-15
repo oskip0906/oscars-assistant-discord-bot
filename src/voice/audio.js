@@ -28,42 +28,6 @@ export function toMono(pcm) {
   return mono;
 }
 
-// A 16-bit PCM WAV as what Discord plays raw: 48 kHz stereo, s16le. The header
-// is read chunk by chunk, not assumed to be 44 bytes; resampling is linear.
-export function wavToDiscordPcm(file) {
-  if (file.length < 12 || file.toString('latin1', 0, 4) !== 'RIFF' || file.toString('latin1', 8, 12) !== 'WAVE') throw new Error('not a WAV file');
-  let fmt = null;
-  let data = null;
-  for (let at = 12; at + 8 <= file.length && !data; ) {
-    const id = file.toString('latin1', at, at + 4);
-    const size = file.readUInt32LE(at + 4);
-    const body = at + 8;
-    if (id === 'fmt ') fmt = { channels: file.readUInt16LE(body + 2), rate: file.readUInt32LE(body + 4), bits: file.readUInt16LE(body + 14) };
-    // A size past the end of the file (a streamed WAV) just means "the rest".
-    if (id === 'data') data = file.subarray(body, Math.min(file.length, body + size));
-    at = body + size + (size & 1); // chunks are padded to an even length
-  }
-  if (!fmt || !data) throw new Error('WAV has no fmt or data chunk');
-  if (fmt.bits !== 16) throw new Error(`expected 16-bit WAV, got ${fmt.bits}-bit`);
-
-  const { channels, rate } = fmt;
-  const frames = Math.floor(data.length / (2 * channels));
-  const outFrames = Math.floor((frames * 48000) / rate);
-  const out = Buffer.alloc(outFrames * 4);
-  // A mono file plays the same in both ears.
-  const sample = (frame, channel) => data.readInt16LE((frame * channels + Math.min(channel, channels - 1)) * 2);
-  for (let j = 0; j < outFrames; j++) {
-    const pos = (j * rate) / 48000;
-    const i = Math.floor(pos);
-    const next = Math.min(i + 1, frames - 1);
-    for (let c = 0; c < 2; c++) {
-      const a = sample(i, c);
-      out.writeInt16LE(Math.round(a + (sample(next, c) - a) * (pos - i)), j * 4 + c * 2);
-    }
-  }
-  return out;
-}
-
 // A WAV file's header, read from its start: its format and where its samples
 // begin. Null while more bytes are needed.
 function wavHeader(head) {
@@ -87,9 +51,9 @@ function wavHeader(head) {
   return null;
 }
 
-// wavToDiscordPcm for a WAV that arrives in pieces: yields Discord's raw PCM
-// as soon as each piece can be converted, the same samples the whole file
-// would give.
+// A 16-bit PCM WAV that arrives in pieces, as what Discord plays raw (48 kHz
+// stereo, s16le): yields the PCM as soon as each piece can be converted. The
+// header is read chunk by chunk, not assumed to be 44 bytes; resampling is linear.
 export async function* wavStreamToDiscordPcm(pieces) {
   let head = Buffer.alloc(0);
   let fmt = null;
@@ -145,6 +109,23 @@ export async function* wavStreamToDiscordPcm(pieces) {
   if (!fmt) throw new Error('WAV has no fmt or data chunk');
   const pcm = convert(true);
   if (pcm.length) yield pcm;
+}
+
+// The first `bytes` of a stream handed on as one piece, so playback starts
+// with a cushion and a slow first second from thunder doesn't stutter.
+export async function* prebuffer(pieces, bytes) {
+  const held = [];
+  let size = 0;
+  for await (const piece of pieces) {
+    if (size >= bytes) {
+      yield piece;
+      continue;
+    }
+    held.push(piece);
+    size += piece.length;
+    if (size >= bytes) yield Buffer.concat(held);
+  }
+  if (size < bytes && held.length) yield Buffer.concat(held);
 }
 
 // Sentence by sentence, punctuation kept: a split at . ! or ? followed by
