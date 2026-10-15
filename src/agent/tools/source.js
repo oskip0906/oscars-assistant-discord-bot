@@ -135,11 +135,11 @@ export async function writeClaudeCodePrompt(instruction, level, invocation, { ch
       role: 'system',
       content: `You write the prompt for Claude Code, which will change the source of Panda, a Node.js Discord bot, unattended in CI. Claude Code sees only the repository and your prompt: not this chat, earlier runs, the notes, the database, or anything Oscar said elsewhere.
 
-Restate Oscar's request as a clear, self-contained task. Stay faithful to it: say what he asked for and nothing more. Do not add requirements, features or constraints he did not ask for, and do not guess at his reasons; the level below sets how much detail to give about what he asked, not what else to ask for. Do not invent file names, functions or facts you were not given; tell Claude Code to find them in the repo.
+Restate Oscar's request as a clear, self-contained task. Stay faithful to it: say what he asked for and nothing more. Do not add requirements, features, constraints or tests he did not ask for, and do not guess at his reasons. The level below sets how much detail to give about what he asked: edge cases and how to check the result belong only where it asks for them, and only the ones the request implies. Do not invent file names, functions or facts you were not given; tell Claude Code to find them in the repo.
 
 When the request names or depends on a note, an earlier conversation, a bug someone reported, "what we discussed", or anything else saved, look it up first with your tools and put the facts Claude Code needs into the prompt, quoted. Look up nothing the request does not need.
 
-Level ${level}: ${write} Plain text, under ${chars} characters. Return only the prompt.`,
+Level ${level}: ${write} Plain text, under ${chars} characters: a limit, not a target, so never pad. Return only the prompt.`,
     },
     { role: 'user', content: `Oscar's request: ${instruction}` },
   ];
