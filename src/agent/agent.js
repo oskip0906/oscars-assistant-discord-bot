@@ -191,7 +191,7 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     picked.size ? `Jev's guess at tools that may help: ${[...picked].join(', ')}. Advice, not a must: a lookup among them is only worth need_more_info if you can't answer without it.` : '',
     reacts ? `React with exactly one emoji that fits the mood, and vary it: for example one of ${suggested.join(' ')}, or any better fit (not always the same one). Only your first reaction is added.${wordy ? ' Write your reply as text in the same message as the reaction.' : ' No words.'}` : '',
     plan.needsContext
-      ? '`message` may refer to something the recent messages do not explain. If you can\'t tell what, call need_more_info for fetch_history, then search it with a `query` list of key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) rather than guessing.'
+      ? `\`message\` may refer to something the recent messages do not explain. If you can't tell what, call need_more_info for fetch_history (an earlier conversation), search_notes (a note)${invocation.isOwner ? ' and query_db (anything else saved)' : ''}, then search with a \`query\` list of key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) rather than guessing.`
       : '',
   ].filter(Boolean);
   // Rounds of tool calls, leaving the last model call for the answer. A later
