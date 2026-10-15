@@ -494,8 +494,9 @@ export function createInteractionHandler({ client, config, player, privateMode, 
           return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
         }
         await interaction.deferReply();
-        const invocation = buildInvocation();
-        await sendToolResult(selfFix({ instruction: interaction.options.getString('instruction', true) }, invocation));
+        // The prompt writer's lookups (fetch_history…) read the message, guild and member of a chat turn.
+        const invocation = { ...buildInvocation(), guild: interaction.guild, member: interaction.member, message: { channel: interaction.channel ?? { send: async () => {} }, channelId: interaction.channelId, guild: interaction.guild, guildId: interaction.guildId, author: interaction.user, member: interaction.member } };
+        await sendToolResult(selfFix({ instruction: interaction.options.getString('instruction', true), level: interaction.options.getString('level') ?? undefined }, invocation));
         return;
       }
 
