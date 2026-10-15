@@ -81,14 +81,18 @@ export async function voiceWebhook(channel) {
 // What was said, in the voice channel's chat as "Slopbot (speaker)" with the
 // speaker's picture. Without a usable webhook (no Manage Webhooks, say) Panda quotes them.
 async function postTranscript(session, member, text) {
-  try {
-    const hook = await voiceWebhook(session.channel);
-    return await hook.send({ content: text, username: transcriptUsername(member.displayName), avatarURL: member.displayAvatarURL(), allowedMentions: { parse: [] } });
-  } catch (err) {
-    webhooks.delete(session.channel.id); // maybe deleted: look it up again next time
-    console.error('[voice] webhook unavailable, posting as Panda:', String(err.message || err).slice(0, 150));
-    return session.channel.send({ content: `**${member.displayName}** (from voice): ${text}`, allowedMentions: { parse: [] } });
+  if (!session.noWebhook) {
+    try {
+      const hook = await voiceWebhook(session.channel);
+      return await hook.send({ content: text, username: transcriptUsername(member.displayName), avatarURL: member.displayAvatarURL(), allowedMentions: { parse: [] } });
+    } catch (err) {
+      webhooks.delete(session.channel.id); // maybe deleted: look it up again next time
+      // Without Manage Webhooks every try fails the same way, so stop asking for the rest of this call.
+      if (err?.code === 50013) session.noWebhook = true;
+      console.error('[voice] webhook unavailable, posting as Panda:', String(err.message || err).slice(0, 150));
+    }
   }
+  return session.channel.send({ content: `**${member.displayName}** (from voice): ${text}`, allowedMentions: { parse: [] } });
 }
 
 // The transcript as the message handler sees it: shaped like a typed message
@@ -312,10 +316,11 @@ export async function joinVoice(member) {
   const connection = joinVoiceChannel({ channelId: channel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false, selfMute: false });
   const player = createAudioPlayer({ behaviors: { maxMissedFrames: MAX_STALL_FRAMES } });
   // capturing: userId -> the utterance stream being recorded; heard: the transcripts' posting order;
-  // speaking: the AbortController of the reply being said; speechGen: moved on by hush(), dropping replies queued before it.
+  // speaking: the AbortController of the reply being said; speechGen: moved on by hush(), dropping replies queued before it;
+  // noWebhook: the webhook was refused for lack of permission, so transcripts are posted by Panda itself.
   const session = {
     guild, channel, connection, player, capturing: new Map(), idle: null, closed: false, queue: Promise.resolve(), heard: Promise.resolve(),
-    speaking: null, speechGen: 0, speak: (reply) => queueSpeech(session, reply),
+    speaking: null, speechGen: 0, noWebhook: false, speak: (reply) => queueSpeech(session, reply),
   };
   sessions.set(guild.id, session); // from now on music is refused here too
   // Without listeners an 'error' event would crash the bot.
