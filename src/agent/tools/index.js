@@ -68,6 +68,7 @@ const executors = {
   save_note: notesTools.saveNoteFromChat,
   create_note: notesTools.createNoteFromChat,
   send_note_file: notesTools.sendNoteFile,
+  edit_note: notesTools.editNote,
   panda_commands: commandTools.pandaCommands,
   current_model: commandTools.currentModel,
   model_info: modelInfoTools.modelInfo,

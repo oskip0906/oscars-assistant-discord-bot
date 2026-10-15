@@ -301,6 +301,24 @@ export async function noteChoices(config, typed, authorId = null) {
   return rows.map(norm);
 }
 
+// Changes a note in place; only its author or Oscar may. Its old title,
+// description and text go into note_revisions first, in the same statement.
+// `changes` holds any of title, description, body. Returns the note, or null
+// when it is gone or not theirs.
+export async function updateNote(config, id, changes, userId, isOwner) {
+  const { rows } = await db.query(
+    config,
+    `with old as (select * from notes where id = $1 and (author_id = $2 or $3)),
+     kept as (insert into note_revisions (note_id, title, description, body, edited_by) select id, title, description, body, $2 from old)
+     update notes n set title = coalesce($4, n.title), description = coalesce($5, n.description), body = coalesce($6, n.body)
+     from old where n.id = old.id
+     returning ${COLUMNS}`,
+    [id, userId, Boolean(isOwner), changes.title ?? null, changes.description ?? null, changes.body ?? null],
+  );
+  if (rows.length) noteWrite(config, 'notes');
+  return rows.length ? norm(rows[0]) : null;
+}
+
 // Only the author or Oscar. Folders left empty go too.
 export async function deleteNote(config, id, userId, isOwner) {
   const { rows } = await db.query(config, 'delete from notes where id = $1 and (author_id = $2 or $3) returning title', [id, userId, Boolean(isOwner)]);
