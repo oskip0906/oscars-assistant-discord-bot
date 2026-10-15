@@ -34,3 +34,46 @@ export async function synthesize(config, text, { fetchImpl = fetch } = {}) {
   const res = await post(config, '/audio/speech', { body, headers: { 'Content-Type': 'application/json' } }, fetchImpl);
   return Buffer.from(await res.arrayBuffer());
 }
+
+// Text as speech, streamed: resolves as soon as thunder starts answering, to
+// the WAV's bytes as they arrive, so playback can start before the file is
+// whole. The body is read ahead of playback, so a long sentence played at
+// speaking pace never runs into the request's timeout.
+export async function synthesizeStream(config, text, { fetchImpl = fetch } = {}) {
+  const body = JSON.stringify({ model: 'thunder', input: text, voice: 'alloy', instructions: VOICE_STYLE, response_format: 'wav' });
+  const res = await post(config, '/audio/speech', { body, headers: { 'Content-Type': 'application/json' } }, fetchImpl);
+  return readAhead(res.body);
+}
+
+// An async iterable of byte chunks, read as fast as it arrives and handed out
+// as fast as they are asked for. A read failure is thrown after what came before it.
+function readAhead(source) {
+  const chunks = [];
+  let done = false;
+  let failure = null;
+  let wake = null;
+  (async () => {
+    try {
+      for await (const chunk of source) {
+        chunks.push(Buffer.from(chunk));
+        wake?.();
+      }
+    } catch (err) {
+      failure = err;
+    } finally {
+      done = true;
+      wake?.();
+    }
+  })();
+  return (async function* () {
+    for (;;) {
+      if (chunks.length) yield chunks.shift();
+      else if (failure) throw failure;
+      else if (done) return;
+      else {
+        await new Promise((resolve) => (wake = resolve));
+        wake = null;
+      }
+    }
+  })();
+}
