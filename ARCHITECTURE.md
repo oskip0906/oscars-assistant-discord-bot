@@ -1,227 +1,79 @@
 # How Panda works
 
-How panda-bot turns a message into a reply, and how its prompts, memory, models, Jev, tools, research, sandbox and safety work. For a quick overview, see the [README](README.md).
+This is a compact guide to Panda’s runtime. For the command list, see the [README](README.md). Panda’s `how_i_work` tool reads this file and relevant source files to explain itself; update this guide when behavior changes.
 
-Panda's `how_i_work` tool reads this file, plus the source files on GitHub that answer the question, to explain itself. If you change how the bot works, update this file too.
+## Message flow
 
-## How a message becomes a reply
+1. **Decide whether to answer.** Pings, replies to Panda, and DMs are direct triggers. Jev checks other server messages for a likely response or a notable reaction. DMs are not saved. Private mode drops messages from anyone except Oscar before they are saved or evaluated. “@Panda stop” cancels the sender’s active and queued turns; Oscar can stop everyone’s turns in that channel.
+2. **Batch and build context.** Messages from the same sender are grouped briefly, then handled in channel order. A turn includes the request, recent messages, server and user details, saved rules and prompts, and available attachments. Voice turns use their own queue.
+3. **Triage and answer.** Jev picks the response form, mood, and likely tools. The conversation model writes the reply. It starts with selected action tools; lookups are made available when it asks for missing information. Tool calls run with validated arguments and owner checks.
+4. **Reply and save.** Panda sends its answer and any requested reactions or cards, then saves the turn and recent context. Long replies are split to fit Discord.
 
-The flow lives in `src/discord/messageHandler.js` and `src/agent/agent.js`.
+Threads go through the same message flow as channels. Interactive card buttons and menus are acknowledged, then handled as requests from the person who clicked them.
 
-1. **Does Panda answer?** Always for an @-ping or a reply to Panda. Otherwise **Jev** reads the message with the 5 before it and Panda joins in one of two ways. **Talk** (text, or text + reaction) only when Jev is at least 80% sure it directly responds to one of Panda's own lines there (only if Panda really spoke in those 5) or is addressed to Panda, judged from identity.md and those 5 lines, so even unnamed; never by chance. **React**: when it isn't for Panda but stands out (funny, wild, dumb, big news), sampled from Jev's odds (under 0.5 is never), and that turn is emoji only. Another bot's name or a nickname is never Panda. Before Jev, `addressee` checks the wording: "Panda", its Discord name, "panda bot", "Oscar's bot" or "the bot" from anyone means talk when it calls Panda (opening the message, as in "panda bot, …" or "panda play lofi", or tagged on the end, "…, panda?"), as does "my bot" / "my assistant" from Oscar only (from anyone else it is their own bot). Being named is not being addressed: a name anywhere else, or one opening a message that goes on to talk about Panda ("panda is so slow today", "ask panda later"), goes to Jev, who is told it was named and decides like any other message (Jev down: silence); a message put to Oscar (his @mention, a reply to him, "Oscar, can you…") is his, and Panda stays out of it. Bots are judged exactly like people. The model is never told it was addressed: an unpinged turn says only that it did not ping Panda, and the model judges from the message and the recent lines. A no means silence and nothing saved. Never in DMs. In private mode an `if` at the very top of the message handler drops anything not from Oscar: no reply, no reaction, no Jev, nothing saved. A self-fix doesn't pause answering.
-2. **Batching.** The first trigger opens a batch for that sender, 1.5 seconds by default (`BATCH_WINDOW_MS`, 250–10,000; 0.4 s for something said in a call, which already arrives cut at its pauses); everything they send in that time joins it, and another sender's trigger opens their own. Batches run one at a time per channel (in the order triggered, at most 10 waiting, extras dropped) and per server. Panda replies to the last message of the batch. A reply to Panda is recognized from the author Discord puts on the message, without fetching it; a reply the trigger check did fetch, and the 5 lines Jev read for an unpinged message, are reused by the turn instead of fetched again.
-3. **Prompt.** The system prompt (`src/agent/systemPrompt.js`) holds the date, server, channel, sender, private-mode note, a memory note (what is saved, and which notes exist; see Memory) and security rules, followed by `identity.md` and `soul.md` from the database. The turn is the batch (`[RESPOND TO THIS]`, which matters most) under the 5 messages before it (`[RECENT MESSAGES]`, supporting background), each written as `Name (@username, id:NNN): text`. Panda's own lines there leave out their small grey `-# ` lines (the tools used, the token stats): noise, and they read as "always use tools". The prompt lists Panda's names (`myNames`) and tells it not to assume what the background doesn't make clear. A turn Panda joined without being named says so, so it doesn't take the message as being about itself. Anything older is read only through tools. Attachments (images, PDFs, text files, GIF frames, the picture being replied to) go to the model for that turn only (`src/discord/attachments.js`), opened by an `[ATTACHMENTS]` manifest that numbers every file with its name, type, size, sender and status: sent, sent as a link, shrunk to fit, OMITTED (past 30 files per turn, the turn's own first) or NOT READ (with the reason). No file is dropped silently. Images over 5 MB are shrunk through Discord's media proxy, or marked unreadable when they can't be; past 40 MB of downloads per turn files go as their links. The same file reached twice is one entry; look-alike uploads are not merged, since spotting duplicate receipts is the model's job. The system prompt tells the model to go through receipts by number, flag possible duplicates, double-check its arithmetic, and never call a total complete when a file is missing.
-4. **Jev triage.** One Jev call asks everything at once: sign-off (≥ 0.8 → react 👋, no model call), which tools it expects (≥ 0.5 each; Oscar-only tools stop the turn for anyone else), whether the turn refers to something unexplained (≥ 0.8 → add `fetch_history`), reaction / message / both, and the mood (funny, happy, sad, angry or neutral). The form is sampled from Jev's probabilities at temperature 1.5, none favored. A turn owed words (any ping, reply to Panda or DM, or a question or request to Panda or a response to something it said, ≥ 0.5) is text or both, never reaction-only, and its words are always sent; its reaction odds count toward both. A turn Panda joined only to react is a reaction with no tools. The mood sets a `[TONE]` note and which reactions are suggested (a random 5 from that mood's set each turn, `MOOD_EMOJI`). Jev's tool picks are advice (below). If Jev is down: no picks, text reply, every tool still offered.
-5. **Tools: answer first.** The tool choice is always `auto`: nothing is forced, neither Jev's picks nor a reaction. Tools come in two kinds (`LOOKUP_TOOLS` and `isLookup` in `src/agent/tools/index.js`). Lookups only read: web, image, news, video and wiki search, search by image, `web_fetch`, `research`, history, notes, `query_db` (Oscar only), reminders list, `how_i_work`, commands and model info, server and member info, every GitHub MCP read. Actions do something: react, polls, cards, threads, notes, reminders, music, rules, `self_fix`, model, private mode, GitHub writes. A turn with words starts with the action tools Jev picked, `more_tools` (the enum names every other action tool the sender may use, Oscar-only ones only to Oscar; calling it adds them from the next round) and `need_more_info`, but no lookups. The model answers from the turn, the recent messages, the attachments and what it knows; if it is confident it just answers, in one call with no tools, and never looks something up to double-check (the system prompt says so in general terms, and that a lookup result never outweighs what the model can see itself unless it is clearly about the same thing). Only when it doesn't know enough (something live or current, a page, older messages, a fact it is unsure of) does it call `need_more_info` with what is missing and the lookups to get it; those, with `web_search` and `web_fetch`, open for the next round, and `more_tools` may then add lookups too. A lookup called before that is dropped, and `more_tools` can't open one. So a lookup costs one extra call, the "I don't know" step. With Jev down every action tool the sender may use is offered, and lookups still go through `need_more_info`. A reaction-only turn gets just Jev's picks and `react`; if the model writes words instead of reacting, the first suggested emoji is added and nothing is said, with no extra call. A turn is at most five model calls (`MAX_MODEL_CALLS`): up to four rounds of tool calls (run in parallel, results capped at 12,000 characters each), then the answer with no tools; any round may answer in words instead, which ends the turn. `react` is offered until Panda has reacted. Every reaction (the tool, the 👋 wave, the 👀 fallback) goes through `reactOnce` (`src/discord/reactions.js`): at most one per message, the first one asked for wins, and a failed one is not retried or swapped for another.
-6. **Sending.** The reply starts with a small `-# 🔧 tools used` line (`react` is never listed; a reaction-only turn sends no text) and ends with a `-# 📥 in · 📤 out · 💸 cost · ⏱️ total · 🧠 model` line (input and output tokens and cost of the turn's model calls, from OpenRouter's usage, then the turn's total and model time), text over 2,000 characters is split cleanly (`src/discord/chunk.js`), and bare links are wrapped in `<>`. A response is mandatory: with nothing to say Panda reacts 👀. Afterwards the batch and reply are saved to the context store.
-7. **Stopping.** "@Panda stop" (or `cancel`, `abort`, `nvm`, "stop it"…; pinged, replied to Panda, or naming it: "panda, stop") as the whole message aborts the sender's batches in that channel, running or queued; Oscar's aborts everyone's there. Who sent it is the authenticated Discord id; other channels are untouched. The turn lets go of the queue at once, its model calls are aborted (every call inside it, tools' and `/research`'s included, reads the turn's signal, `turnSignal` in `openrouter.js`, and is never retried), tools the model asked for after the stop don't start, and its reply, embeds and remaining chunks are not sent. Panda answers "⏹️ Stopped": what already happened (sent messages, reactions, notes, reminders, a tool already running) is not undone, and a `self_fix` is outside the turn's signal, so its Approve / Cancel card stays the only way to start or drop it. With nothing of theirs running, the message is handled as usual ("stop" may mean the music).
-8. **Bots.** Conversations with other bots continue until a sign-off ("bye!"), then Panda reacts 👋 and ignores unpinged bot lines in that channel until a human speaks; a bot's ping or reply is still answered (or waved at, if it's another bye).
+## Prompts and memory
 
-**Discord UI** (`src/agent/tools/ui.js`). `create_poll` posts a native poll (2–10 answers, 1–768 hours). `send_card` posts an embed with up to 25 fields, 5 buttons and a dropdown. Link buttons open a url; other buttons and the dropdown are clickable (ids start with `ui:`). A click is acknowledged at once, then handled like a message from the clicker (`[clicked "…"]`), with the same batching, Jev triage, owner checks and private mode.
+The system prompt is built in `src/agent/systemPrompt.js`. `identity.md` sets behavior and boundaries; `soul.md` holds the personality. Oscar can update the personality with `/set_rule`. Standing rules are stored in `RULES.md` and loaded each turn.
 
-## Prompts
+Postgres stores prompts, private-mode state, message context, notes, and reminders. DMs are not saved. Panda can search readable channel history, index older messages, and save shared notes from conversations. Notes can also contain text files; the author or Oscar can edit or delete them. Reminders support one-time and recurring schedules, calculated in the creator’s timezone.
 
-All behavior text lives in the database table `prompts` (`src/agent/prompts.js`), cached for 60 seconds so edits are live within a minute.
+## Models and Jev
 
-| File | Holds | Changed by |
-|------|-------|------------|
-| `identity.md` | Who Panda is, Oscar as owner, boundaries, Discord rules, tool usage | Editing the database row |
-| `soul.md` | Personality and tone | Oscar, with `set_rule` |
-| `history/soul-<time>.md` | Every `soul.md` that `set_rule` replaced | `set_rule` |
+Conversation calls use OpenRouter. The configured model handles chat, research, personality updates, and self-fix prompts; Claude Code makes the approved code change. Jev is a separate, fast decision model for whether to join a conversation, how to respond, and which tools may help. If Jev is unavailable, the bot uses its fallback behavior and remains available.
 
-`identity.md` wins if they disagree. If the database is down the bot keeps its last copy, or runs on the system prompt alone.
-
-**`set_rule`** (tool and `/set_rule`, Oscar only): the development model rewrites `soul.md` with the instruction applied, the old one is saved to `history/`, and it applies from the next message.
-
-**Rules (`RULES.md`).** Oscar's standing rules ("remember…", "never answer X", "be meaner", "answer everything with a joke") live in `RULES.md` at the repo root (`RULES_FILE` moves it, e.g. under `data/` in Docker so it survives redeploys), one `- ` line each under `## Rules`. `add_rule` appends one and `remove_rule` deletes one by its number or text (both Oscar only, `src/agent/rulesFile.js`); writes are serialized and atomic. The system prompt reads the file on every turn and lists the rules, numbered, above `identity.md` and `soul.md`, so a change applies from the next message. A rule to stay silent is followed by answering `[NO REPLY]`, which sends nothing at all, not even the sign-off wave.
-
-## Memory: context, notes and reminders
-
-Everything is stored in one PMS Postgres database (`DATABASE_URL`). `src/db.js` applies `src/schema.sql` at boot. Without it, chat works but there are no prompts, context, notes or reminders, and private mode starts OFF and can't be toggled.
-
-**Private mode** (`src/privateMode.js`) is one row in db-1's `pms` table (`id = 1`, `enabled`). It is read at boot, before Panda logs in, so it survives restarts and redeploys. `/private` and `private_mode` (Oscar only) save the new value first and only then flip the in-memory state the message handler checks, so the change applies to the very next message and the two never disagree. A failed save changes nothing and the reply says so. A database that is down at boot is logged and leaves private mode OFF.
-
-**Storage budget** (`src/storage.js`): of the 1 GiB, persona gets 10 MB and the rest splits 75% context, 20% notes, 5% reminders. When a section is full, Panda DMs Oscar with **Delete oldest** / **Not now** and refuses new writes to it until trimmed.
-
-**Context (hidden).** Panda keeps no summary or transcript, only per-channel message rows that feed the model. DMs are never saved. Everything else Panda sees is saved, after the reply is out: each turn, its reply and the 5 messages before it, everything `fetch_history` and `index_chat` read, and whole channels (below).
-- `fetch_history`: *range* mode reads the channel straight from Discord (default 30, max 100 messages). *Search* mode takes a list of words and phrases (`query`) and a list of people (`author`) and returns every saved message from this channel that contains any of the words or phrases (full-text, so "plan" finds "plans", or as plain text, so names, numbers and links match) and, when authors are given, was sent by any of them. There is no Jev filter. Results are shown with what was searched, oldest first under a heading per day; if they don't fit in the 12,000-character tool result, the best-ranked are shown and the rest counted. When nothing matches, the whole channel is indexed and the search runs again; if it still finds nothing, the model is told so plainly and not to guess. Both modes take an optional `channel` (a #mention, name or id) to read or search another channel or thread of this server instead, as long as the sender can read it: what is read is saved under that channel, a miss indexes that channel, and the result names it.
-- **Channel indexing** (`src/discord/indexChannel.js`, also `/index_channel` for Oscar) copies a channel's history into the store. `context_channels` records how far it got (newest and oldest message saved, and whether it reached the first message), so a run reads only what is new since the last one, then carries on back from where that one stopped. A search-triggered run is capped at 20,000 messages or 60 s per turn; the next miss continues it.
-- `index_chat`: given a message link or id, reads the 100 messages around it and remembers them. Other channels must be in this server and readable by the asker (View Channel and Read Message History; a private thread also needs them in it). It is one check, `readableChannel` in `src/agent/tools/history.js`, shared with `fetch_history`'s `channel`.
-- `query_db` (**Oscar only**): one read-only SQL statement (`select`, `with`, `values` or `table`) on db-1 for anything saved that the other lookups miss: notes and their folders, every channel's saved messages, reminders. The tool description lists the tables and columns. `db.readOnly` (`src/db.js`) runs it in a read-only transaction with a 5 s limit over the extended protocol, so a write fails and a second statement is refused. At most 50 rows come back (stopping at 11,000 characters; `fts` columns are dropped and texts over 1,000 characters cut); an error comes back as text, and nothing is ever changed. Oscar only because it reads every channel's saved messages, including channels the asker could not read.
-
-**What the model is told.** The system prompt has a `## Memory` section (`src/agent/systemPrompt.js`): everything Panda saw is saved, so when someone refers to a note or something said before, look it up rather than guess (`search_notes` / `open_note`, `fetch_history` here or in another channel, and for Oscar `query_db`). It also lists every saved note as `📁 folder › title`, newest first, up to 1,500 characters and then "and N more", read from the database at most once a minute, so Panda knows a note exists before it looks. The "refers to something unexplained" nudge (`needsContext`) names `search_notes` and, for Oscar, `query_db` next to `fetch_history`.
-
-**Notes (shared).** Everyone sees every note (`src/agent/notes.js`, `src/discord/notes.js`).
-- `/save_note [minutes]` (and the `save_note` tool) reads the last 10 minutes (Jev trims past 60,000 characters). The model writes the note as an index of the conversation: a title, a one-line description and a Markdown body of Summary, Topics (a heading per topic with the time it began, bullets naming who said what), Decisions, Action items, Open questions and Links, leaving out any section with nothing in it. Code adds a source footer itself (channel, time span, message count, a jump link to the first message, who took part), so it is always right. The note is then filed in a nestable folder tree (or `Unsorted`), may link up to 3 related notes, and the messages it covers are saved to the context store (never from DMs) so the conversation itself can be searched later.
-- Finding notes (`search_notes`, `/open_note`): Jev walks the folder tree, then notes are ranked by full-text and title similarity. `/open_note` tries exact title, then similar title, then the search. The tools give the model up to 10,000 characters of a note (`open_note`) or 3,000 (`search_notes`, `save_note`) and say how many more they left out.
-- Panda can write notes and files itself (`create_note`): a text note shown as a card, or a file (.txt, .md, .csv or any text file) sent as an attachment, or both. Either way it is stored in the `notes` table (a file keeps its `file_name`, its text is the body), filed into the tree like any note and counted in the notes storage budget. `send_note_file` (and `/open_note` for a file note) sends a saved note back as an attachment.
-- `/display_notes` browses the tree one level at a time, names only: the top shows folders, a folder shows its sub-folders and then the notes filed directly in it (split over as many pages as it takes), and a menu opens one. Descriptions show only on a note's own card. `/delete_note` is for the author or Oscar, after a confirm button.
-- `edit_note` (a tool; there is no slash command) changes a note in place: rename it, rewrite its description, replace its whole text (refused for a note over 10,000 characters, more than the model could have read), add to the end, or swap exact text for new text (every occurrence). Only the author or Oscar, like delete. The old title, description and text go into `note_revisions` in the same statement, so an edit can be undone by hand; revisions count toward the notes budget and go with their note.
-
-**Reminders** (`src/reminders.js`). `/add_reminder <name> <repeat> <when> [timezone]`; repeat is once, daily, weekly or monthly. Times are stored as UTC and repeats are recomputed in the creator's timezone, so daylight saving can't shift them. Every 30 s due reminders are posted in the channel they were made in, pinging the creator (`channel_id`); one made in a DM, made before channels were saved, or whose channel is gone or unwritable goes by DM instead. Ones missed while down go out once, marked late. `/delete_reminder`: creator or Oscar. The `edit_reminder` tool (no slash command; creator or Oscar) renames a reminder or moves when it goes off: a new `when`, with `repeat` if how often it repeats changes (a new `repeat` needs `when`). A new `timezone` keeps a repeating reminder's local time; a one-time one needs its `when` again.
-
-## Models: OpenRouter and Jev
-
-Every model call uses one OpenRouter key (`src/agent/openrouter.js`) and is built to be quick:
-
-- **Reasoning is off by default**, since hidden reasoning tokens cost seconds on every call. Jev's think question (below) turns on low reasoning for a hard turn. A model that requires reasoning refuses "off" with a 400; the call is then resent at once with low effort, and the model is remembered.
-- **Fallback.** If the model's providers are rate-limited or down, OpenRouter answers from `deepseek/deepseek-v4.1-flash`, which many providers serve. Not with a pinned provider, whose pin would bind the fallback too.
-- **Tries.** Network errors, 429s, 5xx and 60 s of silence are retried, at most 3 tries of 60 s each. Tries 2 and 3 go straight to the fallback model, so a model that timed out or kept answering 429 gets no more chances. A turn with images or files never uses the fallback, which may not read them.
-- Other API errors fail a turn at once, and so does a third failed try.
-
-| Role | Used for |
-|------|----------|
-| **Conversation** model | Chat, `/research`, `set_rule`, `self_fix` prompts and commit titles |
-| **Claude Code** | The code change in `self_fix` |
-| **Jev** (`typesafe/jev-1.13`) | Fast yes/no and pick-one decisions |
-
-`/set_model <model> [provider]` (Oscar) validates the id against OpenRouter's catalog and saves it in `bot_settings`, live at once and kept across restarts. The optional provider (e.g. `deepinfra`) pins that model to one OpenRouter provider (`provider: { order: [slug], allow_fallbacks: false }`); it is checked against the model's endpoints and refused if OpenRouter doesn't route the model there. Providers are saved per model id as JSON in the `model_providers` row; a blank provider, or no row at all, sends no provider field, so OpenRouter routes as it always has. `/model` shows the model and provider, and `/model <model>` posts OpenRouter's info on any model as a card (`src/agent/tools/modelInfo.js`, through `send_card`); `/usage` shows spend.
-
-## Jev: the decision layer
-
-Jev decides; the conversation model writes. The model never chooses whether to answer, whether to react, what to remember or which notes folder to open. Tool picks are the exception: Jev's say which tools are offered, and the model calls only those it needs (or adds one with `more_tools`). Plain code applies Jev's answers: tool picks, lookups and memory use fixed thresholds; the social calls (whether to chime in, react or talk) are sampled from Jev's probabilities so Panda varies like a person. Jev ignores a `temperature` field (0 and 2 return the same numbers), so `sampleChoice` / `sampleYes` in `jev.js` apply it.
-
-`decide(config, state, questions)` in `src/agent/jev.js` sends named text `state` and named `questions` in one call (~0.2 s). Answers are probabilities: `noul` (yes, 0–1) or `choice` (a probability per option). The model is pinned because the thresholds were tuned to 1.13. `decide` returns `null` when `JEV_ENABLED=false`, the key is missing, the call fails or takes over 5 s, and every caller then falls back to its non-Jev behavior, so an outage never breaks a turn.
-
-| Decision | Asked when | Bar | Jev off or down |
-|----------|-----------|-----|-----------------|
-| Gate (`forPanda`) | Server message that isn't a ping or reply | follow-up to Panda or addressed ≥ 0.8 (≥ 0.5 for something said in a call, which can't ping) → talk (a message that only names Panda included); else react sampled (never < 0.5); bots the same | Silence |
-| Bot sign-off | Every bot message | ≥ 0.8 → 👋, stop | Farewell regex |
-| Triage | Every turn | sign-off ≥ 0.8; tool ≥ 0.5 (offered, not forced); unexplained ≥ 0.8; think ≥ 0.4 (low reasoning); form sampled (owed words ≥ 0.5 → text or both); mood = most likely | No picks, every tool offered, text reply, no reasoning |
-| Think | Every turn answered in words | ≥ 0.4 → low reasoning | No reasoning |
-| Memory scan (`pickRelevant`) | Long `/save_note` windows | line ≥ 0.5 | Keep nothing |
-| Source files (`how_i_work`) | A question about Panda with a topic | file ≥ 0.5, best 3 | Files whose path has a topic word |
-| Notes walk | `search_notes`, `/open_note` | folder ≥ 0.25 (max 6 levels, 8 folders) | Search every note |
-| Research fact-check | Each page read by `/research` | drop claim < 0.3 | Keep every claim |
-
-Bars follow which mistake costs more: the gate talks only when Jev is fairly sure, because butting into chatter is worse than missing a chance, but reacts more freely, since an emoji costs nobody anything; tools are loose because an extra tool is cheap; folders are wide so near-miss filing is still found; research drops a claim only when Jev is fairly sure its quote doesn't support it.
-
-**Threads** are channels of their own to the message handler: Panda reads and answers in them, people and bots alike, exactly as in a channel. It joins every new thread (`ThreadCreate`) and the active ones at boot (`src/discord/threads.js`), since Discord only delivers a thread's messages reliably to its members, and the system prompt names the thread and its parent channel.
-
-**Privacy:** the gate means Jev sees every server message Panda can read, with the 2 before it. `JEV_ENABLED=false` stops that.
+Reasoning is off by default. Calls retry transient failures and can fall back to a configured general model when the request has no attachments. Oscar can change the model and optionally pin a provider with `/set_model`; `/model` and `/usage` report model details and spending.
 
 ## Tools
 
-| Tool | What it does |
+The model can use tools for Discord, web research, memory, notes, reminders, music, and self-knowledge. It can also create polls, cards, and threads. The source of truth for slash command definitions is `src/discord/commandDefs.js`; most commands share their implementation with a chat tool.
+
+| Area | Capabilities |
 |------|--------------|
-| `get_user_id` / `get_message_sender` | Find a member's id; who sent a message |
-| `server_info` | Read-only server overview, channels, roles, events, members, emojis, threads (hidden channels left out) |
-| `create_thread` / `send_to_thread` | Open a thread (in this channel, another one, a forum, or off the message being answered; optionally private) and post a message in it / post in an existing thread (**Oscar only**) |
-| `react` | React with one emoji (at most one Panda reaction per message, `src/discord/reactions.js`) |
-| `create_poll` / `send_card` | Post a poll / an embed card with buttons and dropdown |
-| `web_search` / `web_fetch` / `image_search` / `video_search` / `news_search` / `wiki_search` | SearXNG: web search (bing, falling back to yahoo then mojeek); read a public page; images (google images): `count` is the most to return, 3 by default and up to 10, set by the model or the user's ask; the model puts the image links bare in its reply and Discord shows the pictures under it (the handler keeps those links unwrapped through `invocation.imageUrls`), with a `send_card` card only when asked; one dedicated engine each for videos (youtube), news (bing news), wiki (wikipedia) |
-| `reverse_image_search` | Search by image, also `/reverse_image_search`: takes an attachment's number from `[ATTACHMENTS]` (the handler keeps their links in `invocation.attachmentUrls`) or an image URL, and returns the search engine's best guesses at what it shows plus up to 15 pages carrying matching pictures, each with its image. SearXNG's `yandex reverse` engine, Panda's own (`searxng/engines/yandex_reverse.py`, copied into SearXNG's engine folder by `searxng/Dockerfile` and `scripts/ensure-searxng.sh`). Yandex, because Google Lens builds its results with JavaScript, so a plain HTTP engine gets nothing from it, and SearXNG's TinEye engine is refused by TinEye |
-| `fetch_history` / `index_chat` | Read or search older messages of this channel, or of another channel or thread the sender can read (`channel`); read the messages around an old one |
-| `query_db` | One read-only SQL query on db-1: notes and folders, every channel's saved messages, reminders (**Oscar only**) |
-| `search_notes` / `save_note` | Find saved notes / save the recent chat as an indexed note |
-| `create_note` / `send_note_file` | Write a new note or a file (.txt, .md, …), save it in the notes and post it as a card or attachment / send a saved note back as a file |
-| `list_notes` / `open_note` / `delete_note` | List notes / open one / post the same Delete–Keep confirmation as `/delete_note` (nothing is deleted until the author or Oscar clicks) |
-| `edit_note` | Change a saved note in place: rename it, rewrite its description, replace or add to its text, or swap exact text; the author or Oscar only, and the old version is kept in `note_revisions` |
-| `add_reminder` / `show_reminders` / `delete_reminder` | Reminders for the sender, as the slash commands; a name matching several reminders deletes nothing and asks which |
-| `edit_reminder` | Rename one of the sender's reminders or move when it goes off (Oscar may change any); a name matching several reminders changes nothing and asks which |
-| `research` | The `/research` pipeline and report |
-| `panda_commands` | List the slash commands or explain one, read live from `src/discord/commandDefs.js` |
-| `model_info` | Any OpenRouter model's id, name, description, input / output price (per token and per 1M), context, max output, architecture, supported parameters and providers (only what differs per provider), as `/model <model>`. Reads OpenRouter's public `/models`, `/models/{id}` and `/models/{id}/endpoints` with no API key; an id, a bare model name or a display name matches exactly, otherwise the best fuzzy match is used only when clearly ahead, else it suggests the closest. Never switches models |
-| `current_model` / `usage` | The conversation model and provider running now (read from the runtime config, as `/model`) plus Jev's model / spend, as `/usage` |
-| `how_i_work` | Read this file and the source files on GitHub that answer a topic (Jev picks up to 3; long files cut to the lines around the topic) |
-| `play_music` | play / skip / pause / resume / stop / queue / now playing |
-| `voice` | join / leave / deafen / undeafen / status of voice mode, as `/voice`: join brings Panda into the sender's current voice channel; deafen stops it listening to the call (see Voice) |
-| `sandbox` | Run Python, JavaScript or bash in the channel's own PMS Cloud sandbox and read the exit code, stdout and stderr; `send_files` posts files the code made. Anyone may use it. The same as `/sandbox`; see [The scripting sandbox](#the-scripting-sandbox-sandbox) |
-| GitHub MCP tools | Every GitHub read (**Oscar only**) |
-| `github` | GitHub REST writes only (**Oscar only**) |
-| `self_fix` / `set_rule` | Change Panda's code, with a `level` (simple, medium or complex) for how detailed Claude Code's prompt is / rewrite `soul.md` (**Oscar only**) |
-| `add_rule` / `remove_rule` | Add / remove one of Oscar's standing rules in `RULES.md` (**Oscar only**) |
-| `set_model` / `private_mode` | Switch the model / private mode, as `/set_model` and `/private` (**Oscar only**) |
+| Discord | Read server, member, and message details; react; create threads, polls, and interactive cards. |
+| Web | Search web, images, reverse images, videos, news, and Wikipedia; read public pages. |
+| Memory | Search readable chat history, index messages, search and manage notes, and query saved data. Database queries are read-only and Oscar-only. |
+| Reminders and music | Create, edit, list, or delete reminders; control playback and the queue. |
+| Oscar-only | Read or write GitHub, manage standing rules and model settings, toggle private mode, and request a self-fix. |
 
-"Oscar only" is checked in code against the sender's Discord user id.
+Owner-only tools check the authenticated Discord user ID. Tool arguments are checked against each tool’s schema before execution. GitHub reads use a read-only MCP connection; GitHub writes use the bot’s authenticated API.
 
-Every slash command reaches chat through the tool in `COMMAND_TOOLS` (`src/agent/tools/commands.js`), which calls the same functions the command does, or is gated there with the reason (`/index_channel` and `/clear`: Oscar runs them himself). The command definitions live once in `src/discord/commandDefs.js`, with `OWNER_ONLY_COMMANDS`; an owner-only command maps to an owner-only tool. Before a tool runs, `executeTool` checks the owner gate, then the arguments against the tool's own schema (required, type, enum); bad arguments or unreadable JSON run nothing and tell the model what to fix. An empty result is reported as empty, so the model can't fill it in.
+## Research
 
-Slash commands: music (`/play /skip /pause /resume /stop /queue`), voice (`/voice join|leave|deafen|undeafen|status`), skills (`/research /web_search /web_fetch /image_search /reverse_image_search /video_search /news_search /wiki_search /create_poll /create_card /sandbox`), notes (`/save_note /display_notes /open_note /delete_note`), reminders (`/add_reminder /show_reminders /delete_reminder`), info (`/menu /usage /model`), Oscar only (`/set_rule /self_fix /set_model /private /index_channel /clear`). `/clear <number|all>` (`src/discord/clear.js`) checks Panda has View Channel, Read Message History and Manage Messages in the channel and says it can't if not; messages under 14 days old are bulk deleted 100 at a time, older ones one by one.
+`/research` runs a staged pipeline: plan research questions, search and read sources, extract claims with quotes, check that the quotes support the claims, then write a cited report. Deep mode can run additional searches to fill gaps.
 
-## Deep research
-
-`/research [quick|normal|deep]` (`src/agent/research/`) is a fixed pipeline: plan sub-questions and search; pick and read pages (1–2 per domain); extract claims with word-for-word quotes (code checks the quote is on the page, Jev checks it supports the claim); fill gaps with rewritten queries (deep only); write one cited section per sub-question plus a direct answer.
-
-| Depth | Sub-questions | Max pages | Gap rounds | Time limit |
-|-------|---------------|-----------|------------|------------|
-| `quick` | 3 | 8 | 0 | 90 s |
-| `normal` | 5 | 16 | 0 | 4 min |
-| `deep` | 5 | 32 | 2 | 10 min |
-
-Sources are masked links so Discord shows previews; chat replies still wrap links in `<>`.
+| Depth | Pages | Time limit |
+|-------|-------|------------|
+| `quick` | Up to 8 | 90 seconds |
+| `normal` | Up to 16 | 4 minutes |
+| `deep` | Up to 32 | 10 minutes |
 
 ## Voice
 
-`/voice join` (or the `voice` tool: "panda come to vc") puts Panda in the sender's voice channel and `/voice leave` takes it out; it needs `PMS_AI_KEY` and View Channel, Connect, Speak and Send Messages there (`src/voice/`).
-- **Hearing.** Everyone in the channel is heard, other bots included (only Panda itself isn't), and Panda keeps listening while it talks. Each utterance (ended by 0.8 s of silence, at most 30 s; someone still talking at the cap keeps being heard; under 0.5 s is a click, a breath or a stray "mm" and is dropped) is decoded, transcribed by PMS's `squall`, and posted in the voice channel's own chat through a "Panda voice" webhook under the speaker's own name and picture. Without Manage Webhooks Discord answers Missing Permissions; Panda remembers that for the rest of the call and posts the transcript itself as `**DerpZ** (from voice): …`, without asking again.
-- Each person is captured one utterance at a time. Utterances are transcribed side by side but posted and handed over once each, in the order they ended; leaving or deafening drops any still being captured. In private mode a guest is not transcribed at all, so nothing they say is sent anywhere.
-- **Same pipeline as typed text.** The transcript goes through the same "is this for Panda?" gate, batching, Jev, tools, owner checks and private mode; the author is the real speaker, known from Discord's voice connection. An utterance that arrives while a turn is running is queued like a typed message (folded into its sender's open batch, or a new batch behind the running one). Voice turns run on a queue of their own (`<server id>:voice`), so a typed message elsewhere in the server never waits behind a voice conversation; the call's own chat stays in order. Voice and music never share a server, so nothing server-wide is raced.
-- **What the model knows.** Every turn in a server where Panda is in a call has two lines in its system prompt (`voiceContext`): that it is in the voice channel, whether it is listening, deafened or server-deafened, who is in the call (name, @username, bots marked), who brought it in, and that the `voice` tool leaves, deafens or undeafens it. In the recent messages a transcript reads `🎙️ Name (said in voice): text`, never as one of Panda's own `(you)` lines or as a bot (`transcriptOf`, `src/discord/envelope.js`); `fetch_history` and `index_chat` don't mark a transcript Panda quoted as `(you)` either.
-- **Speaking.** The reply is posted in that chat as usual, and as it is posted its first 1–2 sentences (up to 300 characters, no markdown, links or code) are read aloud with PMS's `thunder`; typed messages are answered in text only. A reply is ONE `thunder` request with the same fixed voice settings every time, so every reply is the same speaker with no gap or change of voice between sentences, streamed into one audio resource that starts playing once 0.15 s of audio has arrived, so it doesn't stutter. Replies are said one after another in the order they arrive, and before it starts Panda waits up to 1 s for whoever is talking to pause. A turn from voice is told to answer the way people talk on a call: one or two short sentences (at most 30 words), shorter than typed replies, details only when asked.
-- **Barge-in.** Anyone (a bot too) talking over Panda for 1 s, counting only 20 ms frames loud enough (RMS ≥ 700) so background noise or its own voice leaking back through a quiet microphone doesn't, makes it wrap up: Panda finishes the sentence it is saying (its audio ends at the next 240 ms pause in thunder's clean audio, at most 4 s later) instead of stopping mid-word, and every reply queued behind it is dropped; a reply not yet playing is dropped whole. What the interrupter said is transcribed like any utterance and queued as a new message, answered once Panda has finished its words. "@Panda stop", typed anywhere in the server or spoken, wraps up the same way. Only leaving stops it at once.
-- **Following and deafening.** Panda leaves when the person who brought it in leaves the call or moves to another channel. `/voice deafen` (or the `voice` tool) stops it listening: Discord shows it deafened, nothing is transcribed, utterances being recorded are dropped, and it still answers typed messages; `/voice undeafen` listens again. A moderator's server deafen does the same, and only they can lift it.
-- Music and voice can't share a server's voice connection: joining stops the music, and `/play` is refused until `/voice leave`.
-- Panda leaves by itself after 5 minutes without an utterance or a spoken reply, or when the person who brought it in leaves; while deafened it has no idle timer.
+`/voice join` connects to the caller’s voice channel. PMS speech services transcribe what people say, route transcripts through the normal message flow, and read Panda’s short reply aloud. It keeps listening while speaking; people can interrupt it, and `deafen` pauses transcription. In private mode, guests’ speech is not transcribed. Voice requires `PMS_AI_KEY` and Discord channel permissions. Music and voice cannot use the same server connection.
 
-## The development sandbox (`self_fix`)
+## Code sandbox and self-fix
 
-The only way Panda changes code, and only its own repo.
+`/sandbox` runs Python, JavaScript, or bash in an isolated PMS Cloud sandbox. It is available to everyone, has internet access, and receives no bot secrets. Runs have a time and output limit; created files can be posted back to the channel. The sandbox template is built by `scripts/build-sandbox-template.mjs`.
 
-1. **Prompt:** Claude Code sees only the repo and a prompt, so a prompt writer (`writeClaudeCodePrompt` in `src/agent/tools/source.js`) restates the instruction first. Oscar picks a **level** (`/self_fix <instruction> [level]`, or `level` in the `self_fix` tool): `simple` is a few sentences (up to 1,000 characters), `medium` (the default) a short brief (3,500), `complex` a detailed spec with steps and edge cases (7,500). The writer is the conversation model with read-only tools, at most 4 rounds: `search_notes`, `open_note`, `list_notes`, `fetch_history` (this channel or another, `channel`) and `query_db`. It looks up what the request leans on ("the bug we just discussed", "the note about the voice plan") and quotes the facts in the prompt, since Claude Code can't see notes, chat or the database; results are capped at 12,000 characters and redacted. It does not pad the request, and logs only the level, the number of lookups and the time. If the model fails, Oscar's own words are the prompt.
-2. **Approval:** an Approve / Cancel card showing the level and the prompt (the first 4,000 characters; a longer prompt is also attached whole as `self-fix-prompt.md`, and the card says so); only Oscar's click starts anything.
-3. **Dispatch:** the bot starts `.github/workflows/development-sandbox.yml` on a throwaway runner, on a `panda-dev-*` branch.
-4. **Claude Code** makes the change unattended with a read-only GitHub token, seeing only the repo and the prompt.
-5. **Verify:** the workflow fails if nothing changed or `.git`, `node_modules`, `data/`, `.env` or `.github/` were touched, then commits, pushes, opens the PR and merges it at once with `GH_PAT` (`gh pr merge --squash --admin`). Nothing holds a PR back: no tests run anywhere, the repository has no ruleset or branch protection, and no workflow runs on pull requests (the Docker build runs on pushes to `main`, and the bot dispatches this one), so there is no check to wait for; `--admin` keeps the merge immediate even if a check or rule is ever added. A self-fix lands in minutes.
+`/self_fix` is Oscar-only and changes Panda’s own repository. A prompt writer can gather relevant notes and chat history; Panda then shows the proposed prompt in an approval card. Only Oscar’s approval starts a GitHub Actions run on a temporary branch. The workflow checks the change, merges it, and the deployment restarts Panda. The run continues in the background while Panda handles other messages.
 
-The bot watches via the GitHub MCP server and waits for the merge. The merge to main triggers the deploy (under `run.sh`, exit code 42 pulls and restarts). The run is in the background, so Panda keeps answering meanwhile; only a second self-fix is refused until it lands (or 50 min pass). While it runs Panda shows Idle with a "Currently fixing myself" status. Otherwise its custom status shows private mode: "🔒 Private mode: ON" (Do Not Disturb) or "🔓 Private mode: OFF" (Online) (`src/presence.js`). The status is set at login, once the saved private mode is loaded, and again on every toggle. A failed presence update is logged and never breaks the command.
+## Safety and deployment
 
-## The scripting sandbox (`/sandbox`)
-
-Not the development sandbox above: `self_fix` changes Panda's own code through an approved PR, while this runs scripts that anyone in the server writes (or asks Panda to write) on PMS Cloud, and never touches Panda's code, environment or secrets.
-
-- **Where:** `src/agent/tools/sandbox.js` (the `sandbox` tool, `runSandbox` shared with `/sandbox`, and `killPandaSandboxes`). PMS sandboxes are E2B-compatible, so it uses the `e2b` SDK with explicit PMS options. Each is 0.5 vCPU and 512 MiB with internet access; the account allows 4 running at once.
-- **Template:** `scripts/build-sandbox-template.mjs` builds `panda-sandbox` once, by hand (`PMS_SANDBOX_TOKEN=pms_... node scripts/build-sandbox-template.mjs`): Python 3 (numpy, pandas, matplotlib, requests), Node.js, git, curl, jq. A sandbox starts from it in about 3 seconds; commands run as `user` in `/home/user`.
-- **One per channel,** kept in memory and given 10 more minutes on every run (so its files last 10 minutes after the last run); an ended one is replaced. A fifth channel is told all 4 are in use. At boot `killPandaSandboxes` stops the ones left from before the restart (metadata `app: panda`).
-- **A run** (`language`, `code`, optional `files` to write first and `send_files` to post in the channel) is validated, then gets 60 seconds, and is stopped at 1 MB of output. The model gets `[SANDBOX — …]` with the last 5,000 characters of stdout and of stderr. The sandbox is given no environment, so the code sees no secret.
-- **Use:** anyone. `/sandbox [language]` opens a form for the code and replies with the output; in chat the model calls the tool. It needs `PMS_SANDBOX_TOKEN`, else Panda says it isn't set up (`PMS_SANDBOX_TEMPLATE` renames the template).
-
-## Safety
-
-- Owner checks use the Discord user id, never names or claims; so does a stop (a guest stops only their own turns).
-- Security rules live in the code's system prompt, so they hold even when the database is down.
-- Credentials are only used in auth headers and the database connection; `redactSecrets` (`src/config.js`) strips their values from tool results and outgoing messages.
-- `index_chat` and `fetch_history`'s `channel` only read channels the asker can read, and `query_db` is Oscar only and read-only; `web_fetch` refuses loopback, LAN, link-local and metadata addresses on every lookup and redirect.
-- Every GitHub read goes through the read-only MCP endpoint; the only REST calls are writes.
-- One GitHub token: `GITHUB_PAT` in the bot, `GH_PAT` in Actions.
-- `/set_model` only saves model ids and provider names made of safe characters.
-
-## Running and deploying
-
-**Settings** beyond the keys: `BATCH_WINDOW_MS` (the batch window, default 1500), `JEV_ENABLED`, `ALLOW_BOTS`, `BOT_NAME`, `SEARXNG_URL`, `GITHUB_MCP_ENABLED` (see `src/config.js`).
-
-**Logs** time every turn without its content: `[panda] turn stages`: time waited (window and queue), reading context, attachments, the agent, sending; `[agent …]` lines: prep and Jev time, then per model call its time, tools offered and tokens in / out, per round the tools' time, and the turn's total calls and tokens.
-
-**Evaluating.** `node scripts/eval-turns.js [--runs 5] [--cases photo,screenshot,skyline,receipt,live-fact,chat]` runs real turns (model and Jev, no Discord) and prints per-case median / p95 latency, model calls, prompt tokens, tools offered and pass rate. Copy it into a checkout of another version to compare the two on the same model.
-
-`npm start` runs `run.sh`: a private SearXNG (installed by `scripts/ensure-searxng.sh` with `uv`, loopback only, never blocks boot), then the bot under a supervisor (exit 42 → pull and restart, crash → restart after 3 s, exit 0 → stop). `npm run start:once` skips the supervisor.
-
-Every push to `main` builds and publishes the `panda-bot` and `panda-searxng` Docker images (`.github/workflows/docker.yml`). Production runs on PMS Cloud containers (project `oscars-discord-bot`) with `SEARXNG_URL=http://panda-searxng:8080`; they have no disk, so YouTube cookies go in as `YT_COOKIES_B64` and `/app/data` resets on restart (private mode is in the database, so it is kept). The CI deploy step currently fails behind Cloudflare, so deploy by hand: `pms container edit <name> --image <image>:<sha>`. To self-host, use `docker-compose.deploy.yml` with a volume on `/app/data`. Always set `DATABASE_URL`.
+- Owner checks use Discord IDs. Private mode and the system prompt enforce access and behavior even when a request claims otherwise.
+- Secrets are redacted from tool results and outgoing messages. Web fetch blocks local and private network addresses, including redirects.
+- History tools only read channels the asker can access; database queries are read-only and restricted to Oscar.
+- `npm start` runs the supervisor and bot; `npm run start:once` starts one process. `DATABASE_URL` is required for persistent prompts, memory, notes, reminders, and private-mode state.
+- Pushes to `main` build the Docker images. Production uses PMS Cloud; `docker-compose.deploy.yml` is available for self-hosting.
 
 ## Project layout
 
-```
-src/index.js              boot, intents, slash-command registration
-src/discord/              message handler, slash commands, embeds, chunking
-src/agent/                agent.js (triage, tools, answer), jev.js, prompts.js, historyStore.js, notes.js
-src/agent/tools/          every tool the model can call
-src/agent/research/       the /research pipeline
-scripts/eval-turns.js     live turn evaluation (latency, calls, tokens, tool use)
-scripts/build-sandbox-template.mjs  builds the PMS sandbox template for /sandbox (run once by hand)
-src/db.js, schema.sql     Postgres connection and tables
-src/storage.js            section budgets and cleanup
-src/reminders.js          reminder times and scheduler
-src/music/                discord-player + yt-dlp streaming
-src/voice/                voice mode: listen (squall), answer aloud (thunder), audio helpers
-.github/                  Docker build + deploy, the development sandbox
+```text
+src/discord/       message handling, commands, and Discord UI
+src/agent/         prompt, triage, model calls, and tool implementations
+src/agent/research/ research pipeline
+src/voice/         voice capture, transcription, and playback
+src/music/         music playback
+src/db.js          database connection and schema setup
+scripts/           research evaluation and sandbox template build
+.github/           image build, deployment, and self-fix workflows
 ```
