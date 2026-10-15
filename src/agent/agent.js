@@ -146,7 +146,8 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   log(contextKey, `triage (prep ${prepMs}ms, jev ${Date.now() - turnStart - prepMs}ms): signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'} mood=${plan.mood ?? '?'} lookup=${plan.needsContext} think=${plan.think}${plan.jevDown ? ' (jev down)' : ''}`);
   // A goodbye gets a wave and nothing else, so the conversation can end.
   if (plan.signOff) return signOff(invocation);
-  const locked = plan.tools.find((name) => OWNER_ONLY_TOOLS.has(name));
+  // An Oscar-only lookup (query_db) Jev picks for a guest's question is just never offered; only an action stops the turn.
+  const locked = plan.tools.find((name) => OWNER_ONLY_TOOLS.has(name) && !isLookup(name));
   if (locked && !invocation.isOwner) return `Only Oscar can use \`${locked}\`.`;
 
   const ask = async (msgs, tools, toolChoice) => {
