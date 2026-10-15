@@ -24,28 +24,21 @@ import { synthesizeStream, transcribe } from './speech.js';
 // voice adapter, so they never run in the same server at once.
 
 const IDLE_MS = 5 * 60_000;
-const QUIET_MS = 800; // this much silence ends an utterance
+const QUIET_MS = 600; // this much silence ends an utterance
 const BYTES_PER_SECOND = 48000 * 2 * 2; // 48 kHz, stereo, 16-bit
 const MIN_BYTES = 0.3 * BYTES_PER_SECOND; // shorter is a click or a breath; "yes", "no" and "stop" are longer
 const MAX_BYTES = 30 * BYTES_PER_SECOND;
 // Talking over Panda for this long stops it mid-word.
 const BARGE_IN_BYTES = 0.4 * BYTES_PER_SECOND;
 // Playback starts with this much audio in hand (48 kHz stereo 16-bit), so it doesn't stutter.
-const PREBUFFER_BYTES = 0.3 * BYTES_PER_SECOND;
+const PREBUFFER_BYTES = 0.15 * BYTES_PER_SECOND;
 // Panda waits up to this long for someone to finish before it starts talking.
-const FLOOR_WAIT_MS = 2000;
+const FLOOR_WAIT_MS = 1000;
 // Played speech arrives as it is made; a hold-up this long (in 20 ms frames)
 // is waited out in silence instead of ending the reply.
 const MAX_STALL_FRAMES = 250;
 const NEEDED = ['ViewChannel', 'Connect', 'Speak', 'SendMessages'];
 const WEBHOOK_NAME = 'Panda voice';
-// Transcripts post as "Slopbot (speaker)" rather than as the speaker alone
-// (DerpZ's workaround); Discord caps webhook usernames at 80 characters.
-const SENDER_NAME = 'Slopbot';
-export function transcriptUsername(name) {
-  const max = 80 - `${SENDER_NAME} ()`.length;
-  return `${SENDER_NAME} (${name.length > max ? `${name.slice(0, max - 1)}…` : name})`;
-}
 
 // guildId -> session
 const sessions = new Map();
@@ -79,13 +72,13 @@ export async function voiceWebhook(channel) {
   return hook;
 }
 
-// What was said, in the voice channel's chat as "Slopbot (speaker)" with the
-// speaker's picture. Without a usable webhook (no Manage Webhooks, say) Panda quotes them.
+// What was said, in the voice channel's chat under the speaker's name and
+// picture (Discord caps webhook names at 80 characters). Without a usable webhook (no Manage Webhooks, say) Panda quotes them.
 async function postTranscript(session, member, text) {
   if (!session.noWebhook) {
     try {
       const hook = await voiceWebhook(session.channel);
-      return await hook.send({ content: text, username: transcriptUsername(member.displayName), avatarURL: member.displayAvatarURL(), allowedMentions: { parse: [] } });
+      return await hook.send({ content: text, username: member.displayName.slice(0, 80), avatarURL: member.displayAvatarURL(), allowedMentions: { parse: [] } });
     } catch (err) {
       webhooks.delete(session.channel.id); // maybe deleted: look it up again next time
       // Without Manage Webhooks every try fails the same way, so stop asking for the rest of this call.

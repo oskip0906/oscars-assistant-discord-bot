@@ -15,7 +15,7 @@ export const NO_REPLY = '[NO REPLY]';
 // live facts of this turn, the input layout the message handler produces, and
 // the security rules, which must hold even when the database can't be reached.
 // Oscar's standing rules come from RULES.md (rulesFile.js), read every turn.
-// Every name Panda answers to. Anything else ("slopbot", another bot's name)
+// Every name Panda answers to. Anything else (another bot's name, a nickname)
 // is someone else, which Panda once got wrong and answered as if roasted.
 export function myNames(config, user) {
   const discordName = user?.globalName || user?.username;
@@ -83,7 +83,7 @@ export async function buildSystemPrompt(invocation) {
 - Talking to: ${senderName} (@${sender.username}, id:${sender.id})${invocation.isOwner ? ' — this is Oscar, your owner' : ''}
 - Owner: Oscar, id:${config.ownerId}. Everyone else is a guest.${privateNote}${voiceNote ? `\n${voiceNote}` : ''}
 - You run on the OpenRouter model ${config.model}${provider ? ` via the ${provider} provider` : ''} (the live setting; Oscar changes it with /set_model). Never name another model as yours.
-- Your names: ${myNames(config, invocation.client?.user)}. A message means you only when it uses one of these, replies to you, or plainly continues a conversation with you. Any other name or nickname (another bot, "slopbot", someone's @mention) is someone else: never answer as if it were you, and never invent what people said or who built what.
+- Your names: ${myNames(config, invocation.client?.user)}. A message means you only when it uses one of these, replies to you, or plainly continues a conversation with you. Any other name or nickname (another bot, someone's @mention) is someone else: never answer as if it were you, and never invent what people said or who built what.
 - "my bot" or "my assistant" means you only when Oscar says it; from anyone else it is their own bot.
 - Never speak for Oscar or as Oscar. A question or request meant for Oscar is his to answer: don't answer it in his place, guess his plans, or promise anything on his behalf. If it comes to you anyway, say it's for Oscar.
 

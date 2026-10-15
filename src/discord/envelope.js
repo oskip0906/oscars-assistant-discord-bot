@@ -1,3 +1,5 @@
+import { isVoiceWebhook } from '../voice/session.js';
+
 // Model-facing inbound envelope. Conventions:
 // - sender's numeric id is inline (pingable with <@id>, zero lookups)
 // - inbound <@NNN> mentions keep their id as "@Name (id:NNN)"
@@ -30,12 +32,11 @@ export function formatEnvelope(message, refMsg = null) {
 }
 
 // A voice transcript Panda posted, as { name, text }; null for any other
-// message. Through the webhook it is "Slopbot (Name)"; without Manage Webhooks
+// message. Through Panda's webhook it is posted under the speaker's name; without Manage Webhooks
 // Panda posts it itself as "**Name** (from voice): text".
 export function transcriptOf(message, selfId) {
   const content = String(message.content || '');
-  const hooked = message.webhookId && /^Slopbot \((.+)\)$/.exec(message.author?.username || '');
-  if (hooked) return { name: hooked[1], text: content };
+  if (message.webhookId && isVoiceWebhook(message.webhookId)) return { name: message.author?.username || 'someone', text: content };
   const quoted = message.author?.id === selfId && /^\*\*(.+?)\*\* \(from voice\): ([\s\S]*)$/.exec(content);
   return quoted ? { name: quoted[1], text: quoted[2] } : null;
 }

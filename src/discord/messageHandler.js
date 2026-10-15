@@ -33,6 +33,10 @@ const RECENT_CHARS = 500;
 // Panda talks unpinged only when Jev is this sure the message is addressed to
 // it or responds to something it said; below that it never talks.
 const TALK = 0.8;
+// Said aloud in a call there is no ping or reply to Panda, so the bar is lower there.
+const VOICE_TALK = 0.5;
+// Speech already arrives cut at its pauses, so a call's turn waits only briefly for more of it.
+const VOICE_WINDOW_MS = 400;
 // identity.md is cut to this for Jev, which reads it to tell what is meant for Panda.
 const IDENTITY_CHARS = 2000;
 // Unaddressed messages are reacted to only when Jev leans yes, then sampled.
@@ -190,7 +194,7 @@ export async function forPanda(message, before, self, config, decideImpl = decid
     addressed: {
       type: 'noul',
       instructions:
-        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else (a name or @mention not in `assistant_names`: another bot or nickname such as \"slopbot\" is NOT the assistant), if it is about the assistant rather than to it, if people are talking among themselves, or if it only might be for it. Naming the assistant is not addressing it (see `names_assistant`): \"panda is so slow today\", \"ask panda later\", \"I told the bot to stop\" or \"lol panda got it wrong\" talk about it, not to it; yes only when the message itself asks or tells it something. \"my bot\" or \"my assistant\" means the assistant only when `sender_is_owner` is yes; from anyone else it is their own bot. No when it is put to `owner_name` himself (a question or request for him): the assistant never answers in his place.",
+        "Is `message` addressed to the assistant: said to it, asked of it, or meant for it to act on? Judge who it is from `assistant_identity` and `assistant_names`, and the conversation from `recent_messages` (its own lines start with (you)): a message can be for it without naming it, e.g. a request for something only it does, or the next line of an exchange with it. No if it is said to someone else (a name or @mention not in `assistant_names`: another bot's name or a nickname is NOT the assistant), if it is about the assistant rather than to it, if people are talking among themselves, or if it only might be for it. Naming the assistant is not addressing it (see `names_assistant`): \"panda is so slow today\", \"ask panda later\", \"I told the bot to stop\" or \"lol panda got it wrong\" talk about it, not to it; yes only when the message itself asks or tells it something. \"my bot\" or \"my assistant\" means the assistant only when `sender_is_owner` is yes; from anyone else it is their own bot. No when it is put to `owner_name` himself (a question or request for him): the assistant never answers in his place.",
     },
     worth_reacting: {
       type: 'noul',
@@ -200,7 +204,8 @@ export async function forPanda(message, before, self, config, decideImpl = decid
   });
   const p = (name) => answers?.[name]?.noul;
   const spoke = recent.some((m) => m.author?.id === self);
-  if ((spoke && p('follows_up') >= TALK) || p('addressed') >= TALK) return 'talk';
+  const bar = message.fromVoice ? VOICE_TALK : TALK;
+  if ((spoke && p('follows_up') >= bar) || p('addressed') >= bar) return 'talk';
   if (p('worth_reacting') >= REACT_FLOOR && sampleYes(p('worth_reacting'), { temperature: 1, random })) return 'react';
   return false;
 }
@@ -279,7 +284,7 @@ export function createMessageHandler({ client, config, player, privateMode, runA
       setTimeout(() => {
         batch.closed = true;
         resolve();
-      }, windowMs);
+      }, message.fromVoice ? VOICE_WINDOW_MS : windowMs);
     });
     return batch;
   }
@@ -446,6 +451,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
         const sent = [];
         if (replyText.trim()) {
           replyText = suppressLinkEmbeds(redactSecrets(replyText), invocation.imageUrls);
+          // A voice message's reply starts being read aloud now, while the text is posted (not waited for).
+          if (!signal.aborted) anchor.speak?.(replyText);
           const tools = toolsLine(invocation.toolsUsed);
           const stats = statsLine(invocation.stats, Date.now() - turnStart);
           const parts = chunkMessage([tools, replyText, stats].filter(Boolean).join('\n'));
@@ -465,9 +472,6 @@ export function createMessageHandler({ client, config, player, privateMode, runA
             first = false;
           }
         }
-
-        // A voice message's reply is also read aloud (not waited for: playback can take a while).
-        if (replyText.trim() && !signal.aborted) anchor.speak?.(replyText);
 
         // Saved after the reply is out, so the database can never delay or break it.
         // Everything Panda saw is kept, in this channel's memory: the messages
