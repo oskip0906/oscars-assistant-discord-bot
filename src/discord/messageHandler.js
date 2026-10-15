@@ -1,5 +1,5 @@
 import { runAgent, isFiller, signOff } from '../agent/agent.js';
-import { formatEnvelope } from './envelope.js';
+import { formatEnvelope, transcriptOf } from './envelope.js';
 import { chunkMessage } from './chunk.js';
 import { decide, sampleYes } from '../agent/jev.js';
 import { saveContext } from '../agent/historyStore.js';
@@ -154,8 +154,12 @@ export function isStop(message, config, user, direct = false) {
 // One line of channel history as Panda reads it; its own lines are marked (you).
 // The small grey `-# ` lines on Panda's own replies (the tools it used, the
 // token stats) are left out: noise, and they read as "always use tools".
-const historyLine = (m, self) =>
-  (m.author.id === self ? `(you) ${formatEnvelope(m).replace(/(?<=^|\n|: )-# [^\n]*(\n|$)/g, '').trimEnd()}` : formatEnvelope(m)).slice(0, RECENT_CHARS);
+// A voice transcript is the speaker's words, not Panda's and not a bot's.
+const historyLine = (m, self) => {
+  const said = transcriptOf(m, self);
+  if (said) return `🎙️ ${said.name} (said in voice): ${said.text}`.slice(0, RECENT_CHARS);
+  return (m.author.id === self ? `(you) ${formatEnvelope(m).replace(/(?<=^|\n|: )-# [^\n]*(\n|$)/g, '').trimEnd()}` : formatEnvelope(m)).slice(0, RECENT_CHARS);
+};
 
 // Is a message that is not a ping, a reply to Panda or a DM still one to join,
 // and how? Jev reads it with the RECENT_COUNT messages before it:

@@ -1,6 +1,6 @@
 import { PermissionFlagsBits } from 'discord.js';
 import { searchContext, formatContext, saveContext } from '../historyStore.js';
-import { formatEnvelope } from '../../discord/envelope.js';
+import { formatEnvelope, transcriptOf } from '../../discord/envelope.js';
 import { configured } from '../../db.js';
 import { indexChannel } from '../../discord/indexChannel.js';
 
@@ -113,7 +113,7 @@ export async function fetchHistory({ query, author, skip, count } = {}, invocati
       const self = invocation.client?.user?.id;
       return [
         `[CHANNEL HISTORY — ${msgs.length} message(s), skipping the ${range.skip} most recent, oldest first. Background only: these are not new messages. Lines marked (you) are your own replies.]`,
-        ...msgs.map((m) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`),
+        ...msgs.map((m) => `${m.author.id === self && !transcriptOf(m, self) ? '(you) ' : ''}${formatEnvelope(m)}`),
       ].join('\n');
     }
     const config = invocation.config;
@@ -195,7 +195,7 @@ export async function indexChat({ message: ref = '' } = {}, invocation) {
     const self = invocation.client?.user?.id;
     return [
       `[MESSAGES AROUND ${id} in #${channel.name ?? channel.id} — ${msgs.length}, oldest first${page.has(id) ? '; → marks that message' : '; that message itself is gone'}; ${saved}. Background only: these are not new messages.]`,
-      ...msgs.map((m) => `${m.id === id ? '→ ' : ''}[${m.createdAt.toISOString().slice(0, 16).replace('T', ' ')} UTC] ${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`),
+      ...msgs.map((m) => `${m.id === id ? '→ ' : ''}[${m.createdAt.toISOString().slice(0, 16).replace('T', ' ')} UTC] ${m.author.id === self && !transcriptOf(m, self) ? '(you) ' : ''}${formatEnvelope(m)}`),
     ].join('\n');
   } catch (err) {
     console.error('[history] index_chat failed:', String(err.message || err).slice(0, 200));
