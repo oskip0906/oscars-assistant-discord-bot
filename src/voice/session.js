@@ -33,6 +33,16 @@ const MAX_BYTES = 30 * BYTES_PER_SECOND;
 // through someone's mic doesn't.
 const BARGE_IN_BYTES = 1.0 * BYTES_PER_SECOND;
 const BARGE_IN_RMS = 700;
+// An utterance with less than this much audio at speaking loudness (RMS) is
+// noise (a fan, keys, breathing) and is never sent to be transcribed: squall
+// makes words up out of noise.
+const VOICE_RMS = 500;
+const MIN_VOICED_BYTES = 0.3 * BYTES_PER_SECOND;
+// A transcript whose words are mostly what Panda said in this long is its own
+// voice coming back through someone's microphone, not them.
+const ECHO_MS = 30_000;
+// What squall writes for silence or noise rather than for speech.
+const PHANTOMS = new Set(['you', 'thank you for watching', 'thanks for watching', 'please subscribe', 'like and subscribe', 'subtitles by the amaraorg community', 'music']);
 // Panda's own audio goes out in Discord's 20 ms frames (48 kHz stereo 16-bit).
 const FRAME_BYTES = 3840;
 // Thunder's audio is clean: a sentence ends where it stays under PAUSE_RMS for
@@ -149,6 +159,7 @@ function listen(session, userId) {
   const chunks = [];
   let bytes = 0;
   let overlap = 0;
+  let voiced = 0;
   const stream = session.connection.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: QUIET_MS } });
   session.capturing.set(userId, stream);
   stream.on('data', (packet) => {
@@ -158,7 +169,9 @@ function listen(session, userId) {
       bytes += pcm.length;
       // Talking over Panda, loud enough and for BARGE_IN_BYTES, makes it wrap up; the next reply
       // gets the same grace. While Panda only waits for a pause (player idle) nothing is talked over yet.
-      if (session.player.state.status !== AudioPlayerStatus.Idle && rms(pcm) >= BARGE_IN_RMS) {
+      const loudness = rms(pcm);
+      if (loudness >= VOICE_RMS) voiced += pcm.length;
+      if (session.player.state.status !== AudioPlayerStatus.Idle && loudness >= BARGE_IN_RMS) {
         overlap += pcm.length;
         if (overlap >= BARGE_IN_BYTES) {
           overlap = 0;
@@ -178,6 +191,8 @@ function listen(session, userId) {
     if (stream.dropped || session.closed) return;
     // Cut off at the cap mid-sentence: carry on listening, so the rest isn't lost.
     if (bytes >= MAX_BYTES && session.connection.receiver.speaking.users.has(userId)) listen(session, userId);
+    // Mostly noise: nothing anyone said, so nothing is transcribed.
+    if (voiced < MIN_VOICED_BYTES) return;
     handleSpeech(session, userId, known, Buffer.concat(chunks)).catch((err) =>
       console.error('[voice] could not handle what was said:', String(err.message || err).slice(0, 200)),
     );
@@ -208,11 +223,25 @@ async function handleSpeech(session, userId, known, pcm) {
     // Timing only, like the turn logs: what people say stays out of the logs.
     console.log(`[voice] ${(pcm.length / BYTES_PER_SECOND).toFixed(1)}s from @${member.user.username} transcribed in ${Date.now() - started}ms`);
     if (session.closed || !/[\p{L}\p{N}]/u.test(text)) return null;
+    if (PHANTOMS.has(words(text).join(' ')) || isEcho(session, text)) {
+      console.log(`[voice] dropped a transcript from @${member.user.username}: ${isEcho(session, text) ? 'my own voice coming back' : 'squall filler for noise'}`);
+      return null;
+    }
     return { member, text, posted: await postTranscript(session, member, text) };
   });
   session.heard = turn.catch(() => {});
   const said = await turn;
   if (said && !session.closed) await app.onMessage(voiceMessage(said.posted, said.member, said.text, session));
+}
+
+// Lower-case words, the way transcripts and replies are compared.
+const words = (text) => String(text).toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+
+// Most of what was heard is words Panda itself said in the last ECHO_MS.
+function isEcho(session, text) {
+  const heard = words(text);
+  const said = new Set(session.said.filter((s) => Date.now() - s.at < ECHO_MS).flatMap((s) => s.words));
+  return heard.length >= 2 && heard.filter((w) => said.has(w)).length / heard.length >= 0.6;
 }
 
 // --- speaking ---------------------------------------------------------------
@@ -245,7 +274,9 @@ async function say(session, text, gen) {
     if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
     const audio = await synthesizeStream(app.config, spoken, { signal: abort.signal });
     if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
+    session.said = [...session.said.filter((s) => Date.now() - s.at < ECHO_MS), { words: words(spoken), at: Date.now() }];
     await play(session, toPause(session, abort, prebuffer(wavStreamToDiscordPcm(audio), PREBUFFER_BYTES)));
+    session.said[session.said.length - 1].at = Date.now(); // the echo window runs from when it stopped talking
   } catch (err) {
     if (!abort.signal.aborted) throw err; // a reply cut off on purpose is not a failure
   } finally {
@@ -381,7 +412,7 @@ export async function joinVoice(member) {
   const session = {
     guild, channel, connection, player, capturing: new Map(), idle: null, closed: false, queue: Promise.resolve(), heard: Promise.resolve(),
     summonerId: member.id, deafened: false, serverDeaf: Boolean(guild.members.me?.voice?.serverDeaf),
-    speaking: null, wrapUp: null, wrapUpAt: 0, speechGen: 0, noWebhook: false, speak: (reply) => queueSpeech(session, reply),
+    speaking: null, wrapUp: null, wrapUpAt: 0, speechGen: 0, said: [], noWebhook: false, speak: (reply) => queueSpeech(session, reply),
   };
   sessions.set(guild.id, session); // from now on music is refused here too
   // Without listeners an 'error' event would crash the bot.
