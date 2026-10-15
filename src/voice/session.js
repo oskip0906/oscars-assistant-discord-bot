@@ -12,7 +12,7 @@ import {
   joinVoiceChannel,
 } from '@discordjs/voice';
 import OpusScript from 'opusscript';
-import { prebuffer, spokenPart, toMono, wav, wavStreamToDiscordPcm } from './audio.js';
+import { prebuffer, rms, spokenPart, toMono, wav, wavStreamToDiscordPcm } from './audio.js';
 import { synthesizeStream, transcribe } from './speech.js';
 
 // Voice mode. Panda sits in a voice channel and listens to everyone in it,
@@ -24,12 +24,23 @@ import { synthesizeStream, transcribe } from './speech.js';
 // voice adapter, so they never run in the same server at once.
 
 const IDLE_MS = 5 * 60_000;
-const QUIET_MS = 600; // this much silence ends an utterance
+const QUIET_MS = 800; // this much silence ends an utterance
 const BYTES_PER_SECOND = 48000 * 2 * 2; // 48 kHz, stereo, 16-bit
-const MIN_BYTES = 0.3 * BYTES_PER_SECOND; // shorter is a click or a breath; "yes", "no" and "stop" are longer
+const MIN_BYTES = 0.5 * BYTES_PER_SECOND; // shorter is a click, a breath or a stray "mm", not something said
 const MAX_BYTES = 30 * BYTES_PER_SECOND;
-// Talking over Panda for this long stops it mid-word.
-const BARGE_IN_BYTES = 0.4 * BYTES_PER_SECOND;
+// Talking over Panda this long makes it wrap up (wrapUp); only 20 ms frames at least
+// BARGE_IN_RMS loud count, so background noise or Panda's own voice leaking back
+// through someone's mic doesn't.
+const BARGE_IN_BYTES = 1.0 * BYTES_PER_SECOND;
+const BARGE_IN_RMS = 700;
+// Panda's own audio goes out in Discord's 20 ms frames (48 kHz stereo 16-bit).
+const FRAME_BYTES = 3840;
+// Thunder's audio is clean: a sentence ends where it stays under PAUSE_RMS for
+// PAUSE_FRAMES frames (240 ms), since words run together and sentences pause.
+const PAUSE_RMS = 300;
+const PAUSE_FRAMES = 12;
+// Once talked over, Panda talks on at most this long to reach the end of its sentence.
+const WRAP_UP_MS = 4000;
 // Playback starts with this much audio in hand (48 kHz stereo 16-bit), so it doesn't stutter.
 const PREBUFFER_BYTES = 0.15 * BYTES_PER_SECOND;
 // Panda waits up to this long for someone to finish before it starts talking.
@@ -145,13 +156,13 @@ function listen(session, userId) {
       const pcm = decoder.decode(packet);
       chunks.push(pcm);
       bytes += pcm.length;
-      // Talking over Panda for BARGE_IN_BYTES stops it; the next reply gets the same grace.
-      // While Panda only waits for a pause (player idle) nothing is being talked over yet.
-      if (session.player.state.status !== AudioPlayerStatus.Idle) {
+      // Talking over Panda, loud enough and for BARGE_IN_BYTES, makes it wrap up; the next reply
+      // gets the same grace. While Panda only waits for a pause (player idle) nothing is talked over yet.
+      if (session.player.state.status !== AudioPlayerStatus.Idle && rms(pcm) >= BARGE_IN_RMS) {
         overlap += pcm.length;
         if (overlap >= BARGE_IN_BYTES) {
           overlap = 0;
-          hush(session);
+          wrapUp(session);
         }
       }
     } catch {
@@ -214,34 +225,58 @@ const floorTaken = (session) => [...session.connection.receiver.speaking.users.k
 // Plays one reply's audio as it arrives and resolves when the player is idle again.
 async function play(session, pcm) {
   const finished = once(session.player, AudioPlayerStatus.Idle);
-  session.player.play(createAudioResource(Readable.from(pcm), { inputType: StreamType.Raw }));
+  // A small byte buffer keeps what is read close to what is heard, so a wrap-up ends near where Panda is.
+  session.player.play(createAudioResource(Readable.from(pcm, { objectMode: false, highWaterMark: FRAME_BYTES * 5 }), { inputType: StreamType.Raw }));
   await finished;
 }
 
 // One reply, in one thunder request streamed into one audio resource: no gap
 // and no change of voice between its sentences. Like a person, Panda first
 // waits (a little) for whoever is talking to finish. `gen` is the speech
-// generation the reply was queued in; hush() moves it on, dropping the reply.
+// generation the reply was queued in; wrapUp() and hush() move it on, dropping
+// a reply that hasn't started; one already playing ends at its next pause (toPause).
 async function say(session, text, gen) {
   const spoken = spokenPart(text);
   if (!spoken) return;
   const abort = new AbortController();
   session.speaking = abort;
   try {
-    for (const until = Date.now() + FLOOR_WAIT_MS; !abort.signal.aborted && floorTaken(session) && Date.now() < until; ) await sleep(100);
+    for (const until = Date.now() + FLOOR_WAIT_MS; !abort.signal.aborted && gen === session.speechGen && floorTaken(session) && Date.now() < until; ) await sleep(100);
     if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
     const audio = await synthesizeStream(app.config, spoken, { signal: abort.signal });
     if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
-    await play(session, prebuffer(wavStreamToDiscordPcm(audio), PREBUFFER_BYTES));
+    await play(session, toPause(session, abort, prebuffer(wavStreamToDiscordPcm(audio), PREBUFFER_BYTES)));
   } catch (err) {
     if (!abort.signal.aborted) throw err; // a reply cut off on purpose is not a failure
   } finally {
+    abort.abort(); // a reply that ended at a pause would otherwise keep downloading
     if (session.speaking === abort) session.speaking = null;
+    if (session.wrapUp === abort) session.wrapUp = null;
   }
 }
 
-// Replies are spoken one after another, in the order they arrive; hush() drops
-// every one queued before it.
+// A reply's audio in 20 ms frames. Once Panda is talked over (wrapUp) it ends
+// at the reply's next pause, so Panda finishes its words instead of stopping
+// mid-word, or WRAP_UP_MS after that at the latest.
+async function* toPause(session, abort, pcm) {
+  let rest = Buffer.alloc(0);
+  let quiet = 0;
+  for await (const piece of pcm) {
+    rest = rest.length ? Buffer.concat([rest, piece]) : piece;
+    for (; rest.length >= FRAME_BYTES; rest = rest.subarray(FRAME_BYTES)) {
+      const frame = rest.subarray(0, FRAME_BYTES);
+      if (session.wrapUp === abort) {
+        quiet = rms(frame) < PAUSE_RMS ? quiet + 1 : 0;
+        if (quiet >= PAUSE_FRAMES || Date.now() - session.wrapUpAt > WRAP_UP_MS) return;
+      }
+      yield frame;
+    }
+  }
+  if (rest.length) yield rest;
+}
+
+// Replies are spoken one after another, in the order they arrive; wrapUp() and
+// hush() drop every one queued before them.
 function queueSpeech(session, text) {
   const gen = session.speechGen;
   session.queue = session.queue
@@ -251,19 +286,28 @@ function queueSpeech(session, text) {
   return session.queue;
 }
 
-// Talked over (or told to stop): Panda stops mid-word, and neither the rest of
-// that reply nor any reply waiting behind it is said.
+// Talked over (or told to stop): Panda finishes the sentence it is saying
+// (toPause) and then stops, and every reply waiting behind it is dropped.
+function wrapUp(session) {
+  session.speechGen++;
+  if (session.speaking && session.wrapUp !== session.speaking) {
+    session.wrapUp = session.speaking;
+    session.wrapUpAt = Date.now();
+  }
+}
+
+// Leaving: Panda stops at once, mid-word, and nothing more is said.
 function hush(session) {
   session.speechGen++;
   session.speaking?.abort();
   session.player.stop(true);
 }
 
-// "@Panda stop" also stops what Panda is saying in that server's call. True when it was saying something.
+// "@Panda stop" also stops what Panda is saying in that server's call, at the end of its sentence. True when it was saying something.
 export function stopSpeaking(guildId) {
   const session = sessions.get(guildId);
   if (!session?.speaking) return false;
-  hush(session);
+  wrapUp(session);
   return true;
 }
 
@@ -337,7 +381,7 @@ export async function joinVoice(member) {
   const session = {
     guild, channel, connection, player, capturing: new Map(), idle: null, closed: false, queue: Promise.resolve(), heard: Promise.resolve(),
     summonerId: member.id, deafened: false, serverDeaf: Boolean(guild.members.me?.voice?.serverDeaf),
-    speaking: null, speechGen: 0, noWebhook: false, speak: (reply) => queueSpeech(session, reply),
+    speaking: null, wrapUp: null, wrapUpAt: 0, speechGen: 0, noWebhook: false, speak: (reply) => queueSpeech(session, reply),
   };
   sessions.set(guild.id, session); // from now on music is refused here too
   // Without listeners an 'error' event would crash the bot.

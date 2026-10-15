@@ -111,6 +111,14 @@ export async function* wavStreamToDiscordPcm(pieces) {
   if (pcm.length) yield pcm;
 }
 
+// Loudness of 16-bit PCM: the root mean square of its samples.
+export function rms(pcm) {
+  const n = pcm.length >> 1;
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += pcm.readInt16LE(i * 2) ** 2;
+  return n ? Math.sqrt(sum / n) : 0;
+}
+
 // The first `bytes` of a stream handed on as one piece, so playback starts
 // with a cushion and a slow first second from thunder doesn't stutter.
 export async function* prebuffer(pieces, bytes) {
@@ -136,11 +144,11 @@ export const sentences = (text) =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-const MAX_SENTENCES = 3;
-const MAX_CHARS = 600;
+const MAX_SENTENCES = 2;
+const MAX_CHARS = 300;
 
 // The start of a reply as it should sound: markdown, links, code and mentions
-// removed, then at most 3 sentences and 600 characters. '' when nothing is
+// removed, then at most 2 sentences and 300 characters. '' when nothing is
 // left to say.
 export function spokenPart(text) {
   const plain = String(text ?? '')
