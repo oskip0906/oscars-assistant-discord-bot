@@ -20,6 +20,11 @@ const MAX_WINDOW_MESSAGES = 1000; // shortcut: a long, busy window is cut to its
 const COLUMNS = 'n.id, n.folder_id, n.title, n.description, n.body, n.author_id, n.created_at, n.file_name';
 // The most text a written note or file keeps; past it the full-text index would be too big.
 export const MAX_BODY = 200_000;
+// The most of a note open_note shows the model; edit_note replaces a whole text only when it fits, so the model has read all of it.
+export const MAX_NOTE_BODY = 10_000;
+
+// A note's text for the model, cut at `max` with a line saying how much was left out.
+export const shownBody = (body, max) => (body.length > max ? `${body.slice(0, max)}\n…(${body.length - max} more characters not shown)` : body);
 
 export async function loadTree(config) {
   const [folders, notes] = await Promise.all([

@@ -1,6 +1,6 @@
 import { configured } from '../../db.js';
 import { redactSecrets } from '../../config.js';
-import { findNotes, loadTree, folderPath, saveNote, createNote, openNote, windowMessages, MAX_BODY } from '../notes.js';
+import { findNotes, loadTree, folderPath, saveNote, createNote, openNote, windowMessages, shownBody, MAX_BODY } from '../notes.js';
 import { fileNameFor, noteFile, noteMessage } from '../../discord/notes.js';
 
 const MAX_TOOL_BODY = 3000;
@@ -83,7 +83,7 @@ export async function saveNoteFromChat({ minutes, topic = '' } = {}, invocation)
     const saved = await saveNote(invocation.config, { messages, authorId: here.author.id, topic: String(topic) });
     if (saved.error) return saved.error;
     const { note } = saved;
-    return `[NOTE SAVED — "${note.title}" in 📁 ${saved.path.join(' / ')}. Say it was saved (they can open it with /open_note) and share the summary.]\n${note.description}\n\n${note.body.slice(0, MAX_TOOL_BODY)}`;
+    return `[NOTE SAVED — "${note.title}" in 📁 ${saved.path.join(' / ')}. Say it was saved (they can open it with /open_note) and share the summary.]\n${note.description}\n\n${shownBody(note.body, MAX_TOOL_BODY)}`;
   } catch (err) {
     console.error('[notes] save from chat failed:', String(err.message || err).slice(0, 200));
     return `I couldn't save that note: ${String(err.message || err).slice(0, 150)}`;
@@ -100,7 +100,7 @@ export async function searchNotes({ query = '' } = {}, invocation) {
     if (!found.length) return 'No saved note matches — answer without notes.';
     return [
       `[SAVED NOTES — ${found.length} best match(es) for "${query}"]`,
-      ...found.map((n) => `--- 📁 ${folderPath(folders, n.folder_id).join(' / ')} › ${n.title} ---\n${n.description}\n${n.body.slice(0, MAX_TOOL_BODY)}`),
+      ...found.map((n) => `--- 📁 ${folderPath(folders, n.folder_id).join(' / ')} › ${n.title} ---\n${n.description}\n${shownBody(n.body, MAX_TOOL_BODY)}`),
     ].join('\n\n');
   } catch (err) {
     console.error('[notes] search failed:', String(err.message || err).slice(0, 200));
