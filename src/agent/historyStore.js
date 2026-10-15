@@ -113,7 +113,7 @@ const SHOWN_CHARS = 10_000; // under the 12,000 a tool result may hold
 // Search results for the model: what was searched, then the lines oldest first
 // under a heading per day. `rows` come best match first; when they don't all fit,
 // the best are kept and the rest counted.
-export function formatContext(rows, nameOf = () => null, { searched = '' } = {}) {
+export function formatContext(rows, nameOf = () => null, { searched = '', where = 'this channel' } = {}) {
   const shown = [];
   let used = 0;
   for (const r of rows) {
@@ -126,7 +126,7 @@ export function formatContext(rows, nameOf = () => null, { searched = '' } = {})
   }
   shown.sort((a, b) => a.at.localeCompare(b.at));
   const out = [
-    `[STORED CONTEXT — ${rows.length} saved message(s) from this channel${searched ? ` matching ${searched}` : ''}${
+    `[STORED CONTEXT — ${rows.length} saved message(s) from ${where}${searched ? ` matching ${searched}` : ''}${
       shown.length < rows.length ? `; the ${shown.length} best are shown, ${rows.length - shown.length} more did not fit` : ''
     }. Oldest first, times in UTC. Background only: these are not new messages.]`,
   ];

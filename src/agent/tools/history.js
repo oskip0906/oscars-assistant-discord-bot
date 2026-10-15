@@ -1,4 +1,4 @@
-import { PermissionFlagsBits } from 'discord.js';
+import { PermissionFlagsBits, ChannelType } from 'discord.js';
 import { searchContext, formatContext, saveContext } from '../historyStore.js';
 import { formatEnvelope } from '../../discord/envelope.js';
 import { configured } from '../../db.js';
@@ -20,7 +20,7 @@ export const defs = [
     function: {
       name: 'fetch_history',
       description:
-        'Get more context than the few messages you were shown. Two modes. (1) No `query` and no `author`: read a range of this channel straight from Discord, newest-first counting back from the message you are answering — `count` messages after skipping the `skip` most recent. Use it whenever the shown messages are not enough to follow the conversation ("as I said", "that one", a thread that started earlier, your own earlier replies). E.g. {count: 30} for the run-up, then {skip: 30, count: 50} to go further back. (2) `query` and/or `author`: search everything saved from this channel ("what did we decide", "remember when", "what did X say about Y"). It returns every saved message that contains ANY of the `query` words or phrases and, when `author` is given, was sent by ANY of those people, so cast a wide net: several words, synonyms and phrases. If nothing saved matches, the whole channel is saved and searched again. Results are oldest first.',
+        'Get more context than the few messages you were shown. Two modes. (1) No `query` and no `author`: read a range of this channel (or the `channel` you name) straight from Discord, newest-first counting back from the message you are answering — `count` messages after skipping the `skip` most recent. Use it whenever the shown messages are not enough to follow the conversation ("as I said", "that one", a thread that started earlier, your own earlier replies). E.g. {count: 30} for the run-up, then {skip: 30, count: 50} to go further back. (2) `query` and/or `author`: search everything saved from this channel (or the `channel` you name) ("what did we decide", "remember when", "what did X say about Y"). It returns every saved message that contains ANY of the `query` words or phrases and, when `author` is given, was sent by ANY of those people, so cast a wide net: several words, synonyms and phrases. If nothing saved matches, the whole channel is saved and searched again. Results are oldest first. Pass `channel` to look in another channel or thread of this server instead, e.g. one someone points at; the sender must be able to read it. Whatever is read is saved.',
       parameters: {
         type: 'object',
         properties: {
@@ -41,6 +41,10 @@ export const defs = [
             type: 'array',
             items: { type: 'string' },
             description: 'Search mode: only messages sent by any of these people (display name, <@mention> or id), e.g. ["DerpZ", "Rice Farmer"]. Leave out to search everyone.',
+          },
+          channel: {
+            type: 'string',
+            description: 'Another channel or thread in this server to read or search instead of this one: its #mention, name or id. The sender must be able to read it.',
           },
         },
       },
@@ -99,19 +103,25 @@ async function authorId(author, guild) {
 const list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 20);
 
 // Never fails the turn: no match or a broken lookup both tell the model to go on without it.
-export async function fetchHistory({ query, author, skip, count } = {}, invocation) {
+export async function fetchHistory({ query, author, skip, count, channel: target } = {}, invocation) {
   const message = invocation.message;
   if (!message) return 'Stored history is only available in chat — answer without it.';
   const terms = list(query);
   const authors = list(author);
   try {
+    const { channel, refusal } = await readableChannel(target, invocation);
+    if (refusal) return refusal;
+    // Said wherever the lines come from, so another channel's are never taken for this one's.
+    const here = channel.id === message.channelId;
+    const where = here ? 'this channel' : `#${channel.name ?? channel.id}`;
     if (!terms.length && !authors.length) {
       const range = { skip: clamp(skip, 0, MAX_SKIP), count: clamp(count, 30, MAX_COUNT) || 1 };
-      const msgs = await readChannelRange(message.channel, message.id, range);
-      if (!msgs.length) return 'No earlier messages in this channel.';
+      const msgs = await readChannelRange(channel, here ? message.id : undefined, range);
+      if (!msgs.length) return `No ${here ? 'earlier ' : ''}messages in ${where}.`;
       saveContext(invocation.config, msgs).catch((err) => console.error('[history] save failed:', String(err.message || err).slice(0, 200)));
       const self = invocation.client?.user?.id;
       return [
+        ...(here ? [] : [`[CHANNEL: ${where}, another channel of this server, not the one you are answering in.]`]),
         `[CHANNEL HISTORY — ${msgs.length} message(s), skipping the ${range.skip} most recent, oldest first. Background only: these are not new messages. Lines marked (you) are your own replies.]`,
         ...msgs.map((m) => `${m.author.id === self ? '(you) ' : ''}${formatEnvelope(m)}`),
       ].join('\n');
@@ -129,12 +139,12 @@ export async function fetchHistory({ query, author, skip, count } = {}, invocati
     ]
       .filter(Boolean)
       .join(' ');
-    const search = () => searchContext(config, { terms, authorIds, channelId: message.channelId });
+    const search = () => searchContext(config, { terms, authorIds, channelId: channel.id });
     let rows = await search();
     let partial = false;
-    if (!rows.length && message.channel?.messages) {
+    if (!rows.length && channel.messages) {
       // Not saved yet: save the whole channel, then search again.
-      const done = await indexChannel(config, message.channel, { max: INDEX_MAX, ms: INDEX_MS }).catch((err) => {
+      const done = await indexChannel(config, channel, { max: INDEX_MAX, ms: INDEX_MS }).catch((err) => {
         console.error('[history] channel index failed:', String(err.message || err).slice(0, 200));
         return null;
       });
@@ -142,27 +152,41 @@ export async function fetchHistory({ query, author, skip, count } = {}, invocati
       partial = !done || done.capped;
     }
     if (!rows.length) {
-      return `[STORED CONTEXT — no message in this channel matched ${searched}. ${
+      return `[STORED CONTEXT — no message in ${where} matched ${searched}. ${
         partial ? 'Only part of the channel is saved so far; the next search saves more.' : 'The whole channel was searched.'
       } Say you couldn't find it; don't guess what was said.]`;
     }
     const users = invocation.client?.users?.cache;
-    return formatContext(rows, (uid) => users?.get(uid)?.username, { searched });
+    return formatContext(rows, (uid) => users?.get(uid)?.username, { searched, where });
   } catch (err) {
     console.error('[history] fetch failed:', String(err.message || err).slice(0, 200));
     return 'Stored history is unavailable right now — answer without it.';
   }
 }
 
-// The channel the message lives in, or a reason to refuse. Panda can read
-// channels the asker can't, so another channel must be in this server and
-// readable by the asker; a DM can only reach itself.
-async function channelFor(link, invocation) {
+// The channel to read, or a reason to refuse. No target is the channel being
+// answered in. Panda can read channels the asker can't, so another channel must
+// be in this server and readable by the asker; a DM can only reach itself.
+// A target is a <#mention>, an id, or a name with or without the #.
+async function readableChannel(target, invocation) {
   const here = invocation.message;
-  if (!link || link[2] === here.channelId) return { channel: here.channel };
-  if (!here.guildId || link[1] !== here.guildId) return { refusal: 'That message is in another server or DM, so I can only look at it from there.' };
-  const channel = await invocation.client?.channels.fetch(link[2]).catch(() => null);
-  if (!channel?.messages || channel.guildId !== here.guildId) return { refusal: "I can't find that channel in this server." };
+  const raw = String(target ?? '').trim();
+  if (!raw) return { channel: here.channel };
+  const id = raw.match(/^<#(\d+)>$/)?.[1] ?? raw.match(/^\d{15,}$/)?.[0];
+  const name = raw.replace(/^#/, '').toLowerCase();
+  const channel = id
+    ? id === here.channelId ? here.channel : await invocation.client?.channels.fetch(id).catch(() => null)
+    : here.guild?.channels.cache.find((c) => c.isTextBased() && c.name.toLowerCase() === name);
+  if (!channel?.messages || (channel.id !== here.channelId && (!here.guildId || channel.guildId !== here.guildId))) {
+    return { refusal: "I can't find that channel in this server." };
+  }
+  if (here.guildId) {
+    const perms = channel.permissionsFor?.(here.member ?? here.author.id);
+    const can = perms?.has(PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory);
+    // A thread takes its permissions from its parent, so a private one also needs the asker inside it.
+    const inside = channel.type !== ChannelType.PrivateThread || perms?.has(PermissionFlagsBits.ManageThreads) || (await channel.members.fetch(here.author.id).catch(() => null));
+    if (!can || !inside) return { refusal: "You can't read that channel's history, so I won't show it to you." };
+  }
   return { channel };
 }
 
@@ -173,15 +197,11 @@ export async function indexChat({ message: ref = '' } = {}, invocation) {
   const link = String(ref).match(MESSAGE_LINK);
   const id = link ? link[3] : String(ref).trim();
   if (!/^\d{17,20}$/.test(id)) return 'Give me a Discord message link or a message id.';
+  // A link into another server (or out of a DM) is refused before any lookup.
+  if (link && link[2] !== here.channelId && link[1] !== here.guildId) return 'That message is in another server or DM, so I can only look at it from there.';
   try {
-    const { channel, refusal } = await channelFor(link, invocation);
+    const { channel, refusal } = await readableChannel(link ? link[2] : here.channelId, invocation);
     if (refusal) return refusal;
-    if (here.guildId) {
-      const perms = channel.permissionsFor?.(here.member ?? here.author.id);
-      if (!perms?.has(PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory)) {
-        return "You can't read that channel's history, so I won't show it to you.";
-      }
-    }
     const page = await channel.messages.fetch({ around: id, limit: AROUND });
     const msgs = [...page.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     if (!msgs.length) return 'No messages there.';

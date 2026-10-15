@@ -100,7 +100,13 @@ export const commandDefs = [
   new SlashCommandBuilder()
     .setName('self_fix')
     .setDescription('Patch Panda’s own source code and restart (owner only)')
-    .addStringOption((o) => o.setName('instruction').setDescription('What to change/fix about the bot').setRequired(true)),
+    .addStringOption((o) => o.setName('instruction').setDescription('What to change/fix about the bot').setRequired(true))
+    .addStringOption((o) =>
+      o
+        .setName('level')
+        .setDescription('How detailed the prompt for Claude Code is (default: medium)')
+        .addChoices({ name: 'simple', value: 'simple' }, { name: 'medium', value: 'medium' }, { name: 'complex', value: 'complex' }),
+    ),
   new SlashCommandBuilder()
     .setName('private')
     .setDescription('Private mode: Panda only responds to Oscar (owner only)')

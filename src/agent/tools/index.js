@@ -12,6 +12,7 @@ import * as notesTools from './notes.js';
 import * as commandTools from './commands.js';
 import * as sandboxTools from './sandbox.js';
 import * as modelInfoTools from './modelInfo.js';
+import * as databaseTools from './database.js';
 import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.js';
 
 // Owner-only tools. Gated by the AUTHENTICATED Discord author id
@@ -20,7 +21,7 @@ import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
 // set_model and private_mode are the tools behind the owner-only /set_model and
 // /private, so chat can't do what the command refuses.
-export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'add_rule', 'remove_rule', 'create_thread', 'send_to_thread', 'github', 'set_model', 'private_mode']);
+export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'add_rule', 'remove_rule', 'create_thread', 'send_to_thread', 'github', 'set_model', 'private_mode', 'query_db']);
 
 // Tools that only read or look something up. A turn starts without them: the
 // model answers from what it has, and calls need_more_info (agent.js) to get
@@ -29,12 +30,12 @@ export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'add_rule', 're
 // as before.
 export const LOOKUP_TOOLS = new Set([
   'web_search', 'web_fetch', 'image_search', 'reverse_image_search', 'video_search', 'news_search', 'wiki_search', 'research',
-  'fetch_history', 'index_chat', 'search_notes', 'list_notes', 'open_note', 'show_reminders',
+  'fetch_history', 'index_chat', 'query_db', 'search_notes', 'list_notes', 'open_note', 'show_reminders',
   'how_i_work', 'panda_commands', 'current_model', 'model_info', 'usage', 'server_info', 'get_user_id', 'get_message_sender',
 ]);
 export const isLookup = (name) => LOOKUP_TOOLS.has(name) || isGithubMcpTool(name);
 
-const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, voiceTools, historyTools, aboutTools, notesTools, commandTools, modelInfoTools, sandboxTools];
+const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, voiceTools, historyTools, aboutTools, notesTools, commandTools, modelInfoTools, sandboxTools, databaseTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -63,6 +64,7 @@ const executors = {
   voice: voiceTools.voiceTool,
   fetch_history: historyTools.fetchHistory,
   index_chat: historyTools.indexChat,
+  query_db: databaseTools.queryDb,
   how_i_work: aboutTools.howIWork,
   search_notes: notesTools.searchNotes,
   save_note: notesTools.saveNoteFromChat,
