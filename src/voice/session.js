@@ -24,10 +24,12 @@ import { synthesizeStream, transcribe } from './speech.js';
 // voice adapter, so they never run in the same server at once.
 
 const IDLE_MS = 5 * 60_000;
-const QUIET_MS = 1000; // this much silence ends an utterance
+const QUIET_MS = 800; // this much silence ends an utterance
 const BYTES_PER_SECOND = 48000 * 2 * 2; // 48 kHz, stereo, 16-bit
-const MIN_BYTES = 0.6 * BYTES_PER_SECOND; // shorter is a cough or a click, not speech
+const MIN_BYTES = 0.3 * BYTES_PER_SECOND; // shorter is a click or a breath; "yes", "no" and "stop" are longer
 const MAX_BYTES = 30 * BYTES_PER_SECOND;
+// Talking over Panda for this long stops it mid-word.
+const BARGE_IN_BYTES = 0.4 * BYTES_PER_SECOND;
 // Playback starts with this much audio in hand (48 kHz stereo 16-bit), so it doesn't stutter.
 const PREBUFFER_BYTES = 0.3 * BYTES_PER_SECOND;
 // Panda waits up to this long for someone to finish before it starts talking.
@@ -129,8 +131,6 @@ export function voiceMessage(posted, member, text, session) {
 // Everyone in the channel is heard, other bots too; only Panda itself isn't.
 function listen(session, userId) {
   if (session.closed || session.capturing.has(userId) || userId === app.client.user?.id) return;
-  // Panda's own voice comes back through other people's speakers; don't answer it.
-  if (session.player.state.status !== AudioPlayerStatus.Idle) return;
   if (blocked(userId)) return;
   const known = session.guild.members.cache.get(userId);
 
@@ -138,6 +138,7 @@ function listen(session, userId) {
   const decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
   const chunks = [];
   let bytes = 0;
+  let overlap = 0;
   const stream = session.connection.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: QUIET_MS } });
   session.capturing.set(userId, stream);
   stream.on('data', (packet) => {
@@ -145,6 +146,15 @@ function listen(session, userId) {
       const pcm = decoder.decode(packet);
       chunks.push(pcm);
       bytes += pcm.length;
+      // Talking over Panda for BARGE_IN_BYTES stops it; the next reply gets the same grace.
+      // While Panda only waits for a pause (player idle) nothing is being talked over yet.
+      if (session.player.state.status !== AudioPlayerStatus.Idle) {
+        overlap += pcm.length;
+        if (overlap >= BARGE_IN_BYTES) {
+          overlap = 0;
+          hush(session);
+        }
+      }
     } catch {
       // a damaged packet is a gap in the audio
     }
@@ -155,12 +165,21 @@ function listen(session, userId) {
   stream.once('close', () => {
     decoder.delete();
     if (session.capturing.get(userId) === stream) session.capturing.delete(userId);
+    if (stream.dropped || session.closed) return;
     // Cut off at the cap mid-sentence: carry on listening, so the rest isn't lost.
     if (bytes >= MAX_BYTES && session.connection.receiver.speaking.users.has(userId)) listen(session, userId);
     handleSpeech(session, userId, known, Buffer.concat(chunks)).catch((err) =>
       console.error('[voice] could not handle what was said:', String(err.message || err).slice(0, 200)),
     );
   });
+}
+
+// Utterances being recorded are ended and thrown away (leaving, or deafened).
+function dropCaptures(session) {
+  for (const stream of session.capturing.values()) {
+    stream.dropped = true;
+    stream.destroy();
+  }
 }
 
 // Utterances are transcribed side by side but posted in the order they ended,
@@ -264,8 +283,7 @@ function close(session, farewell = '') {
   clearTimeout(session.idle);
   if (sessions.get(session.guild.id) === session) sessions.delete(session.guild.id);
   hush(session); // stops the reply being said and its download; replies waiting behind it see the session closed
-  // Utterances still being captured end now; their 'close' sees the session closed and drops them.
-  for (const stream of session.capturing.values()) stream.destroy();
+  dropCaptures(session);
   if (session.connection.state.status !== VoiceConnectionStatus.Destroyed) session.connection.destroy();
   console.log(`[voice] left ${session.channel.name} in ${session.guild.name}`);
   if (farewell) session.channel.send(farewell).catch(() => {});
