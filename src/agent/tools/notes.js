@@ -199,6 +199,18 @@ export async function sendNoteFile({ title = '', file_name: fileName = '' } = {}
   }
 }
 
+// One edit at a time per note: a turn's tool calls run together, and two that read the same text would lose one of the changes.
+const editing = new Map();
+function onePerNote(id, task) {
+  const next = (editing.get(id) || Promise.resolve()).then(task);
+  const tail = next.catch(() => {});
+  editing.set(id, tail);
+  tail.then(() => {
+    if (editing.get(id) === tail) editing.delete(id);
+  });
+  return next;
+}
+
 // Never throws: a refusal or failure is text the model can pass on. Only the
 // note's author or Oscar can edit it, and updateNote keeps the old version.
 export async function editNote(args = {}, invocation) {
@@ -228,36 +240,38 @@ export async function editNote(args = {}, invocation) {
         ? `Several of their notes match "${wanted}": ${mine.slice(0, 10).map((n) => `"${n.title}"`).join(', ')}. Ask which one; nothing was changed.`
         : `They have no note matching "${wanted}" (only its author or Oscar can edit a note). Nothing was changed.`;
     }
-    const current = await getNote(config, pick.id);
-    if (!current) return 'That note is gone. Nothing was changed.';
+    return await onePerNote(pick.id, async () => {
+      const current = await getNote(config, pick.id);
+      if (!current) return 'That note is gone. Nothing was changed.';
 
-    const what = [];
-    if (title) what.push(`renamed from "${current.title}"`);
-    if (description) what.push('description changed');
-    let body = current.body;
-    if (content) {
-      if (current.body.length > MAX_NOTE_BODY) {
-        return `That note is longer than the ${MAX_NOTE_BODY} characters open_note shows, so you cannot have read all of it and replacing the whole text would lose the rest. Use \`append\`, or \`find\` and \`replace\`. Nothing was changed.`;
+      const what = [];
+      if (title) what.push(`renamed from "${current.title}"`);
+      if (description) what.push('description changed');
+      let body = current.body;
+      if (content) {
+        if (current.body.length > MAX_NOTE_BODY) {
+          return `That note is longer than the ${MAX_NOTE_BODY} characters open_note shows, so you cannot have read all of it and replacing the whole text would lose the rest. Use \`append\`, or \`find\` and \`replace\`. Nothing was changed.`;
+        }
+        body = content;
+        what.push('text replaced');
       }
-      body = content;
-      what.push('text replaced');
-    }
-    if (find) {
-      const hits = body.split(find).length - 1;
-      if (!hits) return `The note "${current.title}" has no text matching \`find\`. Read it with open_note and copy the exact text to change. Nothing was changed.`;
-      body = body.split(find).join(replace);
-      what.push(`${hits} occurrence(s) of the text changed`);
-    }
-    if (append) {
-      body = `${body.trimEnd()}\n\n${append}`;
-      what.push('text added');
-    }
-    if (body.length > MAX_BODY) return `That would make the note ${body.length} characters; a note holds at most ${MAX_BODY}. Nothing was changed.`;
-    if (body.length > current.body.length && isFull('notes')) return 'Storage for notes is full; Oscar has been asked to approve a cleanup. Nothing was changed.';
+      if (find) {
+        const hits = body.split(find).length - 1;
+        if (!hits) return `The note "${current.title}" has no text matching \`find\`. Read it with open_note and copy the exact text to change. Nothing was changed.`;
+        body = body.split(find).join(replace);
+        what.push(`${hits} occurrence(s) of the text changed`);
+      }
+      if (append) {
+        body = `${body.trimEnd()}\n\n${append}`;
+        what.push('text added');
+      }
+      if (body.length > MAX_BODY) return `That would make the note ${body.length} characters; a note holds at most ${MAX_BODY}. Nothing was changed.`;
+      if (body.length > current.body.length && isFull('notes')) return 'Storage for notes is full; Oscar has been asked to approve a cleanup. Nothing was changed.';
 
-    const updated = await updateNote(config, pick.id, { title: title || undefined, description: description || undefined, body: body === current.body ? undefined : body }, userId, isOwner);
-    if (!updated) return 'That note is gone, or it isn’t theirs to edit. Nothing was changed.';
-    return `[NOTE EDITED — "${updated.title}": ${what.join(', ')}. The old version is kept. Say what changed; don't repeat the note.]`;
+      const updated = await updateNote(config, pick.id, { title: title || undefined, description: description || undefined, body: body === current.body ? undefined : body }, userId, isOwner);
+      if (!updated) return 'That note is gone, or it isn’t theirs to edit. Nothing was changed.';
+      return `[NOTE EDITED — "${updated.title}": ${what.join(', ')}. The old version is kept. Say what changed; don't repeat the note.]`;
+    });
   } catch (err) {
     console.error('[notes] edit failed:', String(err.message || err).slice(0, 200));
     return `I couldn't edit that note: ${String(err.message || err).slice(0, 150)}`;
