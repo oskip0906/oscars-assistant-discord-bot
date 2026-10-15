@@ -2,7 +2,7 @@ import { db, configured } from '../db.js';
 import { decide } from './jev.js';
 import { askJson } from './research/askJson.js';
 import { isFull, noteWrite, pruneEmptyFolders } from '../storage.js';
-import { pickRelevant, relevantTo, worthRemembering, orQuery } from './historyStore.js';
+import { pickRelevant, relevantTo, worthRemembering, orQuery, saveContext } from './historyStore.js';
 
 export { orQuery };
 import { readChannelRange } from './tools/history.js';
@@ -72,10 +72,17 @@ export function childrenOf(folders) {
   return kids;
 }
 
-const WRITE = `You turn a Discord conversation into a note. Reply with ONLY JSON: {"title": "...", "description": "...", "body": "..."}.
-- title: short and specific, at most 80 characters.
+const WRITE = `You turn a Discord conversation into a note that indexes it, so anyone can later find any part of it by reading or searching the note. Reply with ONLY JSON: {"title": "...", "description": "...", "body": "..."}.
+- title: short and specific, at most 80 characters: what it was about, never "Conversation summary".
 - description: one line saying what the note holds, at most 150 characters.
-- body: Markdown that organizes everything discussed (facts, decisions, plans, open questions, links) under headings or bullets, naming who said what where it matters. Leave out nothing of substance; drop greetings and filler.`;
+- body: Markdown in this order, leaving out a section with nothing in it:
+  ## Summary: two or three sentences.
+  ## Topics: one ### heading per topic in the order they came up, starting with the [HH:MM] time it began; under each, bullets of what was said, naming who said it.
+  ## Decisions: what was agreed, and by whom.
+  ## Action items: who will do what, and by when if said.
+  ## Open questions: what was asked and left unanswered.
+  ## Links: every link shared, who shared it, and what it is.
+  Keep every fact, number, name and link; drop greetings and filler.`;
 
 const PLACE = `You file notes into a folder tree that works like a knowledge graph. You get the tree (folders nested by indentation, each with its description), a new note, and existing notes that may be related.
 Choose where the note belongs: reuse an existing folder when it covers the same subject, create a sub-folder when the note is a distinct part of an existing subject, and start a new top-level folder only for a new subject. Folder names are short, at most 40 characters.
@@ -96,6 +103,17 @@ const transcriptOf = (messages) =>
   messages
     .map((m) => `[${m.createdAt.toISOString().slice(0, 16).replace('T', ' ')}] ${m.member?.displayName || m.author.displayName || m.author.username}: ${m.content}`)
     .join('\n');
+
+// Where a saved note came from, written by code so it is always right.
+// shortcut: it counts every line the writer was given, including the oldest ones cut off a window over 60,000 characters when Jev is down; cut whole lines first if the count must be exact.
+function sourceFooter(messages) {
+  const [first] = messages;
+  const last = messages[messages.length - 1];
+  const unix = (d) => Math.floor(d.getTime() / 1000);
+  const people = [...new Set(messages.map((m) => m.member?.displayName || m.author.displayName || m.author.username))];
+  const link = `https://discord.com/channels/${first.guildId ?? '@me'}/${first.channelId}/${first.id}`;
+  return `\n\n---\n**Source:** <#${first.channelId}> · <t:${unix(first.createdAt)}:f> – <t:${unix(last.createdAt)}:t> · ${messages.length} message(s) · [jump to the start](${link})\n**People:** ${people.join(', ')}`;
+}
 
 // messages: Discord messages, oldest first. Returns { note, path } or { error }.
 export async function saveNote(config, { messages, authorId, topic = '' }, { ask = askJson, decideImpl = decide } = {}) {
@@ -118,9 +136,12 @@ export async function saveNote(config, { messages, authorId, topic = '' }, { ask
     isValid: (v) => str(v?.title, 80) && str(v?.description, 150) && str(v?.body, 20_000),
   });
   if (!written) return { error: 'The model could not write the note. Try again.' };
-  const note = { title: str(written.title, 80), description: str(written.description, 150), body: str(written.body, 20_000) };
+  const note = { title: str(written.title, 80), description: str(written.description, 150), body: str(written.body, 20_000) + sourceFooter(lines) };
 
-  return fileNote(config, note, authorId, ask);
+  const filed = await fileNote(config, note, authorId, ask);
+  // The window goes into the context store too, so the conversation itself can be searched later.
+  saveContext(config, messages).catch((err) => console.error('[notes] context save failed:', String(err.message || err).slice(0, 200)));
+  return filed;
 }
 
 // A note Panda wrote itself (create_note): text it was asked to write down, or
