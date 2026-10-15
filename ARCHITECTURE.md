@@ -147,7 +147,7 @@ Sources are masked links so Discord shows previews; chat replies still wrap link
 ## Voice
 
 `/voice join` (or the `voice` tool: "panda come to vc") puts Panda in the sender's voice channel and `/voice leave` takes it out; it needs `PMS_AI_KEY` and View Channel, Connect, Speak and Send Messages there (`src/voice/`).
-- Each utterance (ended by 1 s of silence, at most 30 s) is decoded, transcribed by PMS's `squall`, and posted in the voice channel's own chat as the speaker, through a "Panda voice" webhook (as Panda quoting them if there is no Manage Webhooks).
+- Each utterance (ended by 1 s of silence, at most 30 s) is decoded, transcribed by PMS's `squall`, and posted in the voice channel's own chat through a "Panda voice" webhook under the name `Slopbot (speaker)`, e.g. `Slopbot (DerpZ)`, with the speaker's picture (DerpZ's workaround; as Panda quoting them if there is no Manage Webhooks).
 - The text then goes through the same message pipeline as typed text: the same "is this for Panda?" gate, batching, Jev, tools, owner checks and private mode. The author is the real speaker, known from Discord's voice connection.
 - The reply is posted in that chat as usual, and its first 1–3 sentences (up to 600 characters, no markdown, links or code) are read aloud with PMS's `thunder`, one sentence being made while the last one plays.
 - Each person is captured one utterance at a time, and nobody is transcribed while Panda talks (it would only hear its own echo).
