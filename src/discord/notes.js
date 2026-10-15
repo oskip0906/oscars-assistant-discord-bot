@@ -1,7 +1,7 @@
 import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } from 'discord.js';
 import { randomEmbedColor } from './colors.js';
 import { chunkMessage } from './chunk.js';
-import { childrenOf, folderPath } from '../agent/notes.js';
+import { folderPath } from '../agent/notes.js';
 
 export const NOTES_PREFIX = 'notes:';
 const BODY_IN_EMBED = 3500;
@@ -47,29 +47,18 @@ export function noteMessage(note, folders, related = []) {
   return { embeds: [embed], rest, files: note.file_name ? [noteFile(note)] : [] };
 }
 
-// One folder (null = the top) as a browsable embed: the whole subtree, split
-// into pages when it is too long for one embed. The first page carries the
-// menus, which open a folder or a note; the others come back in `rest`, one
-// message each, so every note is listed.
+// One folder (null = the top) as a browsable embed, one level at a time and
+// names only: its sub-folders, then the notes filed directly in it. The first
+// page carries the menus, which open a folder or a note; if the names don't
+// fit one embed the others come back in `rest`, one message each, so every
+// one is listed.
 export function folderView({ folders, notes }, folderId = null) {
-  const kids = childrenOf(folders);
-  const notesIn = new Map();
-  for (const n of notes) {
-    if (!notesIn.has(n.folder_id)) notesIn.set(n.folder_id, []);
-    notesIn.get(n.folder_id).push(n);
-  }
-  const count = (id) => (notesIn.get(id)?.length || 0) + (kids.get(id) || []).reduce((sum, f) => sum + count(f.id), 0);
+  const subfolders = folders.filter((f) => (f.parent_id ?? null) === folderId);
+  const here = notes.filter((n) => n.folder_id === folderId);
 
-  const lines = [];
-  const walk = (id, depth) => {
-    for (const f of kids.get(id) || []) {
-      lines.push(`${' '.repeat(depth)}📁 **${f.name}** (${count(f.id)})`);
-      walk(f.id, depth + 1);
-    }
-    for (const n of notesIn.get(id) || []) lines.push(`${' '.repeat(depth)}📄 ${n.title} — ${n.description}`);
-  };
-  walk(folderId, 0);
-  const pages = lines.length ? chunkMessage(lines.join('\n'), TREE_CHARS) : ['No notes yet — save one with `/save_note`.'];
+  const lines = [...subfolders.map((f) => `📁 **${f.name}**`), ...here.map((n) => `📄 ${n.title}`)];
+  const empty = folderId === null ? 'No notes yet — save one with `/save_note`.' : 'This folder is empty.';
+  const pages = lines.length ? chunkMessage(lines.join('\n'), TREE_CHARS) : [empty];
 
   const title = clip(folderId === null ? '📚 Notes' : `📁 ${folderPath(folders, folderId).join(' / ')}`, 256);
   const color = randomEmbedColor();
@@ -84,8 +73,8 @@ export function folderView({ folders, notes }, folderId = null) {
   // Discord caps a menu at 25 options and a message at 5 rows, so the entries
   // are spread over up to MENUS menus, leaving a row for the Up button.
   const options = [
-    ...(kids.get(folderId) || []).map((f) => ({ label: clip(`📁 ${f.name}`, 100), value: `f${f.id}`, ...(f.description && { description: clip(f.description, 100) }) })),
-    ...(notesIn.get(folderId) || []).map((n) => ({ label: clip(`📄 ${n.title}`, 100), value: `n${n.id}`, ...(n.description && { description: clip(n.description, 100) }) })),
+    ...subfolders.map((f) => ({ label: clip(`📁 ${f.name}`, 100), value: `f${f.id}` })),
+    ...here.map((n) => ({ label: clip(`📄 ${n.title}`, 100), value: `n${n.id}` })),
   ];
   const components = [];
   for (let i = 0; i < options.length && components.length < MENUS; i += MENU_SIZE) {

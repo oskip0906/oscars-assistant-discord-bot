@@ -1,6 +1,7 @@
 import { configured } from '../../db.js';
 import { redactSecrets } from '../../config.js';
-import { findNotes, loadTree, folderPath, saveNote, createNote, openNote, windowMessages, MAX_BODY } from '../notes.js';
+import { isFull } from '../../storage.js';
+import { findNotes, loadTree, folderPath, saveNote, createNote, openNote, getNote, noteChoices, updateNote, windowMessages, shownBody, MAX_BODY, MAX_NOTE_BODY } from '../notes.js';
 import { fileNameFor, noteFile, noteMessage } from '../../discord/notes.js';
 
 const MAX_TOOL_BODY = 3000;
@@ -69,6 +70,27 @@ export const defs = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'edit_note',
+      description:
+        "Change a saved note in place instead of deleting and re-making it — the sender's own notes; Oscar may edit any. Rename it, rewrite its one-line description, replace its whole text, add to the end, or swap exact text for new text. Read it first with open_note to see its exact current text. Its old version is kept, so an edit can be undone.",
+      parameters: {
+        type: 'object',
+        properties: {
+          note: { type: 'string', description: 'The note’s current title, or words from it.' },
+          title: { type: 'string', description: 'A new title, up to 80 characters.' },
+          description: { type: 'string', description: 'A new one-line description, up to 150 characters.' },
+          content: { type: 'string', description: 'The whole new text, replacing all of it. Only for a note you have read in full.' },
+          append: { type: 'string', description: 'Text to add at the end of the note.' },
+          find: { type: 'string', description: 'Exact text in the note to change; every occurrence is changed.' },
+          replace: { type: 'string', description: 'What `find` becomes; empty deletes it.' },
+        },
+        required: ['note'],
+      },
+    },
+  },
 ];
 
 // Sent from the tool, so it skips the reply path: scrub it the same way.
@@ -83,7 +105,7 @@ export async function saveNoteFromChat({ minutes, topic = '' } = {}, invocation)
     const saved = await saveNote(invocation.config, { messages, authorId: here.author.id, topic: String(topic) });
     if (saved.error) return saved.error;
     const { note } = saved;
-    return `[NOTE SAVED — "${note.title}" in 📁 ${saved.path.join(' / ')}. Say it was saved (they can open it with /open_note) and share the summary.]\n${note.description}\n\n${note.body.slice(0, MAX_TOOL_BODY)}`;
+    return `[NOTE SAVED — "${note.title}" in 📁 ${saved.path.join(' / ')}. Say it was saved (they can open it with /open_note) and share the summary.]\n${note.description}\n\n${shownBody(note.body, MAX_TOOL_BODY)}`;
   } catch (err) {
     console.error('[notes] save from chat failed:', String(err.message || err).slice(0, 200));
     return `I couldn't save that note: ${String(err.message || err).slice(0, 150)}`;
@@ -100,7 +122,7 @@ export async function searchNotes({ query = '' } = {}, invocation) {
     if (!found.length) return 'No saved note matches — answer without notes.';
     return [
       `[SAVED NOTES — ${found.length} best match(es) for "${query}"]`,
-      ...found.map((n) => `--- 📁 ${folderPath(folders, n.folder_id).join(' / ')} › ${n.title} ---\n${n.description}\n${n.body.slice(0, MAX_TOOL_BODY)}`),
+      ...found.map((n) => `--- 📁 ${folderPath(folders, n.folder_id).join(' / ')} › ${n.title} ---\n${n.description}\n${shownBody(n.body, MAX_TOOL_BODY)}`),
     ].join('\n\n');
   } catch (err) {
     console.error('[notes] search failed:', String(err.message || err).slice(0, 200));
@@ -174,5 +196,84 @@ export async function sendNoteFile({ title = '', file_name: fileName = '' } = {}
   } catch (err) {
     console.error('[notes] send file failed:', String(err.message || err).slice(0, 200));
     return `I couldn't send that file: ${String(err.message || err).slice(0, 150)}`;
+  }
+}
+
+// One edit at a time per note: a turn's tool calls run together, and two that read the same text would lose one of the changes.
+const editing = new Map();
+function onePerNote(id, task) {
+  const next = (editing.get(id) || Promise.resolve()).then(task);
+  const tail = next.catch(() => {});
+  editing.set(id, tail);
+  tail.then(() => {
+    if (editing.get(id) === tail) editing.delete(id);
+  });
+  return next;
+}
+
+// Never throws: a refusal or failure is text the model can pass on. Only the
+// note's author or Oscar can edit it, and updateNote keeps the old version.
+export async function editNote(args = {}, invocation) {
+  const { config, message, isOwner } = invocation;
+  if (!configured(config)) return 'Notes are not set up (no database), so there is no saved note to edit. Nothing was changed.';
+  const userId = message?.author?.id;
+  if (!userId) return 'Notes can only be edited from chat. Nothing was changed.';
+  // A missing or null argument counts as not given.
+  const text = (v) => (typeof v === 'string' ? v : '');
+  const wanted = text(args.note).trim();
+  const title = text(args.title).trim().slice(0, 80);
+  const description = text(args.description).trim().slice(0, 150);
+  const content = text(args.content).trim();
+  const append = text(args.append).trim();
+  const find = text(args.find);
+  const replace = text(args.replace);
+  if (!title && !description && !content && !append && !find) {
+    return 'Nothing was changed: say what to change — a new `title` or `description`, new `content`, text to `append`, or `find` with what to `replace` it with.';
+  }
+  try {
+    // Only among the sender's own notes (all of them for Oscar), as delete_note does.
+    const mine = await noteChoices(config, wanted, isOwner ? null : userId);
+    const exact = mine.find((n) => n.title.toLowerCase() === wanted.toLowerCase());
+    const pick = exact ?? (mine.length === 1 ? mine[0] : null);
+    if (!pick) {
+      return mine.length
+        ? `Several of their notes match "${wanted}": ${mine.slice(0, 10).map((n) => `"${n.title}"`).join(', ')}. Ask which one; nothing was changed.`
+        : `They have no note matching "${wanted}" (only its author or Oscar can edit a note). Nothing was changed.`;
+    }
+    return await onePerNote(pick.id, async () => {
+      const current = await getNote(config, pick.id);
+      if (!current) return 'That note is gone. Nothing was changed.';
+
+      const what = [];
+      if (title) what.push(`renamed from "${current.title}"`);
+      if (description) what.push('description changed');
+      let body = current.body;
+      if (content) {
+        if (current.body.length > MAX_NOTE_BODY) {
+          return `That note is longer than the ${MAX_NOTE_BODY} characters open_note shows, so you cannot have read all of it and replacing the whole text would lose the rest. Use \`append\`, or \`find\` and \`replace\`. Nothing was changed.`;
+        }
+        body = content;
+        what.push('text replaced');
+      }
+      if (find) {
+        const hits = body.split(find).length - 1;
+        if (!hits) return `The note "${current.title}" has no text matching \`find\`. Read it with open_note and copy the exact text to change. Nothing was changed.`;
+        body = body.split(find).join(replace);
+        what.push(`${hits} occurrence(s) of the text changed`);
+      }
+      if (append) {
+        body = `${body.trimEnd()}\n\n${append}`;
+        what.push('text added');
+      }
+      if (body.length > MAX_BODY) return `That would make the note ${body.length} characters; a note holds at most ${MAX_BODY}. Nothing was changed.`;
+      if (body.length > current.body.length && isFull('notes')) return 'Storage for notes is full; Oscar has been asked to approve a cleanup. Nothing was changed.';
+
+      const updated = await updateNote(config, pick.id, { title: title || undefined, description: description || undefined, body: body === current.body ? undefined : body }, userId, isOwner);
+      if (!updated) return 'That note is gone, or it isn’t theirs to edit. Nothing was changed.';
+      return `[NOTE EDITED — "${updated.title}": ${what.join(', ')}. The old version is kept. Say what changed; don't repeat the note.]`;
+    });
+  } catch (err) {
+    console.error('[notes] edit failed:', String(err.message || err).slice(0, 200));
+    return `I couldn't edit that note: ${String(err.message || err).slice(0, 150)}`;
   }
 }

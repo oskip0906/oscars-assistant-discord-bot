@@ -68,6 +68,7 @@ const executors = {
   save_note: notesTools.saveNoteFromChat,
   create_note: notesTools.createNoteFromChat,
   send_note_file: notesTools.sendNoteFile,
+  edit_note: notesTools.editNote,
   panda_commands: commandTools.pandaCommands,
   current_model: commandTools.currentModel,
   model_info: modelInfoTools.modelInfo,
@@ -81,6 +82,7 @@ const executors = {
   add_reminder: commandTools.addReminderTool,
   show_reminders: commandTools.showReminders,
   delete_reminder: commandTools.deleteReminderTool,
+  edit_reminder: commandTools.editReminderTool,
   sandbox: sandboxTools.sandboxTool,
 };
 

@@ -16,7 +16,7 @@ const REST = LIMIT - PERSONA;
 export const SECTIONS = {
   persona: { label: 'Persona', budget: PERSONA, tables: ['prompts', 'bot_settings'] },
   context: { label: 'Context', budget: REST * 0.75, tables: ['context_messages'] },
-  notes: { label: 'Notes', budget: REST * 0.2, tables: ['notes', 'note_folders', 'note_links'] },
+  notes: { label: 'Notes', budget: REST * 0.2, tables: ['notes', 'note_folders', 'note_links', 'note_revisions'] },
   reminders: { label: 'Reminders', budget: REST * 0.05, tables: ['reminders', 'user_settings'] },
 };
 

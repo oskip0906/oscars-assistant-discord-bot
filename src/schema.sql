@@ -82,6 +82,17 @@ create table if not exists note_links (
 -- A note can be a file (create_note with a file name): its body is the file's
 -- text and file_name what it is sent back as ("plan.md", "list.csv").
 alter table notes add column if not exists file_name text;
+-- What a note said before each edit_note, so an edit can be undone by hand.
+create table if not exists note_revisions (
+  id bigserial primary key,
+  note_id bigint not null references notes (id) on delete cascade,
+  title text not null,
+  description text not null,
+  body text not null,
+  edited_by text not null,
+  edited_at timestamptz not null default now()
+);
+create index if not exists note_revisions_note on note_revisions (note_id, edited_at);
 
 -- Reminders. next_at is absolute; repeats are recomputed from local_time in the
 -- creator's timezone so they survive daylight saving changes.

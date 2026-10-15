@@ -71,8 +71,8 @@ Beyond the slash commands, Panda calls these on its own while chatting (details 
 
 - **Discord:** look up members and message senders, read server info (channels, roles, events, emojis, threads), react with emoji, post polls and embed cards (link buttons, clickable buttons, dropdowns). Panda listens and answers in threads too, to people and bots alike.
 - **Web:** search the web and images, search by image (pages with matching pictures), read any public page.
-- **Memory:** read further back in a channel, search what it remembered, index the messages around an old one, and save, list, open and find notes, create notes and files (.txt, .md and other text files) that are stored with the notes and sent as attachments or cards, and send any saved note back as a file (deleting one posts the same confirmation as `/delete_note`).
-- **Reminders and research:** add, show and delete reminders, and run the full `/research` pipeline.
+- **Memory:** read further back in a channel, search what it remembered, index the messages around an old one, and save, list, open, find and edit notes (an edit keeps the old version), create notes and files (.txt, .md and other text files) that are stored with the notes and sent as attachments or cards, and send any saved note back as a file (deleting one posts the same confirmation as `/delete_note`).
+- **Reminders and research:** add, show, change and delete reminders, and run the full `/research` pipeline.
 - **Slash commands:** explain any command from its registered definition, say which model it runs on (the live setting), look up any OpenRouter model's price, context and providers (`model_info`), and report spend.
 - **Music:** play, skip, pause, resume, stop and show the queue.
 - **Self-knowledge:** read ARCHITECTURE.md and its own source on GitHub to explain how it works.
