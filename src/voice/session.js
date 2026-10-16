@@ -12,7 +12,7 @@ import {
   joinVoiceChannel,
 } from '@discordjs/voice';
 import OpusScript from 'opusscript';
-import { prebuffer, rms, spokenPart, toMono, wav, wavStreamToDiscordPcm } from './audio.js';
+import { prebuffer, rms, sentences, spokenPart, toMono, wav, wavStreamToDiscordPcm } from './audio.js';
 import { synthesizeStream, transcribe } from './speech.js';
 
 // Voice mode. Panda sits in a voice channel and listens to everyone in it,
@@ -259,23 +259,29 @@ async function play(session, pcm) {
   await finished;
 }
 
-// One reply, in one thunder request streamed into one audio resource: no gap
-// and no change of voice between its sentences. Like a person, Panda first
-// waits (a little) for whoever is talking to finish. `gen` is the speech
+// One reply, said sentence by sentence into one audio resource. Thunder only
+// answers once a clip is whole, so the first sentence is asked for alone (it
+// starts playing in a second or two) and each next one is made while the one
+// before it plays. The fixed voice style (speech.js) keeps every sentence the
+// same speaker. Like a person, Panda first waits (a little) for whoever is
+// talking to finish, while its first sentence is being made. `gen` is the speech
 // generation the reply was queued in; wrapUp() and hush() move it on, dropping
 // a reply that hasn't started; one already playing ends at its next pause (toPause).
 async function say(session, text, gen) {
   const spoken = spokenPart(text);
   if (!spoken) return;
+  const parts = sentences(spoken);
   const abort = new AbortController();
   session.speaking = abort;
   try {
+    const first = synthesizeStream(app.config, parts[0], { signal: abort.signal });
+    first.catch(() => {}); // awaited below, unless the reply is dropped first
     for (const until = Date.now() + FLOOR_WAIT_MS; !abort.signal.aborted && gen === session.speechGen && floorTaken(session) && Date.now() < until; ) await sleep(100);
     if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
-    const audio = await synthesizeStream(app.config, spoken, { signal: abort.signal });
+    const audio = await first;
     if (abort.signal.aborted || gen !== session.speechGen || session.closed) return;
     session.said = [...session.said.filter((s) => Date.now() - s.at < ECHO_MS), { words: words(spoken), at: Date.now() }];
-    await play(session, toPause(session, abort, prebuffer(wavStreamToDiscordPcm(audio), PREBUFFER_BYTES)));
+    await play(session, toPause(session, abort, prebuffer(spokenPcm(parts, audio, abort.signal), PREBUFFER_BYTES)));
     session.said[session.said.length - 1].at = Date.now(); // the echo window runs from when it stopped talking
   } catch (err) {
     if (!abort.signal.aborted) throw err; // a reply cut off on purpose is not a failure
@@ -283,6 +289,19 @@ async function say(session, text, gen) {
     abort.abort(); // a reply that ended at a pause would otherwise keep downloading
     if (session.speaking === abort) session.speaking = null;
     if (session.wrapUp === abort) session.wrapUp = null;
+  }
+}
+
+// The sentences' audio as one PCM stream: each next sentence is asked for as
+// soon as the one before it arrives, one request at a time, so PMS makes them
+// in order. A hold-up between them is silence (MAX_STALL_FRAMES), not an end.
+async function* spokenPcm(parts, audio, signal) {
+  for (let i = 1; ; i++) {
+    const next = i < parts.length ? synthesizeStream(app.config, parts[i], { signal }) : null;
+    next?.catch(() => {}); // awaited below, unless the reply ends first
+    yield* wavStreamToDiscordPcm(audio);
+    if (!next) return;
+    audio = await next;
   }
 }
 

@@ -21,7 +21,7 @@ import { config } from '../src/config.js';
 const commons = (path) => `https://upload.wikimedia.org/wikipedia/commons/${path}`;
 const image = (name, url, size = 300_000) => ({ id: name, name, contentType: name.endsWith('.png') ? 'image/png' : 'image/jpeg', size, url, sender: 'Rice (@rice)' });
 const LIVE_TOOLS = ['web_search', 'news_search', 'web_fetch', 'wiki_search'];
-// Answer first: a turn that looks something up spends one call saying so (need_more_info).
+// Answer first: a turn that looks something up spends one call saying so (need_more_info), unless Jev picked the lookup.
 
 const CASES = {
   photo: {

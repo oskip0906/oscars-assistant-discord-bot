@@ -4,11 +4,12 @@ import { redactSecrets } from '../config.js';
 // speech into text, thunder turns text into speech.
 const BASE_URL = 'https://api.pmservers.org/ai/v1';
 const TIMEOUT_MS = 30_000;
-const SPEECH_TIMEOUT_MS = 90_000; // a whole reply's audio is one download now, and the timeout covers reading it
-// Sent with every reply, word for word, so every reply is the same speaker.
-// session.js speaks a whole reply in ONE request, so the voice can't drift
-// between sentences either.
-const VOICE_STYLE = 'Always the same speaker: a calm, friendly young adult with a warm, medium-pitched voice, an even conversational pace, steady volume and a neutral accent. No whispering, singing, shouting or sudden changes of emotion.';
+const SPEECH_TIMEOUT_MS = 90_000; // covers PMS's queue, the render and reading the clip
+// Thunder ignores `voice` (the API still requires one) and makes up a speaker
+// for each text from `instructions`. A description without a gender and age
+// gave a man for one sentence and a woman for the next, so this one pins both.
+// session.js sends each sentence as its own request, so it must stay word for word.
+const VOICE_STYLE = 'A calm young man in his twenties with a low, warm, relaxed voice, an even conversational pace, steady volume and a neutral North American accent.';
 const SPEECH = { model: 'thunder', voice: 'alloy', instructions: VOICE_STYLE, response_format: 'wav' };
 
 async function post(config, path, { body, headers, signal, timeoutMs = TIMEOUT_MS }, fetchImpl) {
@@ -31,11 +32,11 @@ export async function transcribe(config, wavBuffer, { fetchImpl = fetch } = {}) 
   return String((await res.json()).text ?? '').trim();
 }
 
-// Text as speech, streamed: resolves as soon as thunder starts answering, to
-// the WAV's bytes as they arrive, so playback can start before the file is
-// whole. The body is read ahead of playback, so a long reply played at
-// speaking pace never runs into the request's timeout. `signal` cuts the
-// request (and the download) short.
+// Text as speech: resolves when thunder starts answering, to the WAV's bytes
+// as they arrive. Thunder answers only once the whole clip is made (about as
+// long as the clip itself), so session.js asks for one sentence at a time. The
+// body is read ahead of playback, so a clip played at speaking pace never runs
+// into the request's timeout. `signal` cuts the request (and the download) short.
 export async function synthesizeStream(config, text, { fetchImpl = fetch, signal } = {}) {
   const body = JSON.stringify({ ...SPEECH, input: text });
   const res = await post(config, '/audio/speech', { body, headers: { 'Content-Type': 'application/json' }, signal, timeoutMs: SPEECH_TIMEOUT_MS }, fetchImpl);

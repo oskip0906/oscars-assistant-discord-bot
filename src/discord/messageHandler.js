@@ -17,14 +17,14 @@ import { isVoiceWebhook, stopSpeaking } from '../voice/session.js';
 //
 // A trigger is a ping, a reply to Panda, a DM, or any other message Jev says is
 // meant for Panda (forPanda). The FIRST trigger from a sender opens a collection
-// batch for them (config.batchWindowMs, BATCH_WINDOW_MS, default 1.5s).
+// batch for them (config.batchWindowMs, BATCH_WINDOW_MS, default 1s).
 // Everything that sender says in that window is concatenated into one model
 // input (the timer does NOT reset). Triggers from OTHER senders during that time
 // are not dropped: each opens their own batch in the channel's queue — it
 // collects its sender's follow-ups for its own window and is processed when its
 // turn comes. Batches are processed strictly one at a time per channel, in the
 // order their triggers were sent, and never before their window has elapsed.
-const WINDOW_MS = 1500;
+const WINDOW_MS = 1000;
 
 // Messages shown above each turn as background, and the most of each one that
 // is kept. The same 5 are what Jev reads to decide whether to answer at all.
@@ -36,7 +36,7 @@ const TALK = 0.8;
 // Said aloud in a call there is no ping or reply to Panda, so the bar is lower there.
 const VOICE_TALK = 0.5;
 // Speech already arrives cut at its pauses, so a call's turn waits only briefly for more of it.
-const VOICE_WINDOW_MS = 400;
+const VOICE_WINDOW_MS = 150;
 // identity.md is cut to this for Jev, which reads it to tell what is meant for Panda.
 const IDENTITY_CHARS = 2000;
 // Unaddressed messages are reacted to only when Jev leans yes, then sampled.

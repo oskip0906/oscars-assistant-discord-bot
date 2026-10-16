@@ -146,6 +146,9 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   log(contextKey, `triage (prep ${prepMs}ms, jev ${Date.now() - turnStart - prepMs}ms): signOff=${plan.signOff} tools=${plan.tools.join(',') || 'none'} form=${plan.form ?? 'text'} mood=${plan.mood ?? '?'} lookup=${plan.needsContext} think=${plan.think}${plan.jevDown ? ' (jev down)' : ''}`);
   // A goodbye gets a wave and nothing else, so the conversation can end.
   if (plan.signOff) return signOff(invocation);
+  // A call is answered fast: no reasoning, and the voice tool ("leave", "deafen") is always at hand.
+  const fromVoice = Boolean(invocation.message?.fromVoice);
+  if (fromVoice) plan.think = false;
   // An Oscar-only lookup (query_db) Jev picks for a guest's question is just never offered; only an action stops the turn.
   const locked = plan.tools.find((name) => OWNER_ONLY_TOOLS.has(name) && !isLookup(name));
   if (locked && !invocation.isOwner) return `Only Oscar can use \`${locked}\`.`;
@@ -170,39 +173,49 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
   // Jev's read of the mood shapes the reply's tone and which reactions are offered.
   if (plan.mood) messages.push({ role: 'user', content: `[TONE] Jev reads the turn as ${plan.mood}: ${MOOD_NOTE[plan.mood]}` });
   // A voice reply is read aloud, so it is short and works as speech.
-  if (invocation.message?.fromVoice) messages.push({ role: 'user', content: '[VOICE] This came from voice chat and your reply is read aloud, so answer the way you talk on a call: one or two short sentences (at most 30 words), shorter than you would type, with no markdown, links, lists, code or emoji. Add details only when asked for them.' });
+  if (fromVoice) messages.push({ role: 'user', content: '[VOICE] This came from voice chat and your reply is read aloud, so answer the way you talk on a call: one or two short sentences (at most 30 words), shorter than you would type, with no markdown, links, lists, code or emoji. Add details only when asked for them.' });
 
   // A reaction is a tool call too, so the forms that react offer `react`. A
-  // reaction-only turn gets just Jev's picks; a turn with words Jev's action
-  // picks (Oscar's only for Oscar), more_tools for the other actions, and
-  // need_more_info for the lookups.
+  // reaction-only turn gets just Jev's picks; a turn with words Jev's picks
+  // (Oscar's only for Oscar), more_tools for the other actions, and
+  // need_more_info for the other lookups. A lookup Jev picked is listed from the
+  // start, so a turn that needs it doesn't spend a model call asking for it.
   const reacts = plan.form === 'reaction' || plan.form === 'both';
   const wordy = plan.form !== 'reaction';
   const picked = new Set(plan.tools);
+  if (picked.has('web_search')) picked.add('web_fetch'); // searching and reading a link go together
   const eligible = allTools.filter(({ function: { name } }) => name !== 'react' && (invocation.isOwner || !OWNER_ONLY_TOOLS.has(name)));
   const lookups = eligible.filter((t) => isLookup(t.function.name));
   const offered = allTools.filter(({ function: { name } }) =>
-    name === 'react' ? reacts : wordy ? !isLookup(name) && eligible.some((t) => t.function.name === name) && (plan.jevDown || picked.has(name)) : picked.has(name),
+    name === 'react'
+      ? reacts
+      : wordy
+        ? eligible.some((t) => t.function.name === name) && (picked.has(name) || (!isLookup(name) && (plan.jevDown || (fromVoice && name === 'voice'))))
+        : picked.has(name),
   );
   // Set once need_more_info has been called: lookups may then be added by name too.
   let lookingUp = false;
   const unoffered = () => eligible.filter((t) => !offered.includes(t) && (lookingUp || !isLookup(t.function.name))).map((t) => t.function.name);
   const suggested = moodEmoji(plan.mood, random);
   const notes = [
-    picked.size ? `Jev's guess at tools that may help: ${[...picked].join(', ')}. Advice, not a must: a lookup among them is only worth need_more_info if you can't answer without it.` : '',
+    picked.size ? `Jev's guess at tools that may help: ${[...picked].join(', ')}. Advice, not a must: call a lookup among them only if you can't answer without it.` : '',
     reacts ? `React with exactly one emoji that fits the mood, and vary it: for example one of ${suggested.join(' ')}, or any better fit (not always the same one). Only your first reaction is added.${wordy ? ' Write your reply as text in the same message as the reaction.' : ' No words.'}` : '',
     plan.needsContext
-      ? `\`message\` may refer to something the recent messages do not explain. If you can't tell what, call need_more_info for fetch_history (an earlier conversation), search_notes (a note)${invocation.isOwner ? ' and query_db (anything else saved)' : ''}, then search with a \`query\` list of key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) rather than guessing.`
+      ? `\`message\` may refer to something the recent messages do not explain. If you can't tell what, look it up with fetch_history (an earlier conversation), search_notes (a note)${invocation.isOwner ? ' or query_db (anything else saved)' : ''} (need_more_info opens one that isn't listed), searching with a \`query\` list of key words, synonyms and phrases (e.g. ["event", "party", "saturday"]) rather than guessing.`
       : '',
   ].filter(Boolean);
   // Rounds of tool calls, leaving the last model call for the answer. A later
   // round that answers in words instead of calling more is the answer.
   let answer = null;
   let listed = [];
+  // name + arguments of every lookup run this turn: the same lookup again gets a
+  // pointer to its result instead of running twice. Actions may repeat on
+  // purpose (skip twice), so they always run.
+  const done = new Set();
   for (let round = 1; round < MAX_MODEL_CALLS; round++) {
     // react is offered until it has been used, so a later round can't pile on more.
     const more = wordy ? unoffered() : [];
-    const closed = wordy && !lookingUp ? lookups.map((t) => t.function.name) : [];
+    const closed = wordy && !lookingUp ? lookups.filter((t) => !offered.includes(t)).map((t) => t.function.name) : [];
     listed = [
       ...(invocation.reacted ? offered.filter((t) => t.function.name !== 'react') : offered),
       ...(more.length ? [moreToolsDef(more)] : []),
@@ -230,7 +243,15 @@ export async function runAgent(invocation, userContent, turnText = userContent, 
     const run = (call) => {
       // Lookups open only through need_more_info, never by name here.
       if (call.function.name === MORE_TOOLS) return addTools(call, eligible.filter((t) => lookingUp || !isLookup(t.function.name)), offered);
-      if (call.function.name !== NEED_MORE_INFO) return runTool(call, invocation, contextKey);
+      if (call.function.name !== NEED_MORE_INFO) {
+        const key = `${call.function.name} ${call.function.arguments || '{}'}`;
+        if (isLookup(call.function.name) && done.has(key)) {
+          log(contextKey, `↺ ${call.function.name} again with the same arguments: not run`);
+          return { role: 'tool', tool_call_id: call.id, content: 'Not run again: you already called this with the same arguments this turn, and its result is above. Use that result; answer now if it is enough.' };
+        }
+        done.add(key);
+        return runTool(call, invocation, contextKey);
+      }
       lookingUp = true;
       return openLookups(call, lookups, offered, contextKey);
     };

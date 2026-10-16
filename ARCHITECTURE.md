@@ -5,8 +5,8 @@ This is a compact guide to Panda’s runtime. For the command list, see the [REA
 ## Message flow
 
 1. **Decide whether to answer.** Pings, replies to Panda, and DMs are direct triggers. Jev checks other server messages for a likely response or a notable reaction. DMs are not saved. Private mode drops messages from anyone except Oscar before they are saved or evaluated. “@Panda stop” cancels the sender’s active and queued turns; Oscar can stop everyone’s turns in that channel.
-2. **Batch and build context.** Messages from the same sender are grouped briefly, then handled in channel order. A turn includes the request, recent messages, server and user details, saved rules and prompts, and available attachments. Voice turns use their own queue.
-3. **Triage and answer.** Jev picks the response form, mood, and likely tools. The conversation model writes the reply. It starts with selected action tools; lookups are made available when it asks for missing information. Tool calls run with validated arguments and owner checks.
+2. **Batch and build context.** Messages from the same sender are grouped briefly, then handled in channel order. A turn includes the request, recent messages, server and user details, saved rules and prompts, and available attachments. Voice turns use their own queue, a shorter grouping window and no reasoning, so they answer faster than text.
+3. **Triage and answer.** Jev picks the response form, mood, and likely tools. The conversation model writes the reply. It starts with the tools Jev picked, lookups included; other lookups are made available when it asks for missing information. Tool calls run with validated arguments and owner checks, and the same call is never run twice in a turn.
 4. **Reply and save.** Panda sends its answer and any requested reactions or cards, then saves the turn and recent context. Long replies are split to fit Discord.
 
 Threads go through the same message flow as channels. Interactive card buttons and menus are acknowledged, then handled as requests from the person who clicked them.
@@ -49,7 +49,7 @@ Owner-only tools check the authenticated Discord user ID. Tool arguments are che
 
 ## Voice
 
-`/voice join` connects to the caller’s voice channel. PMS speech services transcribe what people say, route transcripts through the normal message flow, and read Panda’s short reply aloud. It keeps listening while speaking; people can interrupt it, and `deafen` pauses transcription. In private mode, guests’ speech is not transcribed. Voice requires `PMS_AI_KEY` and Discord channel permissions. Music and voice cannot use the same server connection.
+`/voice join` connects to the caller’s voice channel. PMS speech services transcribe what people say, route transcripts through the normal message flow, and read Panda’s short reply aloud one sentence at a time: PMS's `thunder` model only returns a clip once all of it is made, so the next sentence is made while the current one plays. Thunder ignores the `voice` field and picks a speaker for each request from `instructions`, so a fixed description that names the gender and age keeps every sentence in the same voice. It keeps listening while speaking; people can interrupt it, and `deafen` pauses transcription. In private mode, guests’ speech is not transcribed. Voice requires `PMS_AI_KEY` and Discord channel permissions. Music and voice cannot use the same server connection.
 
 ## Code sandbox and self-fix
 
