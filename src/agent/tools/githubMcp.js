@@ -11,7 +11,7 @@ export const GITHUB_MCP_READONLY_URL = 'https://api.githubcopilot.com/mcp/readon
 const RESERVED = new Set([
   'get_user_id', 'get_message_sender', 'react', 'create_poll', 'send_card', 'web_search', 'web_fetch', 'image_search',
   'video_search', 'news_search', 'wiki_search', 'reverse_image_search',
-  'github', 'set_rule', 'self_fix', 'play_music',
+  'github', 'set_rule', 'play_music',
   'fetch_history', 'index_chat', 'how_i_work', 'search_notes', 'create_note', 'send_note_file',
 ]);
 
@@ -25,7 +25,7 @@ export function resetGithubMcp() {
   names = new Set();
 }
 
-// The default toolsets plus actions, which the self-fix monitor reads runs from.
+// The default toolsets plus actions, so workflow runs can be read too.
 export const GITHUB_MCP_TOOLSETS = 'default,actions';
 
 function makeClient(config) {
@@ -37,7 +37,7 @@ function makeClient(config) {
 }
 
 // Every GitHub read the bot makes in code goes through here, so reads share the
-// read-only server's guarantee; only writes (commits, dispatches) use REST.
+// read-only server's guarantee; only writes (commits, the github tool) use REST.
 // Resolves to the raw tools/call result; a tool error rejects.
 export async function githubRead(name, args, { config = botConfig, client } = {}) {
   if (!config?.githubPat) throw new Error('GITHUB_PAT is not set');

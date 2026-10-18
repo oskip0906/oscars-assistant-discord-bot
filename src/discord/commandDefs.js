@@ -7,7 +7,7 @@ import { SlashCommandBuilder } from 'discord.js';
 // from commands.js, which imports the agent, so the agent can import this.
 
 // Commands only Oscar can run, checked against the authenticated user id.
-export const OWNER_ONLY_COMMANDS = new Set(['set_model', 'self_fix', 'private', 'set_rule', 'index_channel', 'clear']);
+export const OWNER_ONLY_COMMANDS = new Set(['set_model', 'private', 'set_rule', 'index_channel', 'clear']);
 
 export const commandDefs = [
   new SlashCommandBuilder().setName('menu').setDescription('Show everything Panda can do'),
@@ -96,16 +96,6 @@ export const commandDefs = [
           { name: 'normal', value: 'normal' },
           { name: 'deep', value: 'deep' },
         ),
-    ),
-  new SlashCommandBuilder()
-    .setName('self_fix')
-    .setDescription('Patch Panda’s own source code and restart (owner only)')
-    .addStringOption((o) => o.setName('instruction').setDescription('What to change/fix about the bot').setRequired(true))
-    .addStringOption((o) =>
-      o
-        .setName('level')
-        .setDescription('How detailed the prompt for Claude Code is (default: medium)')
-        .addChoices({ name: 'simple', value: 'simple' }, { name: 'medium', value: 'medium' }, { name: 'complex', value: 'complex' }),
     ),
   new SlashCommandBuilder()
     .setName('private')

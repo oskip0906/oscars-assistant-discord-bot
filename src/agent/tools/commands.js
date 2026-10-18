@@ -212,7 +212,6 @@ export const COMMAND_TOOLS = {
   news_search: { tool: 'news_search' },
   wiki_search: { tool: 'wiki_search' },
   research: { tool: 'research' },
-  self_fix: { tool: 'self_fix' },
   private: { tool: 'private_mode' },
   save_note: { tool: 'save_note' },
   display_notes: { tool: 'list_notes' },
