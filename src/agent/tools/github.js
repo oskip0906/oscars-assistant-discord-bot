@@ -4,7 +4,7 @@ export const defs = [
     function: {
       name: 'github',
       description:
-        "OWNER ONLY. GitHub REST API WRITES, authenticated as Oscar (oskip0906): create or edit issues, comments, labels, releases and the like. Reads are not allowed here: use the GitHub MCP tools (get_file_contents, list_pull_requests, search_code, …) for anything that only looks. Endpoint must start with '/'. Example: POST /repos/{owner}/{repo}/issues with body {title}. Never use this to create source commits or change code.",
+        "OWNER ONLY. GitHub REST API WRITES, authenticated as Oscar (oskip0906): create or edit issues, comments, labels, releases and the like. Reads are not allowed here: use the GitHub MCP tools (get_file_contents, list_pull_requests, search_code, …) for anything that only looks. Endpoint must start with '/'. Example: POST /repos/{owner}/{repo}/issues with body {title}. Never use this to create source commits: use self_fix so code changes go through the approved remote sandbox.",
       parameters: {
         type: 'object',
         properties: {

@@ -1,4 +1,4 @@
-import { ActionRowBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { MessageFlags } from 'discord.js';
 import { commandDefs } from './commandDefs.js';
 import { buildMenuEmbeds } from './menu.js';
 import { buildUsageEmbed } from './usage.js';
@@ -11,11 +11,12 @@ import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { buildSearchQuery } from '../agent/research/searchQuery.js';
 import { webSearch, webFetch, imageSearch, reverseImageSearch, videoSearch, newsSearch, wikiSearch } from '../agent/tools/search.js';
+import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
+import { selfFixState } from '../selfFixState.js';
 import { runResearch } from '../agent/research/pipeline.js';
 import { renderReport } from '../agent/research/render.js';
 import { redactSecrets } from '../config.js';
 import { setRule } from '../agent/tools/rules.js';
-import { runSandbox } from '../agent/tools/sandbox.js';
 import { UI_PREFIX, clickAsMessage, createPoll, sendCard } from '../agent/tools/ui.js';
 import { lookupModel, modelCard, modelInfoChoices } from '../agent/tools/modelInfo.js';
 import { saveNote, windowMessages, loadTree, openNote, getNote, relatedNotes, noteChoices, deleteNote, folderPath } from '../agent/notes.js';
@@ -34,12 +35,12 @@ export { commandDefs };
 // throw used to escape the handler and surface as a client error while the click
 // itself was perfectly good, so fall back to editing the message with the bot
 // token, which has neither the 3-second budget nor the 15-minute expiry.
-async function answerClick(interaction, content) {
+async function answerApproval(interaction, content) {
   try {
     await interaction.update({ content, components: [] });
   } catch (err) {
     if (err?.code !== 10062 && err?.code !== 40060) {
-      console.error('[panda] could not answer a button click:', err.message);
+      console.error('[panda] could not answer a development approval:', err.message);
     }
     await interaction.message?.edit({ content, components: [] }).catch(() => {});
   }
@@ -53,17 +54,7 @@ async function showFolder(interaction, tree, folderId, send) {
   for (const part of rest) await interaction.followUp(part);
 }
 
-// The /sandbox answer: what happened, then the output in a code block, with the
-// oldest output cut so that all of it fits one 2000-character message.
-function sandboxReply({ head, body, text }) {
-  if (!head) return text;
-  const output = body.replace(/```/g, "'''");
-  const room = 2000 - head.length - 50;
-  const shown = output.length > room ? `…(${output.length - room} earlier chars cut)\n${output.slice(-room)}` : output;
-  return `**${head}**\n\`\`\`\n${shown}\n\`\`\``;
-}
-
-export function createInteractionHandler({ client, config, player, privateMode, onMessage }) {
+export function createInteractionHandler({ client, config, player, privateMode, state = selfFixState, onMessage }) {
   return async (interaction) => {
     // A click on a button or menu Panda sent (send_card). Acknowledge now, since
     // Discord's 3-second deadline would pass during batching, then hand it to the
@@ -83,9 +74,9 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       const { label } = SECTIONS[section];
       if (action !== 'clean') {
         dismiss(section);
-        return await answerClick(interaction, `⏸️ Left **${label}** as it is. It stays full, and I'll ask again in an hour.`);
+        return await answerApproval(interaction, `⏸️ Left **${label}** as it is. It stays full, and I'll ask again in an hour.`);
       }
-      await answerClick(interaction, `🧹 Deleting the oldest **${label}** entries…`);
+      await answerApproval(interaction, `🧹 Deleting the oldest **${label}** entries…`);
       try {
         const { deleted, used } = await cleanup(config, section);
         await interaction.message?.edit(`✅ Deleted ${deleted} of the oldest **${label}** entries. It now holds ${mb(used)} of ${mb(SECTIONS[section].budget)}.`);
@@ -126,6 +117,42 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       return;
     }
 
+    if (interaction.isButton?.()) {
+      const approval = parseApprovalButtonId(interaction.customId);
+      if (!approval) return;
+      if (interaction.user.id !== config.ownerId) {
+        return await interaction
+          .reply({ content: '⛔ Only Oscar can approve development work.', flags: MessageFlags.Ephemeral })
+          .catch(() => {});
+      }
+      if (!state.matchesPendingApproval(interaction.user.id, approval.id)) {
+        // Say which of the two it is. "Expired" was neither true nor useful:
+        // approvals have no deadline, and the usual cause is a card left over
+        // from before a restart, which no amount of waiting will revive.
+        const why = approval.fromThisBoot
+          ? '🚫 This request was already answered, or a newer one took its place. Send it again for a fresh card.'
+          : '🔁 This card is from before my last restart, so the request behind it is gone. Send it again and I will post a fresh one.';
+        await interaction.reply({ content: why, flags: MessageFlags.Ephemeral }).catch(() => {});
+        // Retire the dead card so it cannot be clicked a second time.
+        await interaction.message?.edit({ components: [] }).catch(() => {});
+        return;
+      }
+      // Answer before consuming. submitApproval resolves the promise the
+      // development run is waiting on, and that run resumes — issuing its own
+      // OpenRouter and GitHub calls — ahead of this reply reaching Discord.
+      await answerApproval(
+        interaction,
+        approval.approved ? '✅ Development task approved. Starting the remote sandbox…' : '🚫 Development task cancelled.',
+      );
+      if (!state.submitApproval(interaction.user.id, approval.id, approval.approved)) {
+        // A newer request superseded this one in the moment Discord was answered.
+        await interaction.message
+          ?.edit({ content: '🚫 A newer request took over before this one could start. Nothing ran.', components: [] })
+          .catch(() => {});
+      }
+      return;
+    }
+
     // Autocomplete is a separate interaction type with a 3s budget and no
     // deferral — answer it from the cached catalog and return.
     if (interaction.isAutocomplete()) {
@@ -157,32 +184,10 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       }
     }
 
-    // The code typed into the /sandbox form.
-    if (interaction.isModalSubmit?.() && interaction.customId?.startsWith('sandbox:')) {
-      if (privateMode?.isOn() && interaction.user.id !== config.ownerId) {
-        return await interaction.reply({ content: PRIVATE_MESSAGE, flags: MessageFlags.Ephemeral }).catch(() => {});
-      }
-      try {
-        await interaction.deferReply();
-        const result = await runSandbox({
-          channelId: interaction.channelId,
-          channel: interaction.channel,
-          language: interaction.customId.slice('sandbox:'.length),
-          code: interaction.fields.getTextInputValue('code'),
-          config,
-        });
-        await interaction.editReply({ content: redactSecrets(sandboxReply(result)), allowedMentions: { parse: [] } });
-      } catch (err) {
-        console.error('[sandbox] run failed:', err.message);
-        await interaction.editReply(`⚠️ ${redactSecrets(err.message).slice(0, 200)}`).catch(() => {});
-      }
-      return;
-    }
-
     if (!interaction.isChatInputCommand()) return;
 
     // Discord gives 3s to acknowledge an interaction. One delivered while the
-    // bot was down (e.g. during a restart) can arrive already near/past
+    // bot was down (e.g. during a self_fix restart) can arrive already near/past
     // that deadline — any deferReply/reply then throws 10062 "Unknown
     // interaction". Drop it up front instead of failing a doomed API call.
     if (Date.now() - interaction.createdTimestamp > 2600) return;
@@ -195,7 +200,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       config,
       client,
       isOwner: interaction.user.id === config.ownerId,
-      // Some tools post progress via message.channel.send;
+      // Some tools (self_fix) post progress via message.channel.send;
       // fall back to a no-op channel if the interaction has no cached channel.
       message: { channel: interaction.channel ?? { send: async () => {} } },
     });
@@ -451,6 +456,17 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         return await runTool(reverseImageSearch, { image, count: undefined });
       }
 
+      if (name === 'self_fix') {
+        if (!isOwner) {
+          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
+        }
+        await interaction.deferReply();
+        // The prompt writer's lookups (fetch_history…) read the message, guild and member of a chat turn.
+        const invocation = { ...buildInvocation(), guild: interaction.guild, member: interaction.member, message: { channel: interaction.channel ?? { send: async () => {} }, channelId: interaction.channelId, guild: interaction.guild, guildId: interaction.guildId, author: interaction.user, member: interaction.member } };
+        await sendToolResult(selfFix({ instruction: interaction.options.getString('instruction', true), level: interaction.options.getString('level') ?? undefined }, invocation));
+        return;
+      }
+
       // --- Notes and reminders (anyone) ---------------------------------
 
       if (name === 'save_note') {
@@ -597,20 +613,6 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         }
         await interaction.deferReply();
         return await interaction.editReply(await voiceCommand(interaction.options.getString('action', true), interaction.member));
-      }
-
-      // A slash option can't hold line breaks, so the code is typed into a form.
-      if (name === 'sandbox') {
-        return await interaction.showModal(
-          new ModalBuilder()
-            .setCustomId(`sandbox:${interaction.options.getString('language') ?? 'python'}`)
-            .setTitle('Run code')
-            .addComponents(
-              new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('code').setLabel('Code').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(4000),
-              ),
-            ),
-        );
       }
 
       // Music commands below

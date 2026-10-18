@@ -1,6 +1,6 @@
 # panda-bot 🐼
 
-Oscar’s Discord AI assistant: it chats, remembers useful context, searches and researches, takes notes, sets reminders, plays music, and runs code in a sandbox.
+Oscar’s Discord AI assistant: it chats, remembers useful context, searches and researches, takes notes, sets reminders, plays music, and can improve its own code with Oscar’s approval.
 
 ![Screenshot of Panda-bot](assets/Panda_Screenshot.png)
 
@@ -17,7 +17,6 @@ Most commands also work as a chat request. `/index_channel` and `/clear` are sla
 | `/web_search <query>` · `/web_fetch <url>` | Search the web or read a page. |
 | `/image_search <query>` · `/reverse_image_search <image\|url>` | Find images or search the web using an image. |
 | `/video_search <query>` · `/news_search <query>` · `/wiki_search <query>` | Search videos, recent news, or Wikipedia. |
-| `/sandbox [python\|javascript\|bash]` | **Code sandbox:** run code in an isolated Linux environment; ask Panda to share files it creates. |
 | `/create_poll <question> <answers>` | Post a Discord poll. Separate answers with `\|`. |
 | `/create_card <title> [description] [buttons] [menu]` | Post a rich card with optional buttons or dropdown. |
 
@@ -43,6 +42,7 @@ Most commands also work as a chat request. `/index_channel` and `/clear` are sla
 
 | Command | Description |
 |---------|-------------|
+| `/self_fix <instruction> [level]` | **Self-fix:** prepare a code change, show Oscar an approval card, then open and merge a change and restart Panda. |
 | `/set_model <model> [provider]` | Switch Panda’s AI model. |
 | `/set_rule <instruction>` | Change Panda’s personality or behavior. |
 | `/private <on\|off\|status>` | Limit replies to Oscar or check the current setting. |
@@ -58,6 +58,6 @@ Most commands also work as a chat request. `/index_channel` and `/clear` are sla
 
 ## Other tools
 
-While chatting, Panda can read server and message context, react, create threads and interactive cards, search and read the web, and find or update saved notes and reminders. It can also look up older channel messages and explain how it works. Oscar can additionally use GitHub, read saved database records, and manage standing rules.
+While chatting, Panda can read server and message context, react, create threads and interactive cards, search and read the web, and find or update saved notes and reminders. It can also look up older channel messages and explain how it works. Oscar can additionally use GitHub, read saved database records, manage standing rules, and start approved self-fixes.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how Panda handles messages, memory, research, voice, sandboxes, and deployment.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how Panda handles messages, memory, research, voice, self-fix, and deployment.

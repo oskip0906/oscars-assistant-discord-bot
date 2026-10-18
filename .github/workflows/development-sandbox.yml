@@ -63,7 +63,7 @@ jobs:
             --max-turns 60
             --dangerously-skip-permissions
             --permission-prompts none
-            --append-system-prompt "You are running unattended in CI and nobody can reply. Never ask questions or wait for confirmation: choose the most reasonable reading of the task, finish it, and end with a short summary of what you changed and any assumptions you made. Do not install dependencies: there are no tests, and the change is merged as soon as you finish, so make it carefully. Do not commit, push, or open a pull request; the workflow does that. Do not edit .github/, .env files, data/, or node_modules/."
+            --append-system-prompt "You are running unattended in CI and nobody can reply. Never ask questions or wait for confirmation: choose the most reasonable reading of the task, finish it, and end with a short summary of what you changed and any assumptions you made. Do not install dependencies: there are no tests, and the change is merged as soon as you finish, so make it carefully. Do not commit, push, or open a pull request; the workflow does that. Do not edit .github/, .env files, data/, or node_modules/. When a word in the task could mean more than one feature, take the one its slash command or tool name points to and change nothing else. Never remove or disable self_fix (src/agent/tools/source.js, src/agent/tools/developmentSandbox.js): it is what is running you."
 
       # The action hides Claude's output; its last message says why a run failed
       # or changed nothing (a bad token, a task it could not act on).
@@ -78,6 +78,10 @@ jobs:
           if git diff --cached --quiet; then echo "::error::Claude made no changes"; exit 1; fi
           if git diff --cached --name-only | grep -Ei '(^|/)(\.git|node_modules|data)/|(^|/)\.env(\.|$)|^\.github/'; then
             echo "::error::The change touches a protected path"; exit 1
+          fi
+          # self_fix never deletes itself: "remove the sandbox" once removed self_fix instead. Oscar does that by hand.
+          if git diff --cached --name-only --diff-filter=D | grep -E '^src/agent/tools/(source|developmentSandbox)\.js$'; then
+            echo "::error::The change deletes self_fix itself"; exit 1
           fi
       - name: Push and open pull request
         env:

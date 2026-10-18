@@ -19,7 +19,7 @@ Postgres stores prompts, private-mode state, message context, notes, and reminde
 
 ## Models and Jev
 
-Conversation calls use OpenRouter. The configured model handles chat, research, and personality updates. Jev is a separate, fast decision model for whether to join a conversation, how to respond, and which tools may help. If Jev is unavailable, the bot uses its fallback behavior and remains available.
+Conversation calls use OpenRouter. The configured model handles chat, research, personality updates, and self-fix prompts; Claude Code makes the approved code change. Jev is a separate, fast decision model for whether to join a conversation, how to respond, and which tools may help. If Jev is unavailable, the bot uses its fallback behavior and remains available.
 
 Reasoning is off by default. Calls retry transient failures and can fall back to a configured general model when the request has no attachments. Oscar can change the model and optionally pin a provider with `/set_model`; `/model` and `/usage` report model details and spending.
 
@@ -33,7 +33,7 @@ The model can use tools for Discord, web research, memory, notes, reminders, mus
 | Web | Search web, images, reverse images, videos, news, and Wikipedia; read public pages. |
 | Memory | Search readable chat history, index messages, search and manage notes, and query saved data. Database queries are read-only and Oscar-only. |
 | Reminders and music | Create, edit, list, or delete reminders; control playback and the queue. |
-| Oscar-only | Read or write GitHub, manage standing rules and model settings, and toggle private mode. |
+| Oscar-only | Read or write GitHub, manage standing rules and model settings, toggle private mode, and request a self-fix. |
 
 Owner-only tools check the authenticated Discord user ID. Tool arguments are checked against each tool’s schema before execution. GitHub reads use a read-only MCP connection; GitHub writes use the bot’s authenticated API.
 
@@ -51,9 +51,9 @@ Owner-only tools check the authenticated Discord user ID. Tool arguments are che
 
 `/voice join` connects to the caller’s voice channel. PMS speech services transcribe what people say, route transcripts through the normal message flow, and read Panda’s short reply aloud one sentence at a time: PMS's `thunder` model only returns a clip once all of it is made, so the next sentence is made while the current one plays. Thunder ignores the `voice` field and picks a speaker for each request from `instructions`, so a fixed description that names the gender and age keeps every sentence in the same voice. It keeps listening while speaking; people can interrupt it, and `deafen` pauses transcription. In private mode, guests’ speech is not transcribed. Voice requires `PMS_AI_KEY` and Discord channel permissions. Music and voice cannot use the same server connection.
 
-## Code sandbox
+## Self-fix
 
-`/sandbox` runs Python, JavaScript, or bash in an isolated PMS Cloud sandbox. It is available to everyone, has internet access, and receives no bot secrets. Runs have a time and output limit; created files can be posted back to the channel. The sandbox template is built by `scripts/build-sandbox-template.mjs`.
+`/self_fix` is Oscar-only and changes Panda’s own repository. A prompt writer can gather relevant notes and chat history; Panda then shows the proposed prompt in an approval card. Only Oscar’s approval starts a GitHub Actions run on a temporary branch. The workflow checks the change, merges it, and the deployment restarts Panda. The run continues in the background while Panda handles other messages.
 
 ## Safety and deployment
 
@@ -72,6 +72,6 @@ src/agent/research/ research pipeline
 src/voice/         voice capture, transcription, and playback
 src/music/         music playback
 src/db.js          database connection and schema setup
-scripts/           research evaluation and sandbox template build
-.github/           image build and deployment workflows
+scripts/           research evaluation
+.github/           image build, deployment, and self-fix workflows
 ```

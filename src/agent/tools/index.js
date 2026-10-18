@@ -3,13 +3,13 @@ import * as searchTools from './search.js';
 import * as githubTools from './github.js';
 import * as rulesTools from './rules.js';
 import * as uiTools from './ui.js';
+import * as sourceTools from './source.js';
 import * as musicTools from './music.js';
 import * as voiceTools from './voice.js';
 import * as historyTools from './history.js';
 import * as aboutTools from './about.js';
 import * as notesTools from './notes.js';
 import * as commandTools from './commands.js';
-import * as sandboxTools from './sandbox.js';
 import * as modelInfoTools from './modelInfo.js';
 import * as databaseTools from './database.js';
 import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.js';
@@ -20,12 +20,12 @@ import { githubMcpTools, callGithubMcpTool, isGithubMcpTool } from './githubMcp.
 // PAT and could otherwise read/modify his private repos on a guest's behalf.
 // set_model and private_mode are the tools behind the owner-only /set_model and
 // /private, so chat can't do what the command refuses.
-export const OWNER_ONLY_TOOLS = new Set(['set_rule', 'add_rule', 'remove_rule', 'create_thread', 'send_to_thread', 'github', 'set_model', 'private_mode', 'query_db']);
+export const OWNER_ONLY_TOOLS = new Set(['self_fix', 'set_rule', 'add_rule', 'remove_rule', 'create_thread', 'send_to_thread', 'github', 'set_model', 'private_mode', 'query_db']);
 
 // Tools that only read or look something up. A turn starts without them: the
 // model answers from what it has, and calls need_more_info (agent.js) to get
 // them only when it can't. Every GitHub MCP tool is a read too. Everything
-// else does something (react, poll, reminder, music…) and is offered
+// else does something (react, poll, reminder, music, self_fix…) and is offered
 // as before.
 export const LOOKUP_TOOLS = new Set([
   'web_search', 'web_fetch', 'image_search', 'reverse_image_search', 'video_search', 'news_search', 'wiki_search', 'research',
@@ -34,7 +34,7 @@ export const LOOKUP_TOOLS = new Set([
 ]);
 export const isLookup = (name) => LOOKUP_TOOLS.has(name) || isGithubMcpTool(name);
 
-const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, musicTools, voiceTools, historyTools, aboutTools, notesTools, commandTools, modelInfoTools, sandboxTools, databaseTools];
+const modules = [discordTools, uiTools, searchTools, githubTools, rulesTools, sourceTools, musicTools, voiceTools, historyTools, aboutTools, notesTools, commandTools, modelInfoTools, databaseTools];
 
 const allDefs = modules.flatMap((m) => m.defs);
 
@@ -58,6 +58,7 @@ const executors = {
   set_rule: rulesTools.setRule,
   add_rule: rulesTools.addRule,
   remove_rule: rulesTools.removeRule,
+  self_fix: sourceTools.selfFix,
   play_music: musicTools.playMusic,
   voice: voiceTools.voiceTool,
   fetch_history: historyTools.fetchHistory,
@@ -83,7 +84,6 @@ const executors = {
   show_reminders: commandTools.showReminders,
   delete_reminder: commandTools.deleteReminderTool,
   edit_reminder: commandTools.editReminderTool,
-  sandbox: sandboxTools.sandboxTool,
 };
 
 const schemas = new Map(allDefs.map((d) => [d.function.name, d.function.parameters]));

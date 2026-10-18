@@ -5,7 +5,11 @@ import { updatePresence } from './presence.js';
 import { createPlayer } from './music/player.js';
 import { createMessageHandler } from './discord/messageHandler.js';
 import { commandDefs, createInteractionHandler } from './discord/commands.js';
-import { killPandaSandboxes } from './agent/tools/sandbox.js';
+import { approvalCard } from './agent/tools/source.js';
+import { devRunStore } from './agent/tools/developmentSandbox.js';
+import { githubReadJson } from './agent/tools/githubMcp.js';
+import { resolveInterruptedRun } from './devRunStore.js';
+import { dmOwner } from './discord/notify.js';
 import { ensureSchema } from './db.js';
 import { loadModel } from './discord/model.js';
 import { startReminders } from './reminders.js';
@@ -56,15 +60,24 @@ async function boot(intents) {
     }
     console.log(`[panda] Registered ${commandDefs.length} slash commands in ${registered} guild(s)`);
 
+    // Nothing from before the restart is left dangling: an approval card that
+    // can no longer be honoured loses its buttons, and a development run that
+    // was still in flight gets the finish line and the DM its process never
+    // lived to send. A self-fix ends in a restart, so this is the normal path
+    // for reporting one — not an edge case.
     joinActiveThreads(readyClient)
       .then((n) => n && console.log(`[panda] Joined ${n} active thread(s)`))
       .catch((err) => console.error('[panda] could not join the active threads:', err.message));
-    // The /sandbox sandboxes of the last run would hold their slots until they time out.
-    killPandaSandboxes(config)
-      .then((n) => n && console.log(`[panda] Stopped ${n} sandbox(es) left from before the restart`))
-      .catch((err) => console.error('[panda] could not stop the old sandboxes:', err.message));
+    await approvalCard.retireStale(readyClient).catch(() => {});
     startReminders(readyClient, config);
     watchStorage(readyClient, config);
+    await resolveInterruptedRun({
+      store: devRunStore,
+      read: (name, args) => githubReadJson(name, args, { config }),
+      client: readyClient,
+      ownerId: config.ownerId,
+      notify: dmOwner,
+    }).catch((err) => console.error('[panda] could not resolve the interrupted run:', err.message));
   });
 
   client.on(Events.GuildCreate, (guild) => {

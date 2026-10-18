@@ -47,7 +47,6 @@ export function buildMenuEmbeds(client, config) {
         '`/wiki_search <query>` : Look something up on Wikipedia',
         '`/create_poll <question> <answers>` : Post a native Discord poll people can vote on',
         '`/create_card <title> [description] ...` : Post a rich embed card with optional buttons and dropdown',
-        '`/sandbox [language]` : Run Python, JavaScript or bash code in a sandbox and get its output',
         '_…or just ask me in chat — I still use these skills myself, plus polls, cards with buttons, and reactions._',
       ].join('\n'),
     ),
@@ -73,6 +72,7 @@ export function buildMenuEmbeds(client, config) {
     sectionEmbed(
       '🛠️ Power Tools (Oscar only)',
       [
+        '`/self_fix <instruction> [level]` : Approve a remote-sandbox self-fix PR (simple, medium or complex prompt), then restart after it merges',
         '`/set_model <model>` : Switch me to another OpenRouter model',
         '`/set_rule <instruction>` : Change my personality or behavior for good',
         '`/private on|off|status` : Only respond to Oscar',

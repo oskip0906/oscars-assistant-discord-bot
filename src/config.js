@@ -46,6 +46,12 @@ export const config = {
   // when GITHUB_PAT is unset; GITHUB_MCP_ENABLED=false turns it off explicitly.
   githubMcpEnabled: bool(process.env.GITHUB_MCP_ENABLED, true),
   githubMcpReadOnlyUrl: process.env.GITHUB_MCP_URL || 'https://api.githubcopilot.com/mcp/readonly',
+  // The sandbox workflow lives in this control repository. It is deliberately
+  // separate from the bot's checkout: development work never edits the live
+  // deployment filesystem.
+  developmentSandboxRepo: process.env.DEVELOPMENT_SANDBOX_REPO || 'oskip0906/oscars-assistant-discord-bot',
+  developmentSandboxWorkflow: process.env.DEVELOPMENT_SANDBOX_WORKFLOW || 'development-sandbox.yml',
+  developmentSandboxRef: process.env.DEVELOPMENT_SANDBOX_REF || 'main',
   // Jev (TypeSafe's decision model, via the same OpenRouter key) makes Panda's
   // quick yes/no and pick-one calls. JEV_ENABLED=false sends nothing to it and
   // every call site falls back to its pre-Jev behaviour.
@@ -73,11 +79,6 @@ export const config = {
   // prompt. Defaults to RULES.md in the repo; RULES_FILE moves it (e.g. into
   // data/ so a container keeps it across redeploys).
   rulesFile: process.env.RULES_FILE || path.join(projectRoot, 'RULES.md'),
-  // The scripting sandbox (/sandbox and the sandbox tool) runs on PMS Cloud with
-  // a PMS project token (pms_…). No token = it says it isn't set up.
-  pmsSandboxToken: process.env.PMS_SANDBOX_TOKEN || '',
-  // The template its sandboxes start from; scripts/build-sandbox-template.mjs builds it.
-  sandboxTemplate: process.env.PMS_SANDBOX_TEMPLATE || 'panda-sandbox',
 };
 
 // The bot's secrets only ever go into auth headers; none is put in front of the
@@ -93,7 +94,7 @@ const dbPassword = () => {
 
 export function redactSecrets(text) {
   let out = String(text ?? '');
-  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.databaseUrl, dbPassword(), config.pmsAiKey, process.env.YT_COOKIES_B64, config.pmsSandboxToken]) {
+  for (const secret of [config.discordToken, config.openrouterApiKey, config.githubPat, config.databaseUrl, dbPassword(), config.pmsAiKey, process.env.YT_COOKIES_B64]) {
     if (secret && secret.length >= 8) out = out.split(secret).join('[redacted]');
   }
   return out;
