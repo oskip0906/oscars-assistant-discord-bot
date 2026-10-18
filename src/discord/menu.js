@@ -73,7 +73,6 @@ export function buildMenuEmbeds(client, config) {
     sectionEmbed(
       '🛠️ Power Tools (Oscar only)',
       [
-        '`/self_fix <instruction> [level]` : Approve a remote-sandbox self-fix PR (simple, medium or complex prompt), then restart after it merges',
         '`/set_model <model>` : Switch me to another OpenRouter model',
         '`/set_rule <instruction>` : Change my personality or behavior for good',
         '`/private on|off|status` : Only respond to Oscar',

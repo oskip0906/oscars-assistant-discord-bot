@@ -11,8 +11,6 @@ import * as actions from '../music/actions.js';
 import { addedEmbed, queueEmbed } from '../music/embeds.js';
 import { buildSearchQuery } from '../agent/research/searchQuery.js';
 import { webSearch, webFetch, imageSearch, reverseImageSearch, videoSearch, newsSearch, wikiSearch } from '../agent/tools/search.js';
-import { selfFix, parseApprovalButtonId } from '../agent/tools/source.js';
-import { selfFixState } from '../selfFixState.js';
 import { runResearch } from '../agent/research/pipeline.js';
 import { renderReport } from '../agent/research/render.js';
 import { redactSecrets } from '../config.js';
@@ -36,12 +34,12 @@ export { commandDefs };
 // throw used to escape the handler and surface as a client error while the click
 // itself was perfectly good, so fall back to editing the message with the bot
 // token, which has neither the 3-second budget nor the 15-minute expiry.
-async function answerApproval(interaction, content) {
+async function answerClick(interaction, content) {
   try {
     await interaction.update({ content, components: [] });
   } catch (err) {
     if (err?.code !== 10062 && err?.code !== 40060) {
-      console.error('[panda] could not answer a development approval:', err.message);
+      console.error('[panda] could not answer a button click:', err.message);
     }
     await interaction.message?.edit({ content, components: [] }).catch(() => {});
   }
@@ -65,7 +63,7 @@ function sandboxReply({ head, body, text }) {
   return `**${head}**\n\`\`\`\n${shown}\n\`\`\``;
 }
 
-export function createInteractionHandler({ client, config, player, privateMode, state = selfFixState, onMessage }) {
+export function createInteractionHandler({ client, config, player, privateMode, onMessage }) {
   return async (interaction) => {
     // A click on a button or menu Panda sent (send_card). Acknowledge now, since
     // Discord's 3-second deadline would pass during batching, then hand it to the
@@ -85,9 +83,9 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       const { label } = SECTIONS[section];
       if (action !== 'clean') {
         dismiss(section);
-        return await answerApproval(interaction, `⏸️ Left **${label}** as it is. It stays full, and I'll ask again in an hour.`);
+        return await answerClick(interaction, `⏸️ Left **${label}** as it is. It stays full, and I'll ask again in an hour.`);
       }
-      await answerApproval(interaction, `🧹 Deleting the oldest **${label}** entries…`);
+      await answerClick(interaction, `🧹 Deleting the oldest **${label}** entries…`);
       try {
         const { deleted, used } = await cleanup(config, section);
         await interaction.message?.edit(`✅ Deleted ${deleted} of the oldest **${label}** entries. It now holds ${mb(used)} of ${mb(SECTIONS[section].budget)}.`);
@@ -124,42 +122,6 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       } catch (err) {
         console.error('[notes] interaction failed:', err.message);
         await interaction.reply({ content: `⚠️ ${redactSecrets(err.message).slice(0, 200)}`, flags: MessageFlags.Ephemeral }).catch(() => {});
-      }
-      return;
-    }
-
-    if (interaction.isButton?.()) {
-      const approval = parseApprovalButtonId(interaction.customId);
-      if (!approval) return;
-      if (interaction.user.id !== config.ownerId) {
-        return await interaction
-          .reply({ content: '⛔ Only Oscar can approve development work.', flags: MessageFlags.Ephemeral })
-          .catch(() => {});
-      }
-      if (!state.matchesPendingApproval(interaction.user.id, approval.id)) {
-        // Say which of the two it is. "Expired" was neither true nor useful:
-        // approvals have no deadline, and the usual cause is a card left over
-        // from before a restart, which no amount of waiting will revive.
-        const why = approval.fromThisBoot
-          ? '🚫 This request was already answered, or a newer one took its place. Send it again for a fresh card.'
-          : '🔁 This card is from before my last restart, so the request behind it is gone. Send it again and I will post a fresh one.';
-        await interaction.reply({ content: why, flags: MessageFlags.Ephemeral }).catch(() => {});
-        // Retire the dead card so it cannot be clicked a second time.
-        await interaction.message?.edit({ components: [] }).catch(() => {});
-        return;
-      }
-      // Answer before consuming. submitApproval resolves the promise the
-      // development run is waiting on, and that run resumes — issuing its own
-      // OpenRouter and GitHub calls — ahead of this reply reaching Discord.
-      await answerApproval(
-        interaction,
-        approval.approved ? '✅ Development task approved. Starting the remote sandbox…' : '🚫 Development task cancelled.',
-      );
-      if (!state.submitApproval(interaction.user.id, approval.id, approval.approved)) {
-        // A newer request superseded this one in the moment Discord was answered.
-        await interaction.message
-          ?.edit({ content: '🚫 A newer request took over before this one could start. Nothing ran.', components: [] })
-          .catch(() => {});
       }
       return;
     }
@@ -220,7 +182,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
     if (!interaction.isChatInputCommand()) return;
 
     // Discord gives 3s to acknowledge an interaction. One delivered while the
-    // bot was down (e.g. during a self_fix restart) can arrive already near/past
+    // bot was down (e.g. during a restart) can arrive already near/past
     // that deadline — any deferReply/reply then throws 10062 "Unknown
     // interaction". Drop it up front instead of failing a doomed API call.
     if (Date.now() - interaction.createdTimestamp > 2600) return;
@@ -233,7 +195,7 @@ export function createInteractionHandler({ client, config, player, privateMode, 
       config,
       client,
       isOwner: interaction.user.id === config.ownerId,
-      // Some tools (self_fix) post progress via message.channel.send;
+      // Some tools post progress via message.channel.send;
       // fall back to a no-op channel if the interaction has no cached channel.
       message: { channel: interaction.channel ?? { send: async () => {} } },
     });
@@ -487,17 +449,6 @@ export function createInteractionHandler({ client, config, player, privateMode, 
         const image = interaction.options.getAttachment('image')?.url || interaction.options.getString('url');
         if (!image) return await interaction.reply({ content: 'Attach a picture or give its URL.', flags: MessageFlags.Ephemeral });
         return await runTool(reverseImageSearch, { image, count: undefined });
-      }
-
-      if (name === 'self_fix') {
-        if (!isOwner) {
-          return await interaction.reply({ content: '⛔ Owner only.', flags: MessageFlags.Ephemeral });
-        }
-        await interaction.deferReply();
-        // The prompt writer's lookups (fetch_history…) read the message, guild and member of a chat turn.
-        const invocation = { ...buildInvocation(), guild: interaction.guild, member: interaction.member, message: { channel: interaction.channel ?? { send: async () => {} }, channelId: interaction.channelId, guild: interaction.guild, guildId: interaction.guildId, author: interaction.user, member: interaction.member } };
-        await sendToolResult(selfFix({ instruction: interaction.options.getString('instruction', true), level: interaction.options.getString('level') ?? undefined }, invocation));
-        return;
       }
 
       // --- Notes and reminders (anyone) ---------------------------------

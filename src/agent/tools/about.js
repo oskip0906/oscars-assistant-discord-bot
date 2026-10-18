@@ -12,7 +12,7 @@ export const defs = [
     function: {
       name: 'how_i_work',
       description:
-        "Read your own manual (ARCHITECTURE.md) and the source code files on GitHub that answer a topic: how you decide to answer, message batching, prompts and set_rule, remembered context and index_chat, notes and reminders, Jev, the OpenRouter models you run on, deep research, the self-fix sandbox, privacy rules, and every tool and slash command you have. Call it before answering ANY question about yourself, your features, your limits or how you were built — never answer those from memory. For how to use one slash command use panda_commands, and for which model you run on use current_model: both are read live. Explain in your own words; don't paste it.",
+        "Read your own manual (ARCHITECTURE.md) and the source code files on GitHub that answer a topic: how you decide to answer, message batching, prompts and set_rule, remembered context and index_chat, notes and reminders, Jev, the OpenRouter models you run on, deep research, the code sandbox, privacy rules, and every tool and slash command you have. Call it before answering ANY question about yourself, your features, your limits or how you were built — never answer those from memory. For how to use one slash command use panda_commands, and for which model you run on use current_model: both are read live. Explain in your own words; don't paste it.",
       parameters: {
         type: 'object',
         properties: {
@@ -40,7 +40,7 @@ const CONTEXT_LINES = 12; // around each line that mentions the topic, in a long
 let tree = null; // { at, paths }
 export const resetSourceCache = () => (tree = null);
 
-const repoOf = (config) => config.developmentSandboxRepo || 'oskip0906/oscars-assistant-discord-bot';
+const repoOf = () => 'oskip0906/oscars-assistant-discord-bot';
 
 async function get(url, config, fetchImpl, api = false) {
   const headers = api ? { Accept: 'application/vnd.github+json', 'User-Agent': 'panda-bot', ...(config.githubPat ? { Authorization: `Bearer ${config.githubPat}` } : {}) } : {};

@@ -292,9 +292,8 @@ export function createMessageHandler({ client, config, player, privateMode, runA
   // A Panda-addressed stop from someone with work here: their own batches in
   // this channel (Oscar's: every batch in it), queued or running, are aborted.
   // A running turn makes no more model calls, starts no more tools and sends
-  // nothing; what already happened is not undone, and a self-fix keeps its own
-  // approval card (its background run is outside the turn). False when there
-  // was nothing of theirs to stop, so the message is handled as usual.
+  // nothing; what already happened is not undone. False when there was nothing
+  // of theirs to stop, so the message is handled as usual.
   async function stopWork(message) {
     const isOwner = message.author.id === config.ownerId;
     const mine = [...live].filter((b) => b.channelId === message.channelId && (isOwner || b.claimantId === message.author.id));
@@ -308,7 +307,7 @@ export function createMessageHandler({ client, config, player, privateMode, runA
     console.log(`[panda] stop from @${message.author.username} in ${message.channelId}: ${mine.length} turn(s) aborted`);
     await message
       .reply({
-        content: `⏹️ Stopped${mine.length > 1 ? ` ${mine.length} requests` : ''}. Anything already done stays done (sent messages, reactions, notes, reminders), and a self-fix still goes by its own Approve / Cancel card.`,
+        content: `⏹️ Stopped${mine.length > 1 ? ` ${mine.length} requests` : ''}. Anything already done stays done (sent messages, reactions, notes, reminders).`,
         allowedMentions: { parse: [] },
       })
       .catch(() => {});

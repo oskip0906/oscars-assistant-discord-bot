@@ -46,12 +46,6 @@ export const config = {
   // when GITHUB_PAT is unset; GITHUB_MCP_ENABLED=false turns it off explicitly.
   githubMcpEnabled: bool(process.env.GITHUB_MCP_ENABLED, true),
   githubMcpReadOnlyUrl: process.env.GITHUB_MCP_URL || 'https://api.githubcopilot.com/mcp/readonly',
-  // The sandbox workflow lives in this control repository. It is deliberately
-  // separate from the bot's checkout: development work never edits the live
-  // deployment filesystem.
-  developmentSandboxRepo: process.env.DEVELOPMENT_SANDBOX_REPO || 'oskip0906/oscars-assistant-discord-bot',
-  developmentSandboxWorkflow: process.env.DEVELOPMENT_SANDBOX_WORKFLOW || 'development-sandbox.yml',
-  developmentSandboxRef: process.env.DEVELOPMENT_SANDBOX_REF || 'main',
   // Jev (TypeSafe's decision model, via the same OpenRouter key) makes Panda's
   // quick yes/no and pick-one calls. JEV_ENABLED=false sends nothing to it and
   // every call site falls back to its pre-Jev behaviour.

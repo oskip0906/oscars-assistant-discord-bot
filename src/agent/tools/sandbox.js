@@ -11,8 +11,8 @@ import {
 } from 'e2b';
 
 // The scripting sandbox: /sandbox and the sandbox tool run code that anyone in the
-// server (or Panda, asked by them) writes, on PMS Cloud. Not self_fix's development
-// sandbox: it never sees Panda's code, environment or secrets. The PMS token goes
+// server (or Panda, asked by them) writes, on PMS Cloud. It
+// never sees Panda's code, environment or secrets. The PMS token goes
 // only into the SDK's options here, and the sandbox is given no environment.
 
 // PMS Cloud runs E2B-compatible sandboxes at these addresses. They are passed
